@@ -9,7 +9,10 @@ use bevy::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
-use super::protocol::{ControlChannel, Hello, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseChannel, PoseUpdate};
+use super::protocol::{
+    CONNECTION_TIMEOUT_SECS, ControlChannel, Hello, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner,
+    PoseChannel, PoseUpdate,
+};
 use crate::shared::{LocalPlayer, PlayerPose, RemotePlayer};
 
 /// Name this process introduces itself with after connecting.
@@ -26,7 +29,11 @@ impl Plugin for ClientNetPlugin {
             .add_observer(on_connected)
             .add_observer(on_disconnected)
             .add_systems(FixedUpdate, send_pose)
-            .add_systems(Update, mark_remote_players);
+            .add_systems(Startup, super::status::spawn_status_text)
+            .add_systems(
+                Update,
+                (mark_remote_players, super::status::update_status_text),
+            );
     }
 }
 
@@ -41,7 +48,7 @@ pub(super) fn connect_to_server(commands: &mut Commands, server: SocketAddr) -> 
     let netcode = NetcodeClient::new(
         auth,
         NetcodeConfig {
-            client_timeout_secs: 3,
+            client_timeout_secs: CONNECTION_TIMEOUT_SECS,
             token_expire_secs: -1,
             ..default()
         },

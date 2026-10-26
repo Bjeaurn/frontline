@@ -7,7 +7,9 @@ use bevy::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
-use super::protocol::{Hello, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseUpdate};
+use super::protocol::{
+    CONNECTION_TIMEOUT_SECS, Hello, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseUpdate,
+};
 use crate::shared::{PlayerName, PlayerPose};
 
 pub(super) struct ServerNetPlugin;
@@ -33,6 +35,7 @@ pub(super) fn start_server(commands: &mut Commands, port: u16) -> Entity {
             NetcodeServer::new(NetcodeConfig {
                 protocol_id: PROTOCOL_ID,
                 private_key: PRIVATE_KEY,
+                client_timeout_secs: CONNECTION_TIMEOUT_SECS,
                 // Clients build their own token with whatever address they dialled (a LAN IP),
                 // which never equals the 0.0.0.0 bind address.
                 server_addr_check: false,

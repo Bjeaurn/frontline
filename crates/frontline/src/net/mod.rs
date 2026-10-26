@@ -6,6 +6,7 @@
 mod client;
 mod protocol;
 mod server;
+mod status;
 
 use bevy::prelude::*;
 

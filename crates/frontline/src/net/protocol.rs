@@ -14,6 +14,11 @@ pub const PROTOCOL_ID: u64 = 0x4652_4f4e_544c_494e;
 /// Netcode private key. A shared zero key: LAN play trusts every client (docs/adr/0002).
 pub const PRIVATE_KEY: [u8; 32] = [0; 32];
 
+/// Seconds without packets before either side drops the connection. Generous because a Host
+/// renders in the same loop as its server: a multi-second hitch (shader compile, window drag,
+/// alt-tab) must not kick everyone.
+pub const CONNECTION_TIMEOUT_SECS: i32 = 10;
+
 /// Peer that owns (controls) a replicated player entity.
 /// Lets each client tell its own replicated copy apart from everyone else's.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
