@@ -1,14 +1,12 @@
-//! Top-left overlay: connection state and every known player with kills/deaths and distance,
-//! so a failed connection or a missing remote player is visible in-game, not only in the log.
+//! Top-left overlay shown only while there is a connection problem (connecting, or not
+//! connected), so a failed connection is visible in-game, not only in the log. Players are
+//! listed on the Scoreboard instead.
 
 use std::fmt::Write;
 
 use bevy::prelude::*;
 use lightyear::prelude::client::*;
 use lightyear::prelude::*;
-
-use super::protocol::PlayerOwner;
-use crate::shared::{LocalPlayer, PlayerName, PlayerPose, PlayerStats};
 
 const FONT_SIZE: f32 = 14.0;
 const TEXT_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.9);
@@ -42,53 +40,24 @@ pub(super) fn update_status_text(
             Has<Connecting>,
             Option<&Disconnected>,
             Option<&PeerAddr>,
-            Option<&LocalId>,
         ),
         With<Client>,
     >,
-    local: Query<&PlayerPose, With<LocalPlayer>>,
-    players: Query<(
-        &PlayerOwner,
-        &PlayerName,
-        Option<&PlayerPose>,
-        Option<&PlayerStats>,
-    )>,
     mut text: Single<&mut Text, With<StatusText>>,
 ) {
     let mut out = String::new();
-    let mut local_id = None;
-    for (connected, connecting, disconnected, peer, id) in &clients {
+    for (connected, connecting, disconnected, peer) in &clients {
         let server = peer.map_or_else(|| "host".to_owned(), |p| p.0.to_string());
         if connected {
-            local_id = id.map(|id| id.0);
-            let _ = write!(out, "Connected to {server}");
+            continue;
         } else if connecting {
             let _ = write!(out, "Connecting to {server}...");
         } else if let Some(disconnected) = disconnected {
             let _ = write!(out, "Not connected to {server}: {}", disconnected.reason);
-        }
-    }
-
-    let here = local.single().ok().map(|pose| pose.position);
-    for (owner, name, pose, stats) in &players {
-        let name = if name.0.is_empty() { "?" } else { name.0.as_str() };
-        let _ = write!(out, "\n  {name}");
-        if Some(owner.0) == local_id {
-            out.push_str(" (you)");
         } else {
-            match (pose, here) {
-                (Some(pose), Some(here)) => {
-                    let _ = write!(out, "  {:.0} m", pose.position.distance(here));
-                }
-                (None, _) => out.push_str("  (no position yet)"),
-                (Some(_), None) => {}
-            }
-        }
-        if let Some(stats) = stats {
-            let _ = write!(out, "  K {} / D {}", stats.kills, stats.deaths);
+            let _ = write!(out, "Not connected to {server}");
         }
     }
-
     if text.0 != out {
         text.0 = out;
     }

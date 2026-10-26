@@ -11,8 +11,7 @@ use super::protocol::{
     CONNECTION_TIMEOUT_SECS, Hello, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseUpdate,
 };
 use crate::combat::PoseGate;
-use crate::data::GameData;
-use crate::shared::{Health, PlayerName, PlayerPose, PlayerStats};
+use crate::shared::{Health, PlayerName, PlayerPose, PlayerStats, PlayerTeam};
 
 pub(super) struct ServerNetPlugin;
 
@@ -57,10 +56,10 @@ fn log_started(trigger: On<Add<Started>>, servers: Query<&LocalAddr, With<Server
     }
 }
 
+/// Spawns the client's Player out of play: dead and on no Team until it picks one.
 fn spawn_player(
     trigger: On<Add<Connected>>,
     links: Query<&RemoteId, With<ClientOf>>,
-    data: Res<GameData>,
     mut commands: Commands,
 ) {
     let Ok(&RemoteId(peer)) = links.get(trigger.entity) else {
@@ -72,8 +71,9 @@ fn spawn_player(
             Name::new(format!("Player {peer}")),
             PlayerPose::default(),
             PlayerName::default(),
-            Health(data.rules().max_health),
+            Health(0.0),
             PlayerStats::default(),
+            PlayerTeam(None),
             PlayerOwner(peer),
             Replicate::to_clients(NetworkTarget::All),
             InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(peer)),

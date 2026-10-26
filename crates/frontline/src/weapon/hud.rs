@@ -1,20 +1,23 @@
-//! Weapon HUD: centred crosshair (hidden when aiming), hitmarker, and the ammo counter.
+//! Weapon HUD: centred crosshair (opening with spread, fading out when aiming), hitmarker,
+//! and the ammo counter.
 
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 
 use super::{HeldWeapon, WeaponSystems};
 use crate::data::GameData;
 use crate::net::protocol::HitConfirm;
-use crate::player::LocalLife;
+use crate::player::{EyeCamera, LocalLife};
 use crate::shared::{FromServer, LocalPlayer};
 
-const CROSSHAIR_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.85);
-/// Side of the square the four crosshair arms sit in, in logical pixels.
-const CROSSHAIR_SIZE: f32 = 22.0;
+/// Opacity of the crosshair at the hip.
+const CROSSHAIR_ALPHA: f32 = 0.85;
 const ARM_LENGTH: f32 = 7.0;
 const ARM_THICKNESS: f32 = 2.0;
-/// Past this aim-down-sights blend the crosshair is hidden.
-const CROSSHAIR_HIDE_ADS: f32 = 0.5;
+/// Smallest gap between the centre and the arms, in logical pixels.
+const CROSSHAIR_MIN_GAP: f32 = 4.0;
+/// The crosshair fades out over this much of the aim-down-sights blend.
+const CROSSHAIR_FADE_ADS: f32 = 0.5;
 
 const HITMARKER_SECS: f32 = 0.15;
 const HITMARKER_SIZE: f32 = 26.0;
@@ -41,8 +44,13 @@ impl Plugin for WeaponHudPlugin {
     }
 }
 
+/// The crosshair, centred: its arms sit at the edge of the hip spread cone on screen.
 #[derive(Component)]
 struct Crosshair;
+
+/// One crosshair arm, pushed out from the centre along its unit direction.
+#[derive(Component)]
+struct CrosshairArm(Vec2);
 
 #[derive(Component, Default)]
 struct Hitmarker {
@@ -58,17 +66,23 @@ struct AmmoCount;
 #[derive(Component)]
 struct WeaponLabel;
 
-fn crosshair_arm(left: f32, top: f32, width: f32, height: f32) -> impl Bundle {
+fn crosshair_arm(direction: Vec2) -> impl Bundle {
+    let size = if direction.x == 0.0 {
+        Vec2::new(ARM_THICKNESS, ARM_LENGTH)
+    } else {
+        Vec2::new(ARM_LENGTH, ARM_THICKNESS)
+    };
     (
+        CrosshairArm(direction),
         Node {
             position_type: PositionType::Absolute,
-            left: px(left),
-            top: px(top),
-            width: px(width),
-            height: px(height),
+            left: px(-size.x / 2.0),
+            top: px(-size.y / 2.0),
+            width: px(size.x),
+            height: px(size.y),
             ..default()
         },
-        BackgroundColor(CROSSHAIR_COLOR),
+        BackgroundColor(Color::WHITE.with_alpha(CROSSHAIR_ALPHA)),
     )
 }
 
@@ -108,23 +122,17 @@ fn centred() -> Node {
 }
 
 fn spawn_weapon_hud(mut commands: Commands) {
-    let centre = (CROSSHAIR_SIZE - ARM_THICKNESS) / 2.0;
-    let far = CROSSHAIR_SIZE - ARM_LENGTH;
     commands.spawn((
         Name::new("Crosshair"),
         centred(),
         children![(
             Crosshair,
-            Node {
-                width: px(CROSSHAIR_SIZE),
-                height: px(CROSSHAIR_SIZE),
-                ..default()
-            },
+            Node::default(),
             children![
-                crosshair_arm(centre, 0.0, ARM_THICKNESS, ARM_LENGTH),
-                crosshair_arm(centre, far, ARM_THICKNESS, ARM_LENGTH),
-                crosshair_arm(0.0, centre, ARM_LENGTH, ARM_THICKNESS),
-                crosshair_arm(far, centre, ARM_LENGTH, ARM_THICKNESS),
+                crosshair_arm(Vec2::NEG_Y),
+                crosshair_arm(Vec2::Y),
+                crosshair_arm(Vec2::NEG_X),
+                crosshair_arm(Vec2::X),
             ],
         )],
     ));
@@ -207,19 +215,39 @@ fn spawn_weapon_hud(mut commands: Commands) {
     ));
 }
 
+/// Opens the arms to the hip spread cone's edge on screen and fades them out with the sights.
 fn update_crosshair(
+    data: Res<GameData>,
     life: Res<LocalLife>,
     weapons: Query<&HeldWeapon, With<LocalPlayer>>,
+    eye: Query<&Projection, With<EyeCamera>>,
+    window: Query<&Window, With<PrimaryWindow>>,
     mut crosshair: Single<&mut Visibility, With<Crosshair>>,
+    mut arms: Query<(&CrosshairArm, &mut UiTransform, &mut BackgroundColor)>,
 ) {
-    let aiming = weapons
-        .single()
-        .is_ok_and(|weapon| weapon.ads > CROSSHAIR_HIDE_ADS);
-    crosshair.set_if_neq(if aiming || life.is_dead() {
+    let (Ok(weapon), Ok(Projection::Perspective(projection)), Ok(window)) =
+        (weapons.single(), eye.single(), window.single())
+    else {
+        crosshair.set_if_neq(Visibility::Hidden);
+        return;
+    };
+    let alpha = CROSSHAIR_ALPHA * (1.0 - weapon.ads / CROSSHAIR_FADE_ADS).clamp(0.0, 1.0);
+    crosshair.set_if_neq(if alpha <= 0.0 || life.is_dead() {
         Visibility::Hidden
     } else {
         Visibility::Inherited
     });
+    let spread = weapon.hip_spread_deg(data.weapon(weapon.id)).to_radians();
+    let gap = (spread.tan() / (projection.fov / 2.0).tan() * window.height() / 2.0)
+        .max(CROSSHAIR_MIN_GAP);
+    let offset = gap + ARM_LENGTH / 2.0;
+    for (arm, mut transform, mut color) in &mut arms {
+        let translation = Val2::px(arm.0.x * offset, arm.0.y * offset);
+        if transform.translation != translation {
+            transform.translation = translation;
+        }
+        color.set_if_neq(BackgroundColor(Color::WHITE.with_alpha(alpha)));
+    }
 }
 
 fn show_hitmarker(

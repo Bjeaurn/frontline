@@ -1,0 +1,21 @@
+// Local player movement tuning. Read at startup from ./data/ (falls back to the copy built into
+// the binary). Metres, seconds, metres per second.
+(
+    walk_speed: 5.5,
+    sprint_speed: 8.5,
+    crouch_speed: 3.0,
+    prone_speed: 1.2,
+    sprint_stamina_secs: 4.0,
+    stamina_regen_per_sec: 1.0,
+    sprint_restart_stamina: 1.0,
+    ground_accel: 60.0,
+    air_accel: 8.0,
+    gravity: 18.0,
+    terminal_fall_speed: 40.0,
+    jump_height: 1.15,
+    landing_slow_scale: 0.5,
+    landing_slow_secs: 0.3,
+    mantle_max_height: 1.6,
+    mantle_reach: 0.6,
+    mantle_secs: 0.4,
+)

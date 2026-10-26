@@ -1,6 +1,7 @@
 //! Client side (Client and the Host's local client): connects, reports the local pose every
 //! fixed tick, marks replicated players as `RemotePlayer` or `LocalPlayerReplica`, and bridges
-//! gameplay messages: server messages become `FromServer<M>`, `ToServer<FireShot>` is sent.
+//! gameplay messages: server messages become `FromServer<M>`; `ToServer<FireShot>` and
+//! `ToServer<ChooseTeam>` are sent.
 
 use std::hash::{BuildHasher, RandomState};
 use std::net::{Ipv4Addr, SocketAddr};
@@ -11,9 +12,9 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
 use super::protocol::{
-    CONNECTION_TIMEOUT_SECS, ControlChannel, Damaged, FireShot, Hello, HitConfirm, KillFeed,
-    PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseChannel, PoseUpdate, Respawn, ShotChannel,
-    ShotTracer,
+    CONNECTION_TIMEOUT_SECS, ChooseTeam, ControlChannel, Damaged, FireShot, Hello, HitConfirm,
+    KillFeed, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseChannel, PoseUpdate, Respawn,
+    ShotChannel, ShotTracer,
 };
 use crate::shared::{
     FromServer, LocalPlayer, LocalPlayerReplica, PlayerPose, RemotePlayer, ToServer,
@@ -36,6 +37,7 @@ impl Plugin for ClientNetPlugin {
             .add_message::<FromServer<Respawn>>()
             .add_message::<FromServer<ShotTracer>>()
             .add_message::<ToServer<FireShot>>()
+            .add_message::<ToServer<ChooseTeam>>()
             .add_observer(on_connected)
             .add_observer(on_disconnected)
             .add_systems(FixedUpdate, send_pose)
@@ -51,7 +53,10 @@ impl Plugin for ClientNetPlugin {
                 )
                     .after(MessageSystems::Receive),
             )
-            .add_systems(PostUpdate, send_shots.before(MessageSystems::Send))
+            .add_systems(
+                PostUpdate,
+                (send_shots, send_team_choices).before(MessageSystems::Send),
+            )
             .add_systems(
                 Update,
                 (
@@ -201,6 +206,17 @@ fn send_shots(
     for mut sender in &mut senders {
         for ToServer(shot) in shots.read() {
             sender.send::<ShotChannel>(*shot);
+        }
+    }
+}
+
+fn send_team_choices(
+    mut choices: MessageReader<ToServer<ChooseTeam>>,
+    mut senders: Query<&mut MessageSender<ChooseTeam>, (With<Client>, With<Connected>)>,
+) {
+    for mut sender in &mut senders {
+        for ToServer(choice) in choices.read() {
+            sender.send::<ControlChannel>(*choice);
         }
     }
 }

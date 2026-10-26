@@ -1,5 +1,6 @@
 //! First-person kinematic controller for the `LocalPlayer`: mouse look, stances, sprint,
-//! move-and-slide against the static arena, and server-ordered respawns.
+//! move-and-slide against the static arena, landing slowdown, mantling, and server-ordered
+//! respawns. Movement tuning comes from `GameData::movement` (`data/movement.ron`).
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::hash::{BuildHasher, RandomState};
@@ -12,29 +13,15 @@ use bevy::{
 };
 
 use super::BODY_RADIUS;
-use super::input::{Bindings, LookSensitivity};
+use super::input::{Binding, Bindings, LookSensitivity};
 use super::life::LocalLife;
 use crate::cli::Mode;
+use crate::data::{GameData, MovementTuning};
 use crate::net::protocol::Respawn;
 use crate::shared::{FromServer, GameLayer, LocalPlayer, PlayerName, PlayerPose, Stance};
-use crate::world::SpawnPoints;
+use crate::world::{SpawnPoints, yaw_towards_centre};
 
-// Movement tuning (metres, seconds).
-const WALK_SPEED: f32 = 5.0;
-const SPRINT_SPEED: f32 = 7.5;
-const CROUCH_SPEED: f32 = 3.0;
-const PRONE_SPEED: f32 = 1.2;
-/// Seconds of continuous sprint on a full tank.
-const SPRINT_STAMINA: f32 = 4.0;
-/// Stamina regained per second while not sprinting (full tank in 4 s).
-const STAMINA_REGEN: f32 = 1.0;
-/// After running dry, sprint restarts only once this much stamina is back.
-const SPRINT_RESTART_STAMINA: f32 = 1.0;
-const GROUND_ACCEL: f32 = 60.0;
-const AIR_ACCEL: f32 = 8.0;
-const GRAVITY: f32 = 15.0;
-const JUMP_HEIGHT: f32 = 0.9;
-const TERMINAL_FALL_SPEED: f32 = 40.0;
+// Collision geometry (metres).
 /// Surfaces whose normal has at least this much `y` count as ground (about 50 degrees).
 const MIN_GROUND_NORMAL_Y: f32 = 0.64;
 /// Downward probe distance that counts as standing on something.
@@ -43,6 +30,17 @@ const GROUND_PROBE: f32 = 0.05;
 const GROUND_SNAP: f32 = 0.35;
 /// Falling below this height respawns the player.
 const KILL_Y: f32 = -20.0;
+/// A mantle ends with the body centre this far past the wall face, so thin walls hold it too.
+const MANTLE_LEDGE_INSET: f32 = 0.2;
+/// Ledges less than this above the feet are not mantled.
+const MANTLE_MIN_RISE: f32 = 0.05;
+/// The ledge probe starts this far above the highest mantleable height; starting inside
+/// geometry there means the wall is too tall.
+const LEDGE_PROBE_MARGIN: f32 = 0.05;
+/// Mantle path shape, as fractions of its duration: the rise ends at `MANTLE_RISE_END` and the
+/// move over the ledge starts at `MANTLE_OVER_START`.
+const MANTLE_RISE_END: f32 = 0.6;
+const MANTLE_OVER_START: f32 = 0.35;
 
 // View tuning.
 /// Furthest the view may pitch up or down, in radians.
@@ -51,6 +49,9 @@ pub const PITCH_LIMIT: f32 = FRAC_PI_2 - 0.01;
 const HORIZONTAL_FOV_DEG: f32 = 80.0;
 /// How fast the eye height follows stance changes (exponential decay rate, 1/s).
 const EYE_HEIGHT_RATE: f32 = 12.0;
+/// Camera dip (metres) and roll (radians) at the middle of a mantle.
+const MANTLE_VIEW_DIP: f32 = 0.08;
+const MANTLE_VIEW_ROLL: f32 = 0.06;
 
 /// Clearance tests for stance changes use a slightly shrunken body lifted off the floor, so
 /// merely touching the floor or a wall does not count as blocked.
@@ -62,38 +63,55 @@ const HEADROOM_LIFT: f32 = 0.02;
 pub struct Motor {
     velocity: Vec3,
     grounded: bool,
+    /// Feet height when last grounded (infinite before the first touchdown). Mid-jump, mantle
+    /// height is measured from here.
+    ground_y: f32,
     stamina: f32,
     sprinting: bool,
     jump_requested: bool,
-}
-
-impl Default for Motor {
-    fn default() -> Self {
-        Self {
-            velocity: Vec3::ZERO,
-            grounded: false,
-            stamina: SPRINT_STAMINA,
-            sprinting: false,
-            jump_requested: false,
-        }
-    }
+    /// Seconds since the latest touchdown.
+    since_landing: f32,
+    mantle: Option<Mantle>,
 }
 
 impl Motor {
+    fn new(tuning: &MovementTuning) -> Self {
+        Self {
+            velocity: Vec3::ZERO,
+            grounded: false,
+            ground_y: f32::INFINITY,
+            stamina: tuning.sprint_stamina_secs,
+            sprinting: false,
+            jump_requested: false,
+            since_landing: f32::INFINITY,
+            mantle: None,
+        }
+    }
+
     /// Advances sprint state and stamina by `dt`: sprint drains, rest regenerates, and once the
-    /// tank runs dry sprint restarts only from the ground with `SPRINT_RESTART_STAMINA` back.
-    fn tick_sprint(&mut self, wants_sprint: bool, dt: f32) {
+    /// tank runs dry sprint restarts only from the ground with `sprint_restart_stamina` back.
+    fn tick_sprint(&mut self, wants_sprint: bool, dt: f32, tuning: &MovementTuning) {
         if self.sprinting {
             self.sprinting = wants_sprint && self.stamina > 0.0;
         } else {
             self.sprinting =
-                wants_sprint && self.grounded && self.stamina >= SPRINT_RESTART_STAMINA;
+                wants_sprint && self.grounded && self.stamina >= tuning.sprint_restart_stamina;
         }
         self.stamina = if self.sprinting {
             (self.stamina - dt).max(0.0)
         } else {
-            (self.stamina + STAMINA_REGEN * dt).min(SPRINT_STAMINA)
+            (self.stamina + tuning.stamina_regen_per_sec * dt).min(tuning.sprint_stamina_secs)
         };
+    }
+
+    /// Speed multiplier of the post-landing slowdown: `landing_slow_scale` at touchdown, back
+    /// to 1 linearly over `landing_slow_secs`.
+    fn landing_scale(&self, tuning: &MovementTuning) -> f32 {
+        if self.since_landing >= tuning.landing_slow_secs {
+            return 1.0;
+        }
+        let recovered = self.since_landing / tuning.landing_slow_secs;
+        tuning.landing_slow_scale + (1.0 - tuning.landing_slow_scale) * recovered
     }
 
     pub fn velocity(&self) -> Vec3 {
@@ -106,6 +124,46 @@ impl Motor {
 
     pub fn sprinting(&self) -> bool {
         self.sprinting
+    }
+
+    /// A mantle is in progress: input is ignored, the stance is standing, and the weapon
+    /// should be lowered.
+    pub fn mantling(&self) -> bool {
+        self.mantle.is_some()
+    }
+}
+
+/// An ongoing mantle: the feet travel from `from` up to the ledge height, then over it to `to`.
+#[derive(Clone, Copy, Debug)]
+struct Mantle {
+    from: Vec3,
+    to: Vec3,
+    elapsed: f32,
+    secs: f32,
+}
+
+impl Mantle {
+    /// Fraction done, 0 to 1.
+    fn progress(&self) -> f32 {
+        if self.secs > 0.0 {
+            (self.elapsed / self.secs).min(1.0)
+        } else {
+            1.0
+        }
+    }
+
+    /// Feet position at `progress`: a quick rise that eases out, overlapped by a smooth move
+    /// over the ledge once the body is mostly up.
+    fn feet(&self, progress: f32) -> Vec3 {
+        let rise = 1.0 - (1.0 - (progress / MANTLE_RISE_END).min(1.0)).powi(3);
+        let over = ((progress - MANTLE_OVER_START) / (1.0 - MANTLE_OVER_START)).clamp(0.0, 1.0);
+        let over = over * over * (3.0 - 2.0 * over);
+        let horizontal = self.from.lerp(self.to, over);
+        Vec3::new(
+            horizontal.x,
+            self.from.y + (self.to.y - self.from.y) * rise,
+            horizontal.z,
+        )
     }
 }
 
@@ -154,6 +212,11 @@ impl MouseCaptured {
     }
 }
 
+/// Whether a menu (e.g. the team picker) owns the cursor. While set, the cursor stays free
+/// and clicks don't grab it.
+#[derive(Resource, Default, Debug)]
+pub struct MenuOpen(pub bool);
+
 /// Collision shapes per stance: the body for movement and a shrunken one for headroom tests.
 #[derive(Resource)]
 pub(super) struct StanceShapes {
@@ -171,16 +234,11 @@ fn stance_index(stance: Stance) -> usize {
     }
 }
 
-/// An upright capsule of the stance's full body height (a sphere when it is too short).
+/// An upright cylinder of the stance's full body height. Its flat base rests level on ledges
+/// and box edges; a capsule's rounded base meets an edge at a slant, which move-and-slide turns
+/// into a pop upwards or a slide off the edge.
 fn body_collider(stance: Stance, shrink: f32) -> Collider {
-    let height = stance.body_height();
-    let radius = BODY_RADIUS.min(height / 2.0);
-    let segment = height - 2.0 * radius;
-    if segment > 1e-3 {
-        Collider::capsule(radius - shrink, segment)
-    } else {
-        Collider::sphere(radius - shrink)
-    }
+    Collider::cylinder(BODY_RADIUS - shrink, stance.body_height() - 2.0 * shrink)
 }
 
 impl Default for StanceShapes {
@@ -197,13 +255,17 @@ impl StanceShapes {
         &self.body[stance_index(stance)]
     }
 
+    /// Centre of the headroom-test body in `stance` with its feet at `feet`.
+    fn headroom_center(stance: Stance, feet: Vec3) -> Vec3 {
+        feet + Vec3::Y * (stance.body_height() / 2.0 + HEADROOM_LIFT)
+    }
+
     /// Whether a body in `stance` with its feet at `feet` overlaps no static geometry.
     fn fits(&self, spatial: &SpatialQuery, stance: Stance, feet: Vec3) -> bool {
-        let center = feet + Vec3::Y * (stance.body_height() / 2.0 + HEADROOM_LIFT);
         let mut blocked = false;
         spatial.shape_intersections_callback(
             &self.headroom[stance_index(stance)],
-            center,
+            Self::headroom_center(stance, feet),
             Quat::IDENTITY,
             &SpatialQueryFilter::from_mask(GameLayer::World),
             |_| {
@@ -213,6 +275,69 @@ impl StanceShapes {
         );
         !blocked
     }
+
+    /// First static geometry hit by the headroom-test body in `stance`, feet at `feet`, swept
+    /// `distance` along `direction`.
+    fn sweep(
+        &self,
+        spatial: &SpatialQuery,
+        stance: Stance,
+        feet: Vec3,
+        direction: Dir3,
+        distance: f32,
+    ) -> Option<ShapeHitData> {
+        spatial.cast_shape(
+            &self.headroom[stance_index(stance)],
+            Self::headroom_center(stance, feet),
+            Quat::IDENTITY,
+            direction,
+            &ShapeCastConfig::from_max_distance(distance),
+            &SpatialQueryFilter::from_mask(GameLayer::World),
+        )
+    }
+}
+
+/// Where a mantle from `feet` towards `facing` ends, if a ledge is within reach: a walkable top
+/// at most `mantle_max_height` above `base_y`, with standing room up there and nothing in the
+/// way from straight above the feet across to it.
+fn find_ledge(
+    shapes: &StanceShapes,
+    spatial: &SpatialQuery,
+    feet: Vec3,
+    facing: Dir3,
+    base_y: f32,
+    tuning: &MovementTuning,
+) -> Option<Vec3> {
+    let stance = Stance::Standing;
+    let wall = shapes.sweep(spatial, stance, feet, facing, tuning.mantle_reach)?;
+    if wall.distance <= 0.0 || wall.normal1.y >= MIN_GROUND_NORMAL_Y {
+        return None;
+    }
+    let into_wall = Dir3::new(Vec3::new(-wall.normal1.x, 0.0, -wall.normal1.z)).ok()?;
+    let over = feet + facing * wall.distance + into_wall * (BODY_RADIUS + MANTLE_LEDGE_INSET);
+
+    let highest = base_y + tuning.mantle_max_height;
+    let probe = Vec3::new(over.x, highest + LEDGE_PROBE_MARGIN, over.z);
+    let lowest = feet.y + MANTLE_MIN_RISE;
+    let filter = SpatialQueryFilter::from_mask(GameLayer::World);
+    let top = spatial.cast_ray(probe, Dir3::NEG_Y, probe.y - lowest, true, &filter)?;
+    let top_y = probe.y - top.distance;
+    // A zero distance means the probe started inside the wall: it is too tall.
+    if top.distance <= 0.0 || top.normal.y < MIN_GROUND_NORMAL_Y || top_y > highest {
+        return None;
+    }
+
+    let ledge = Vec3::new(over.x, top_y, over.z);
+    let raised = Vec3::new(feet.x, top_y, feet.z);
+    if !shapes.fits(spatial, stance, raised) || !shapes.fits(spatial, stance, ledge) {
+        return None;
+    }
+    if let Ok((across, distance)) = Dir3::new_and_length(ledge - raised)
+        && shapes.sweep(spatial, stance, raised, across, distance).is_some()
+    {
+        return None;
+    }
+    Some(ledge + Vec3::Y * HEADROOM_LIFT)
 }
 
 fn random_spawn(spawns: &SpawnPoints) -> Vec3 {
@@ -220,13 +345,9 @@ fn random_spawn(spawns: &SpawnPoints) -> Vec3 {
     spawns.0.get(index).copied().unwrap_or_default()
 }
 
-/// Yaw that faces the arena centre from `position`.
-fn yaw_towards_centre(position: Vec3) -> f32 {
-    position.x.atan2(position.z)
-}
-
 pub(super) fn spawn_local_player(
     mut commands: Commands,
+    data: Res<GameData>,
     spawns: Res<SpawnPoints>,
     mode: Res<Mode>,
 ) {
@@ -247,7 +368,7 @@ pub(super) fn spawn_local_player(
             pitch: 0.0,
             stance,
         },
-        Motor::default(),
+        Motor::new(&data.movement),
         ControllerModifiers::default(),
         Transform::from_translation(feet).with_rotation(Quat::from_rotation_y(yaw)),
         Visibility::default(),
@@ -266,9 +387,11 @@ pub(super) fn spawn_local_player(
     ));
 }
 
-/// Grab the cursor on click, release it on the release key or when the window loses focus.
+/// Grab the cursor on click, release it on the release key, when the window loses focus, or
+/// while a menu is open.
 pub(super) fn grab_cursor(
     bindings: Res<Bindings>,
+    menu: Res<MenuOpen>,
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
     mut captured: ResMut<MouseCaptured>,
@@ -277,7 +400,7 @@ pub(super) fn grab_cursor(
     let Ok((window, mut cursor)) = windows.single_mut() else {
         return;
     };
-    let capture = if !window.focused || bindings.release_cursor.just_pressed(&keys) {
+    let capture = if menu.0 || !window.focused || bindings.release_cursor.just_pressed(&keys) {
         false
     } else if mouse.just_pressed(bindings.grab_cursor) {
         true
@@ -297,6 +420,7 @@ pub(super) fn grab_cursor(
 
 /// Applies the server's `Respawn`: teleport, face its yaw, level the view, stop moving.
 pub(super) fn apply_respawn(
+    data: Res<GameData>,
     mut respawns: MessageReader<FromServer<Respawn>>,
     mut player: Query<(&mut PlayerPose, &mut Motor, &mut Transform), With<LocalPlayer>>,
 ) {
@@ -313,7 +437,7 @@ pub(super) fn apply_respawn(
         pitch: 0.0,
         stance: Stance::Standing,
     };
-    *motor = Motor::default();
+    *motor = Motor::new(&data.movement);
     *transform = Transform::from_translation(pose.position)
         .with_rotation(Quat::from_rotation_y(pose.yaw));
 }
@@ -373,6 +497,7 @@ fn next_stance(
 }
 
 /// Applies stance keys. Taller stances need headroom; Space jumps only when already standing.
+/// Ignored while mantling.
 pub(super) fn change_stance(
     captured: Res<MouseCaptured>,
     life: Res<LocalLife>,
@@ -386,7 +511,7 @@ pub(super) fn change_stance(
         return;
     };
     motor.jump_requested = false;
-    if !captured.0 || life.is_dead() {
+    if !captured.0 || life.is_dead() || motor.mantling() {
         return;
     }
 
@@ -415,8 +540,12 @@ fn axis(negative: bool, positive: bool) -> f32 {
     f32::from(u8::from(positive)) - f32::from(u8::from(negative))
 }
 
+/// Walks, jumps and falls, or advances a mantle. Holding forward into a ledge mantles it: from
+/// the air on contact, from the ground with a jump.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn move_player(
     time: Res<Time>,
+    data: Res<GameData>,
     captured: Res<MouseCaptured>,
     life: Res<LocalLife>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -441,49 +570,115 @@ pub(super) fn move_player(
     if dt <= 0.0 {
         return;
     }
+    let tuning = &data.movement;
 
-    let active = captured.0 && !life.is_dead();
-    let pressed = |binding: &super::input::Binding| active && binding.pressed(&keys);
+    let active = captured.0 && !life.is_dead() && !motor.mantling();
+    let pressed = |binding: &Binding| active && binding.pressed(&keys);
     let (forward, back) = (pressed(&bindings.forward), pressed(&bindings.back));
     let input = Vec2::new(
         axis(pressed(&bindings.left), pressed(&bindings.right)),
         axis(back, forward),
     );
+    let facing = Quat::from_rotation_y(pose.yaw);
 
-    // Sprint: forward only, standing only, limited by stamina.
-    let wants_sprint = pressed(&bindings.sprint)
-        && forward
+    if forward
         && !back
-        && pose.stance == Stance::Standing
-        && !modifiers.sprint_blocked;
-    motor.tick_sprint(wants_sprint, dt);
+        && (!motor.grounded || motor.jump_requested)
+        && let Some(to) = find_ledge(
+            &shapes,
+            &move_and_slide.spatial_query,
+            pose.position,
+            Dir3::new_unchecked(facing * Vec3::NEG_Z),
+            motor.ground_y.min(pose.position.y),
+            tuning,
+        )
+    {
+        motor.mantle = Some(Mantle {
+            from: pose.position,
+            to,
+            elapsed: 0.0,
+            secs: tuning.mantle_secs,
+        });
+        motor.velocity = Vec3::ZERO;
+        motor.sprinting = false;
+    }
 
-    let speed = match pose.stance {
-        Stance::Standing if motor.sprinting => SPRINT_SPEED,
-        Stance::Standing => WALK_SPEED,
-        Stance::Crouching => CROUCH_SPEED,
-        Stance::Prone => PRONE_SPEED,
-    } * modifiers.move_scale;
-    let wish = Quat::from_rotation_y(pose.yaw) * Vec3::new(input.x, 0.0, -input.y).normalize_or_zero()
-        * speed;
+    if let Some(mantle) = &mut motor.mantle {
+        mantle.elapsed += dt;
+        let progress = mantle.progress();
+        pose.position = mantle.feet(progress);
+        pose.stance = Stance::Standing;
+        if progress >= 1.0 {
+            motor.mantle = None;
+            motor.grounded = true;
+            motor.ground_y = pose.position.y;
+        }
+        motor.tick_sprint(false, dt, tuning);
+    } else {
+        // Sprint: forward only, standing only, limited by stamina.
+        let wants_sprint = pressed(&bindings.sprint)
+            && forward
+            && !back
+            && pose.stance == Stance::Standing
+            && !modifiers.sprint_blocked;
+        motor.tick_sprint(wants_sprint, dt, tuning);
 
+        let speed = match pose.stance {
+            Stance::Standing if motor.sprinting => tuning.sprint_speed,
+            Stance::Standing => tuning.walk_speed,
+            Stance::Crouching => tuning.crouch_speed,
+            Stance::Prone => tuning.prone_speed,
+        } * modifiers.move_scale
+            * motor.landing_scale(tuning);
+        let wish = facing * Vec3::new(input.x, 0.0, -input.y).normalize_or_zero() * speed;
+        slide(
+            &mut pose,
+            &mut motor,
+            wish,
+            &time,
+            &shapes,
+            &move_and_slide,
+            tuning,
+        );
+    }
+
+    if pose.position.y < KILL_Y {
+        pose.position = random_spawn(&spawns) + Vec3::Y * HEADROOM_LIFT;
+        *motor = Motor::new(tuning);
+    }
+    *transform = Transform::from_translation(pose.position)
+        .with_rotation(Quat::from_rotation_y(pose.yaw));
+}
+
+/// One frame of walking, jumping or falling towards horizontal velocity `wish`, sliding along
+/// the static arena.
+fn slide(
+    pose: &mut PlayerPose,
+    motor: &mut Motor,
+    wish: Vec3,
+    time: &Time,
+    shapes: &StanceShapes,
+    move_and_slide: &MoveAndSlide,
+    tuning: &MovementTuning,
+) {
+    let dt = time.delta_secs();
     // Horizontal: snappy on the ground, limited steering in the air, momentum kept when idle.
     let horizontal = Vec3::new(motor.velocity.x, 0.0, motor.velocity.z);
     let horizontal = if motor.grounded {
-        horizontal.move_towards(wish, GROUND_ACCEL * dt)
+        horizontal.move_towards(wish, tuning.ground_accel * dt)
     } else if wish != Vec3::ZERO {
-        horizontal.move_towards(wish, AIR_ACCEL * dt)
+        horizontal.move_towards(wish, tuning.air_accel * dt)
     } else {
         horizontal
     };
 
     let jumped = motor.grounded && motor.jump_requested;
     let vertical = if jumped {
-        (2.0 * GRAVITY * JUMP_HEIGHT).sqrt()
+        (2.0 * tuning.gravity * tuning.jump_height).sqrt()
     } else if motor.grounded {
         0.0
     } else {
-        (motor.velocity.y - GRAVITY * dt).max(-TERMINAL_FALL_SPEED)
+        (motor.velocity.y - tuning.gravity * dt).max(-tuning.terminal_fall_speed)
     };
 
     let shape = shapes.body(pose.stance);
@@ -520,36 +715,47 @@ pub(super) fn move_player(
             )
             .filter(|hit| hit.normal1.y >= MIN_GROUND_NORMAL_Y)
     };
+    let landed = !motor.grounded && ground.is_some();
     motor.grounded = ground.is_some();
     if let Some(hit) = ground {
         center.y -= (hit.distance - config.skin_width).max(0.0);
         velocity.y = 0.0;
     }
+    // Touchdown bleeds the speed carried through the air, then `landing_scale` eases back.
+    if landed {
+        motor.since_landing = 0.0;
+        velocity.x *= tuning.landing_slow_scale;
+        velocity.z *= tuning.landing_slow_scale;
+    } else {
+        motor.since_landing += dt;
+    }
 
     pose.position = center - Vec3::Y * half_height;
-    motor.velocity = velocity;
-    if pose.position.y < KILL_Y {
-        pose.position = random_spawn(&spawns) + Vec3::Y * HEADROOM_LIFT;
-        *motor = Motor::default();
+    if motor.grounded {
+        motor.ground_y = pose.position.y;
     }
-    *transform = Transform::from_translation(pose.position)
-        .with_rotation(Quat::from_rotation_y(pose.yaw));
+    motor.velocity = velocity;
 }
 
-/// Places the camera at the (smoothed) eye height and applies pitch.
+/// Places the camera at the (smoothed) eye height and applies pitch, plus a dip and roll while
+/// mantling.
 pub(super) fn update_eye(
     time: Res<Time>,
-    player: Query<&PlayerPose, With<LocalPlayer>>,
+    player: Query<(&PlayerPose, &Motor), With<LocalPlayer>>,
     mut camera: Query<(&mut EyeCamera, &mut Transform)>,
 ) {
-    let Ok(pose) = player.single() else {
+    let Ok((pose, motor)) = player.single() else {
         return;
     };
+    let mantle = motor
+        .mantle
+        .map_or(0.0, |mantle| (PI * mantle.progress()).sin());
     for (mut eye, mut transform) in &mut camera {
         eye.height
             .smooth_nudge(&pose.stance.eye_height(), EYE_HEIGHT_RATE, time.delta_secs());
-        transform.translation = Vec3::Y * eye.height;
-        transform.rotation = Quat::from_rotation_x(pose.pitch);
+        transform.translation = Vec3::Y * (eye.height - MANTLE_VIEW_DIP * mantle);
+        transform.rotation =
+            Quat::from_rotation_x(pose.pitch) * Quat::from_rotation_z(MANTLE_VIEW_ROLL * mantle);
     }
 }
 
@@ -604,35 +810,38 @@ mod tests {
 
     #[test]
     fn full_stamina_lasts_sprint_stamina_seconds() {
-        let mut motor = Motor { grounded: true, ..default() };
+        let tuning = MovementTuning::fixture();
+        let mut motor = Motor { grounded: true, ..Motor::new(&tuning) };
         let dt = 0.5;
-        for _ in 0..(SPRINT_STAMINA / dt) as usize {
-            motor.tick_sprint(true, dt);
+        for _ in 0..(tuning.sprint_stamina_secs / dt) as usize {
+            motor.tick_sprint(true, dt, &tuning);
             assert!(motor.sprinting);
         }
         assert_eq!(motor.stamina, 0.0);
-        motor.tick_sprint(true, dt);
+        motor.tick_sprint(true, dt, &tuning);
         assert!(!motor.sprinting);
     }
 
     #[test]
     fn sprint_restarts_only_after_restart_threshold_regained() {
-        let mut motor = Motor { grounded: true, stamina: 0.0, ..default() };
-        let dt = SPRINT_RESTART_STAMINA / STAMINA_REGEN / 2.0;
-        motor.tick_sprint(true, dt);
+        let tuning = MovementTuning::fixture();
+        let mut motor = Motor { grounded: true, stamina: 0.0, ..Motor::new(&tuning) };
+        let dt = tuning.sprint_restart_stamina / tuning.stamina_regen_per_sec / 2.0;
+        motor.tick_sprint(true, dt, &tuning);
         assert!(!motor.sprinting);
-        motor.tick_sprint(true, dt);
+        motor.tick_sprint(true, dt, &tuning);
         assert!(!motor.sprinting);
-        assert_eq!(motor.stamina, SPRINT_RESTART_STAMINA);
-        motor.tick_sprint(true, dt);
+        assert_eq!(motor.stamina, tuning.sprint_restart_stamina);
+        motor.tick_sprint(true, dt, &tuning);
         assert!(motor.sprinting);
 
         // Below the threshold an ongoing sprint continues, but a jump cannot start one.
-        let mut sprinting = Motor { grounded: true, sprinting: true, stamina: 0.5, ..default() };
-        sprinting.tick_sprint(true, 0.1);
+        let mut sprinting =
+            Motor { grounded: true, sprinting: true, stamina: 0.5, ..Motor::new(&tuning) };
+        sprinting.tick_sprint(true, 0.1, &tuning);
         assert!(sprinting.sprinting);
-        let mut airborne = Motor::default();
-        airborne.tick_sprint(true, 0.1);
+        let mut airborne = Motor::new(&tuning);
+        airborne.tick_sprint(true, 0.1, &tuning);
         assert!(!airborne.sprinting);
     }
 }

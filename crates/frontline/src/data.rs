@@ -12,8 +12,12 @@ use serde::{Deserialize, Serialize};
 
 const WEAPONS_FILE: &str = "weapons.ron";
 const MATCH_RULES_FILE: &str = "match_rules.ron";
+const MOVEMENT_FILE: &str = "movement.ron";
+const GAME_MODES_FILE: &str = "game_modes.ron";
 const BUILTIN_WEAPONS: &str = include_str!("../../../data/weapons.ron");
 const BUILTIN_MATCH_RULES: &str = include_str!("../../../data/match_rules.ron");
+const BUILTIN_MOVEMENT: &str = include_str!("../../../data/movement.ron");
+const BUILTIN_GAME_MODES: &str = include_str!("../../../data/game_modes.ron");
 
 /// The preset used until Rotations exist.
 pub const DEFAULT_MATCH_RULES: &str = "default";
@@ -23,11 +27,19 @@ pub enum WeaponId {
     AssaultRifle,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]
+pub enum GameModeId {
+    TeamDeathmatch,
+}
+
 /// Stats of one Weapon. Distances in metres, angles in degrees, times in seconds.
 #[derive(Clone, Debug, Deserialize)]
 pub struct WeaponStats {
     pub name: String,
+    /// Rounds per minute from the hip.
     pub rpm: f32,
+    /// Rounds per minute fully aimed down sights; equal to `rpm` for guns that don't slow.
+    pub ads_rpm: f32,
     /// Body-shot damage up to `falloff_start`.
     pub damage_near: f32,
     /// Body-shot damage from `falloff_end` on; linear in between.
@@ -52,11 +64,26 @@ pub struct WeaponStats {
     pub recoil_recovery_per_sec: f32,
     /// Recoil kick multiplier when fully aimed down sights.
     pub ads_recoil_scale: f32,
+    /// Extra hip spread at full walking speed, scaled by current horizontal speed.
+    pub move_spread_deg: f32,
+    /// Extra hip spread while airborne.
+    pub air_spread_deg: f32,
+    /// Exponential rate (1/s) at which movement bloom follows the current speed.
+    pub bloom_follow_per_sec: f32,
+    /// Spread and recoil multiplier while crouched.
+    pub crouch_accuracy_scale: f32,
+    /// Spread and recoil multiplier while prone.
+    pub prone_accuracy_scale: f32,
+    /// Delay after a sprint ends before the weapon can fire or aim.
+    pub sprint_out_secs: f32,
+    /// Movement speed multiplier while carrying this weapon (its weight).
+    pub move_scale: f32,
 }
 
 impl WeaponStats {
-    pub fn seconds_per_shot(&self) -> f32 {
-        60.0 / self.rpm
+    /// Time between rounds at an aim-down-sights blend `ads` (0 hip, 1 fully aimed).
+    pub fn seconds_per_shot(&self, ads: f32) -> f32 {
+        60.0 / self.rpm.lerp(self.ads_rpm, ads)
     }
 }
 
@@ -67,6 +94,7 @@ impl WeaponStats {
         Self {
             name: "Test Rifle".into(),
             rpm: 480.0,
+            ads_rpm: 480.0,
             damage_near: 30.0,
             damage_far: 20.0,
             falloff_start: 10.0,
@@ -84,6 +112,13 @@ impl WeaponStats {
             recoil_yaw_deg: 0.5,
             recoil_recovery_per_sec: 8.0,
             ads_recoil_scale: 0.6,
+            move_spread_deg: 0.0,
+            air_spread_deg: 0.0,
+            bloom_follow_per_sec: 8.0,
+            crouch_accuracy_scale: 1.0,
+            prone_accuracy_scale: 1.0,
+            sprint_out_secs: 0.0,
+            move_scale: 1.0,
         }
     }
 }
@@ -96,17 +131,89 @@ pub struct MatchRules {
     pub regen_per_sec: f32,
     pub respawn_delay_secs: f32,
     pub damage_scale: f32,
+    /// Whether bullets hurt teammates (and Killstreaks follow the same rule).
+    pub friendly_fire: bool,
+}
+
+/// Movement tuning of the local player (metres, seconds).
+#[derive(Clone, Debug, Deserialize)]
+pub struct MovementTuning {
+    pub walk_speed: f32,
+    pub sprint_speed: f32,
+    pub crouch_speed: f32,
+    pub prone_speed: f32,
+    /// Seconds of continuous sprint on a full tank.
+    pub sprint_stamina_secs: f32,
+    /// Stamina regained per second while not sprinting.
+    pub stamina_regen_per_sec: f32,
+    /// After running dry, sprint restarts only once this much stamina is back.
+    pub sprint_restart_stamina: f32,
+    pub ground_accel: f32,
+    pub air_accel: f32,
+    pub gravity: f32,
+    pub terminal_fall_speed: f32,
+    pub jump_height: f32,
+    /// Speed multiplier right after landing, easing back to 1 over `landing_slow_secs`.
+    pub landing_slow_scale: f32,
+    pub landing_slow_secs: f32,
+    /// Highest ledge that can be mantled, above the feet (or, mid-jump, above where the jump
+    /// started).
+    pub mantle_max_height: f32,
+    /// How far ahead of the body a ledge is looked for.
+    pub mantle_reach: f32,
+    pub mantle_secs: f32,
+}
+
+#[cfg(test)]
+impl MovementTuning {
+    /// Round numbers for unit tests; override the fields a test is about.
+    pub fn fixture() -> Self {
+        Self {
+            walk_speed: 5.0,
+            sprint_speed: 8.0,
+            crouch_speed: 3.0,
+            prone_speed: 1.0,
+            sprint_stamina_secs: 4.0,
+            stamina_regen_per_sec: 1.0,
+            sprint_restart_stamina: 1.0,
+            ground_accel: 60.0,
+            air_accel: 8.0,
+            gravity: 20.0,
+            terminal_fall_speed: 40.0,
+            jump_height: 1.0,
+            landing_slow_scale: 0.5,
+            landing_slow_secs: 0.5,
+            mantle_max_height: 1.5,
+            mantle_reach: 0.5,
+            mantle_secs: 0.5,
+        }
+    }
+}
+
+/// Win conditions of a Game Mode.
+#[derive(Clone, Debug, Deserialize)]
+pub struct GameModeSettings {
+    pub score_limit: u32,
+    pub time_limit_secs: u32,
+    /// How long the end-of-Match scoreboard shows before the next Match starts.
+    pub end_screen_secs: u32,
 }
 
 #[derive(Resource, Debug)]
 pub struct GameData {
     pub weapons: HashMap<WeaponId, WeaponStats>,
     pub match_rules: HashMap<String, MatchRules>,
+    pub movement: MovementTuning,
+    pub game_modes: HashMap<GameModeId, GameModeSettings>,
 }
 
 impl GameData {
     pub fn weapon(&self, id: WeaponId) -> &WeaponStats {
         &self.weapons[&id]
+    }
+
+    pub fn game_mode(&self, id: GameModeId) -> &GameModeSettings {
+        &self.game_modes[&id]
     }
 
     /// The Match Rules currently in effect.
@@ -122,6 +229,8 @@ impl Plugin for DataPlugin {
         let data = GameData {
             weapons: load(WEAPONS_FILE, BUILTIN_WEAPONS),
             match_rules: load(MATCH_RULES_FILE, BUILTIN_MATCH_RULES),
+            movement: load(MOVEMENT_FILE, BUILTIN_MOVEMENT),
+            game_modes: load(GAME_MODES_FILE, BUILTIN_GAME_MODES),
         };
         assert!(
             data.match_rules.contains_key(DEFAULT_MATCH_RULES),

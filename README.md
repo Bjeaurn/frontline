@@ -20,23 +20,27 @@ cargo run -- --dedicated                               # headless Dedicated Serv
 
 ## Controls
 
-Left-click grabs the mouse and Esc releases it. Once grabbed, left-click fires.
+On joining, pick a Team with 1 / 2 and Enter (the smaller team is pre-selected). Left-click grabs the mouse and Esc releases it. Once grabbed, left-click fires.
 
 | Action | Key |
 |---|---|
 | Move | WASD |
 | Sprint | Left Shift (forward only, limited stamina) |
 | Jump / stand up | Space |
+| Mantle | Move into a ledge up to ~1.6 m (jumping helps) |
 | Crouch | C |
 | Prone | Left Ctrl or Z |
 | Fire (full auto) | Left mouse |
 | Aim down sights | Right mouse (hold) |
 | Reload | R (sprinting cancels it) |
+| Scoreboard | Tab (hold) |
+| Switch Team | T (dying counts as a switch, no credit to anyone) |
 
-Weapon and Match Rules tuning lives in `data/weapons.ron` and `data/match_rules.ron`. The game reads them at startup from `./data/` (relative to where you launch it), so edit and restart to retune. Without that folder it uses the copies built into the binary. Both machines should use the same files: damage is decided on the server, but recoil, spread and fire rate come from each client's own copy.
+Tuning lives in `data/`: `weapons.ron`, `movement.ron`, `match_rules.ron` and `game_modes.ron` (Team Deathmatch: 50 kills or 10 min). The game reads them at startup from `./data/` (relative to where you launch it), so edit and restart to retune. Without that folder it uses the copies built into the binary. Both machines should use the same files: damage and score are decided on the server, but movement, recoil, spread and fire rate come from each client's own copy.
 
 ## Layout
 
+- `crates/frontline/src/match_hud/`: Team picker, top-centre score, Tab Scoreboard, friendly name tags
 - `crates/frontline/src/combat/`: server-side shots, hitboxes, damage, health/regen, death and respawn, spawn selection
 - `crates/frontline/src/data.rs`: loads the `data/*.ron` tuning files
 - `crates/frontline/src/net/`: lightyear protocol, server, client, Host wiring

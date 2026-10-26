@@ -4,6 +4,8 @@ use avian3d::prelude::PhysicsLayer;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::data::GameModeId;
+
 /// Body posture; changes speed, eye height and hitbox height.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Reflect)]
 pub enum Stance {
@@ -72,6 +74,53 @@ impl Health {
 pub struct PlayerStats {
     pub kills: u32,
     pub deaths: u32,
+}
+
+/// One of the two sides in a team Game Mode. Shown to players relative to themselves
+/// (friendly vs enemy), never by these names' colours.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]
+pub enum Team {
+    Alpha,
+    Bravo,
+}
+
+impl Team {
+    pub const ALL: [Team; 2] = [Team::Alpha, Team::Bravo];
+
+    pub fn other(self) -> Team {
+        match self {
+            Team::Alpha => Team::Bravo,
+            Team::Bravo => Team::Alpha,
+        }
+    }
+
+    /// Index into per-team arrays such as `MatchState::scores`.
+    pub fn index(self) -> usize {
+        self as usize
+    }
+}
+
+/// The team a player is on; `None` while they are still choosing. Server-written, replicated.
+#[derive(Component, Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, Reflect)]
+pub struct PlayerTeam(pub Option<Team>);
+
+/// State of the current Match, on a single server-owned entity replicated to every client.
+#[derive(Component, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MatchState {
+    pub mode: GameModeId,
+    /// Team scores, indexed by `Team::index`.
+    pub scores: [u32; 2],
+    pub score_limit: u32,
+    /// Whole seconds left on the clock while playing.
+    pub seconds_left: u32,
+    pub phase: MatchPhase,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum MatchPhase {
+    Playing,
+    /// The Match is over; the next one starts in `next_in_secs`. `winner` is `None` on a draw.
+    Ended { winner: Option<Team>, next_in_secs: u32 },
 }
 
 /// Physics layers. Arena geometry is `World`; player hitboxes are `Hitbox` and collide with

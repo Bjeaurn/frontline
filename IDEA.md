@@ -20,6 +20,7 @@ The definition for a MVP would be Team deathmatch, 3-5 weapons with a different 
 - **Maps:** the party gets 2 **Homage Maps**, Backlot and Vacant (CoD4). They stay private: never in a public build or repo, because Activision DMCA'd CoD map ports in Oct 2026. Any public release uses **Remix Maps** instead.
 - **Art:** CC0 low-poly (Quaternius/Kenney models, ambientCG/Poly Haven textures). First-person weapon animation is procedural (recoil, sway, ADS). Team colour comes from a tint. Audio is CC0 or cheap packs.
 - **Weapons:** AR, SMG, Sniper, Shotgun as **Primaries**, pistol as **Secondary**. All hitscan. Stats are data-driven and can be tuned without recompiling.
+- **Gunplay rules (per Weapon):** separate hip and ADS fire rates (ADS ~5% slower for most guns, equal for SMGs). Sprint-out delay before firing/aiming. Hip spread blooms while moving and more while airborne. Crouch/prone tighten spread and recoil. Weapon weight scales move speed.
 - **Attachments:** two **Attachment Slots**, Optic (Red Dot, ACOG) and Muzzle (Silencer).
 - **Progression:** party-compressed XP **Levels** (~10 in an evening) unlock **Weapons**, **Attachments** and **Perks**.
 - **Perks:** 3 **Perk Slots** × 2 simple stat modifiers.
@@ -29,7 +30,7 @@ The definition for a MVP would be Team deathmatch, 3-5 weapons with a different 
 - **Fire Pings:** unsuppressed shots show on enemies' **Minimap** for ~1.5s. The Silencer removes the ping in exchange for less range.
 - **Profile:** client-local file (name, XP, Level) sent on join. The server awards XP and the client saves it. Survives a change of Host.
 - **Health/TTK default:** CoD core. 100 HP, regen after ~5s, AR kills in 3–4 body shots up close, ~1.4× headshots, damage falls off with range, 3s respawn, spawns avoid enemy line of sight. All of these are **Match Rules** values, not hardcoded. Each Game Mode has default Match Rules. **Hardcore** and health-pack variants are presets added later.
-- **Movement:** walk, sprint (limited; Marathon extends it), crouch, prone, jump. ADS slows you. No slide, mantle or lean. Prone adds ~1–2 days for hitbox, camera and anim work.
+- **Movement:** walk, sprint (limited; Marathon extends it), crouch, prone, jump, **Mantle** (ledges up to ~1.6 m, ~0.4 s). Landing briefly slows you instead of sliding. ADS slows you. No slide or lean. Mantle reverses the earlier "no mantle" call (2026-10-26) to make 1–1.5 m cover climbable. All numbers in `data/movement.ron`.
 - **Input:** keyboard + mouse only, with rebindable keys and a sensitivity setting. No controller. Set up a 3-OS CI build matrix (Linux/macOS/Windows) in week 1.
 - **Teams:** free pick, including on **Join In Progress** (the smaller team is pre-selected). Stacking is allowed. Friendly fire is a **Match Rules** option, off by default.
 - **Loadouts:** the **Profile** holds 3 custom and 3 default (AR/SMG/Sniper preset) **Loadouts**. They're editable in the menu or mid-Match. A change applies on the next spawn, or instantly within ~5s of spawning. The server trusts the Loadout and checks it against Level unlocks only loosely.

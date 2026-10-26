@@ -3,6 +3,7 @@
 mod cli;
 mod combat;
 mod data;
+mod match_hud;
 mod net;
 mod player;
 mod shared;
@@ -62,6 +63,7 @@ fn main() -> AppExit {
             player::LocalControllerPlugin,
             player::RemotePlayerVisualsPlugin,
             weapon::WeaponClientPlugin,
+            match_hud::MatchHudPlugin,
         ));
     }
     if !matches!(mode, Mode::Client { .. }) {

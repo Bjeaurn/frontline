@@ -17,7 +17,7 @@ use crate::player::{
     ControllerModifiers, ControllerSystems, EyeCamera, LocalLife, Motor, MouseCaptured,
     PITCH_LIMIT,
 };
-use crate::shared::{FromServer, GameLayer, LocalPlayer, PlayerPose, ToServer};
+use crate::shared::{FromServer, GameLayer, LocalPlayer, PlayerPose, Stance, ToServer};
 
 pub struct WeaponClientPlugin;
 
@@ -33,7 +33,14 @@ impl Plugin for WeaponClientPlugin {
             ))
             .add_systems(
                 Update,
-                (reset_on_respawn, aim, reload, fire, recover_recoil)
+                (
+                    reset_on_respawn,
+                    track_body,
+                    aim,
+                    reload,
+                    fire,
+                    recover_recoil,
+                )
                     .chain()
                     .in_set(WeaponSystems)
                     .after(ControllerSystems::Look)
@@ -61,6 +68,16 @@ struct HeldWeapon {
     ads: f32,
     /// Recoil not yet recovered, as (yaw, pitch) in radians.
     recoil: Vec2,
+    /// The body is sprinting this frame.
+    sprinting: bool,
+    /// The body is mantling this frame.
+    mantling: bool,
+    /// Seconds left of raising the weapon after a sprint ended.
+    sprint_out: f32,
+    /// Movement bloom added to hip spread, in degrees; follows the body's speed smoothly.
+    bloom: f32,
+    /// Spread and recoil multiplier of the current stance.
+    accuracy: f32,
 }
 
 impl HeldWeapon {
@@ -73,6 +90,11 @@ impl HeldWeapon {
             trigger: false,
             ads: 0.0,
             recoil: Vec2::ZERO,
+            sprinting: false,
+            mantling: false,
+            sprint_out: 0.0,
+            bloom: 0.0,
+            accuracy: 1.0,
         }
     }
 
@@ -106,20 +128,25 @@ impl HeldWeapon {
         }
     }
 
+    /// Whether the weapon is up: not lowered for a sprint or mantle, nor still raising.
+    fn ready(&self) -> bool {
+        !self.sprinting && !self.mantling && self.sprint_out <= 0.0
+    }
+
     /// Runs the trigger for a frame of `dt` seconds and returns how many rounds leave the
-    /// barrel: as many as the rpm owes since the last shot, so a long frame fires several.
-    /// Running dry starts a reload.
+    /// barrel: as many as the fire rate owes since the last shot, so a long frame fires
+    /// several. Running dry starts a reload.
     fn rounds_to_fire(&mut self, stats: &WeaponStats, dt: f32) -> u32 {
         self.cooldown -= dt;
         let mut fired = 0;
-        if self.trigger && self.reload_left.is_none() {
+        if self.trigger && self.ready() && self.reload_left.is_none() {
             while self.cooldown <= 0.0 {
                 if self.rounds == 0 {
                     self.start_reload(stats);
                     break;
                 }
                 self.rounds -= 1;
-                self.cooldown += stats.seconds_per_shot();
+                self.cooldown += stats.seconds_per_shot(self.ads_eased());
                 fired += 1;
             }
         }
@@ -129,8 +156,33 @@ impl HeldWeapon {
 
     /// The ADS blend eased in and out.
     fn ads_eased(&self) -> f32 {
-        let t = self.ads;
-        t * t * (3.0 - 2.0 * t)
+        ease(self.ads)
+    }
+
+    /// How far the weapon still is from ready after a sprint: 1 just after, 0 once up.
+    fn sprint_out_fraction(&self, stats: &WeaponStats) -> f32 {
+        if stats.sprint_out_secs > 0.0 {
+            (self.sprint_out / stats.sprint_out_secs).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
+    /// Hip spread cone half-angle with movement bloom and stance, in degrees.
+    fn hip_spread_deg(&self, stats: &WeaponStats) -> f32 {
+        (stats.hip_spread_deg + self.bloom) * self.accuracy
+    }
+
+    /// Spread cone half-angle at the current ADS blend, in degrees. Sights ignore movement
+    /// bloom but keep the stance bonus.
+    fn spread_deg(&self, stats: &WeaponStats) -> f32 {
+        self.hip_spread_deg(stats)
+            .lerp(stats.ads_spread_deg * self.accuracy, self.ads_eased())
+    }
+
+    /// Recoil kick multiplier at the current ADS blend and stance.
+    fn recoil_scale(&self, stats: &WeaponStats) -> f32 {
+        1.0_f32.lerp(stats.ads_recoil_scale, self.ads_eased()) * self.accuracy
     }
 }
 
@@ -176,6 +228,11 @@ fn wrap_angle(angle: f32) -> f32 {
     (angle + PI).rem_euclid(TAU) - PI
 }
 
+/// Smoothstep: eases a 0..1 blend in and out.
+fn ease(t: f32) -> f32 {
+    t * t * (3.0 - 2.0 * t)
+}
+
 fn equip_local_player(add: On<Add<LocalPlayer>>, data: Res<GameData>, mut commands: Commands) {
     let id = WeaponId::AssaultRifle;
     commands
@@ -198,7 +255,43 @@ fn reset_on_respawn(
     }
 }
 
-/// Blends toward the sights while the aim button is held, and feeds the controller hooks.
+/// Follows the body: sprint and mantle lower the weapon, a finished sprint starts raising it,
+/// speed and air time bloom hip spread, and stance scales accuracy.
+fn track_body(
+    time: Res<Time>,
+    data: Res<GameData>,
+    mut player: Query<(&mut HeldWeapon, &Motor, &PlayerPose), With<LocalPlayer>>,
+) {
+    let Ok((mut weapon, motor, pose)) = player.single_mut() else {
+        return;
+    };
+    let stats = data.weapon(weapon.id);
+    let dt = time.delta_secs();
+
+    weapon.sprint_out = if weapon.sprinting && !motor.sprinting() {
+        stats.sprint_out_secs
+    } else {
+        (weapon.sprint_out - dt).max(0.0)
+    };
+    weapon.sprinting = motor.sprinting();
+    weapon.mantling = motor.mantling();
+
+    let velocity = motor.velocity();
+    let speed = Vec2::new(velocity.x, velocity.z).length();
+    let walk = (speed / data.movement.walk_speed.max(f32::EPSILON)).clamp(0.0, 1.5);
+    let air = if motor.grounded() { 0.0 } else { stats.air_spread_deg };
+    let bloom = stats.move_spread_deg * walk + air;
+    weapon.bloom.smooth_nudge(&bloom, stats.bloom_follow_per_sec, dt);
+
+    weapon.accuracy = match pose.stance {
+        Stance::Standing => 1.0,
+        Stance::Crouching => stats.crouch_accuracy_scale,
+        Stance::Prone => stats.prone_accuracy_scale,
+    };
+}
+
+/// Blends toward the sights while the aim button is held and the weapon is up, and feeds the
+/// controller hooks: aiming zooms and slows, and aiming or firing stops a sprint.
 fn aim(
     time: Res<Time>,
     data: Res<GameData>,
@@ -212,20 +305,18 @@ fn aim(
         return;
     };
     let stats = data.weapon(weapon.id);
-    let wants = captured.active()
-        && mouse.pressed(bindings.aim)
-        && !life.is_dead()
-        && weapon.reload_left.is_none();
+    let in_control = captured.active() && !life.is_dead();
+    let wants = in_control && mouse.pressed(bindings.aim) && weapon.reload_left.is_none();
     let step = time.delta_secs() / stats.ads_secs.max(f32::EPSILON);
-    weapon.ads = if wants {
+    weapon.ads = if wants && weapon.ready() {
         (weapon.ads + step).min(1.0)
     } else {
         (weapon.ads - step).max(0.0)
     };
     let t = weapon.ads_eased();
     modifiers.fov_scale = 1.0_f32.lerp(stats.ads_fov_scale, t);
-    modifiers.move_scale = 1.0_f32.lerp(stats.ads_move_scale, t);
-    modifiers.sprint_blocked = wants;
+    modifiers.move_scale = stats.move_scale * 1.0_f32.lerp(stats.ads_move_scale, t);
+    modifiers.sprint_blocked = wants || (in_control && mouse.pressed(bindings.fire));
 }
 
 /// R reloads; sprinting cancels a reload in progress.
@@ -251,8 +342,9 @@ fn reload(
     weapon.tick_reload(stats, time.delta_secs(), motor.sprinting());
 }
 
-/// Full-auto fire at the Weapon's rpm. Each round goes to the server with spread and the
-/// current recoil already applied, then kicks the view.
+/// Full-auto fire at the Weapon's rpm, blending to its ADS rpm with the sights, once the
+/// weapon is up. Each round goes to the server with spread and the current recoil already
+/// applied, then kicks the view.
 fn fire(
     time: Res<Time>,
     data: Res<GameData>,
@@ -282,10 +374,10 @@ fn fire(
         let origin = pose.position + Vec3::Y * eye_height;
         let gun = gun.single().copied().unwrap_or_default();
         let filter = SpatialQueryFilter::from_mask(GameLayer::World);
+        let spread = weapon.spread_deg(stats).to_radians();
+        let kick = weapon.recoil_scale(stats);
         for _ in 0..rounds {
-            let t = weapon.ads_eased();
             let aim = aim_rotation(pose.yaw, pose.pitch);
-            let spread = stats.hip_spread_deg.lerp(stats.ads_spread_deg, t).to_radians();
             let (angle, radius) = (rng.next() * std::f32::consts::TAU, spread * rng.next().sqrt());
             let offset = Quat::from_rotation_y(radius * angle.cos())
                 * Quat::from_rotation_x(radius * angle.sin());
@@ -307,7 +399,6 @@ fn fire(
                 end: origin + *direction * end,
             });
 
-            let kick = 1.0_f32.lerp(stats.ads_recoil_scale, t);
             let pitch_kick = stats.recoil_pitch_deg.to_radians() * kick;
             let yaw_kick = stats.recoil_yaw_deg.to_radians() * kick * rng.signed();
             let pitch = (pose.pitch + pitch_kick).min(PITCH_LIMIT);
@@ -353,7 +444,8 @@ mod tests {
     #[test]
     fn fire_rate_holds_at_any_frame_rate_and_idle_time_banks_nothing() {
         // 480 rpm: a round every 0.125 s, so holding for 1 s fires at 0, 0.125, ..., 1.0.
-        let stats = WeaponStats { magazine: 100, ..WeaponStats::fixture() };
+        // Fully aimed it's 240 rpm: a round every 0.25 s.
+        let stats = WeaponStats { magazine: 100, ads_rpm: 240.0, ..WeaponStats::fixture() };
 
         let mut low_fps = HeldWeapon::new(WeaponId::AssaultRifle, &stats);
         low_fps.trigger = true;
@@ -369,6 +461,12 @@ mod tests {
         assert_eq!(frame(&mut idle, &stats, 1.0), 0);
         idle.trigger = true;
         assert_eq!(frame(&mut idle, &stats, 0.25), 3);
+
+        let mut aimed = HeldWeapon::new(WeaponId::AssaultRifle, &stats);
+        aimed.ads = 1.0;
+        aimed.trigger = true;
+        let fired: u32 = (0..4).map(|_| frame(&mut aimed, &stats, 0.25)).sum();
+        assert_eq!(fired, 5);
     }
 
     #[test]

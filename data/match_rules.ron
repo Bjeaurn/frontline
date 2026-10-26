@@ -7,5 +7,6 @@
         regen_per_sec: 40.0,
         respawn_delay_secs: 3.0,
         damage_scale: 1.0,
+        friendly_fire: false,
     ),
 }

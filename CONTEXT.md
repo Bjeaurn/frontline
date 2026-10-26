@@ -62,6 +62,14 @@ _Avoid_: Control, conquest
 A fixed capturable area in **Domination**, labelled A, B or C.
 _Avoid_: Zone, point, objective, capture point
 
+**Team**:
+One of the two sides in a team **Game Mode**; each player sees their own as friendly and the other as enemy.
+_Avoid_: Faction, side, squad
+
+**Scoreboard**:
+The view, held open with Tab and forced open at **Match** end, listing every player by **Team** with their score, kills and deaths.
+_Avoid_: Leaderboard, stats screen
+
 ### Maps
 
 **Map**:
@@ -75,6 +83,12 @@ _Avoid_: Remake, port, copy
 **Remix Map**:
 An original **Map** that reuses the structure of classic Call of Duty maps (lanes, sightlines, central contested area) with its own layout and name.
 _Avoid_: Inspired map, clone
+
+### Movement
+
+**Mantle**:
+Climbing onto a ledge up to about chest height by moving into it.
+_Avoid_: Vault, climb, ledge grab
 
 ### Weapons
 

@@ -1,6 +1,7 @@
 //! First-person gun: a blocky rifle on its own camera and render layer, so it is drawn over
 //! the world and never clips into walls. Moves to the sights when aiming, bobs while
-//! walking, sways with the mouse, kicks on each shot and dips during a reload.
+//! walking, sways with the mouse, kicks on each shot, dips during a reload, angles down and
+//! across while sprinting (raising back as the sprint-out ends) and drops during a mantle.
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
@@ -10,7 +11,7 @@ use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
 use super::effects::MuzzleFlash;
-use super::{HeldWeapon, ShotFired, WeaponSystems};
+use super::{HeldWeapon, ShotFired, WeaponSystems, ease};
 use crate::data::GameData;
 use crate::player::{ControllerSystems, EyeCamera, LocalLife, Motor, MouseCaptured};
 use crate::shared::LocalPlayer;
@@ -51,6 +52,17 @@ const ADS_KICK_SCALE: f32 = 0.5;
 const RELOAD_DROP: f32 = 0.12;
 const RELOAD_TILT: f32 = 0.6;
 const RELOAD_ROLL: f32 = 0.5;
+/// Sprint pose at full blend: offset from the hip position, and yaw (barrel swung left),
+/// pitch (down) and roll. Eased in at `SPRINT_IN_RATE` 1/s; eased out over the sprint-out.
+const SPRINT_OFFSET: Vec3 = Vec3::new(-0.03, -0.07, 0.05);
+const SPRINT_YAW: f32 = 0.75;
+const SPRINT_PITCH: f32 = -0.35;
+const SPRINT_ROLL: f32 = 0.35;
+const SPRINT_IN_RATE: f32 = 12.0;
+/// Mantle pose at full blend: drop and tilt down; follows at `MANTLE_RATE` 1/s.
+const MANTLE_DROP: f32 = 0.2;
+const MANTLE_TILT: f32 = 0.5;
+const MANTLE_RATE: f32 = 14.0;
 
 /// Light for the viewmodel layer; world lights only reach the world layer.
 const VIEWMODEL_LIGHT_LUX: f32 = 9_000.0;
@@ -82,6 +94,10 @@ pub(super) struct ViewmodelGun {
     bob_amount: f32,
     sway: Vec2,
     kick: f32,
+    /// Sprint pose blend, 0 ready to 1 fully lowered.
+    sprint: f32,
+    /// Mantle pose blend, 0 ready to 1 fully lowered.
+    mantle: f32,
 }
 
 fn viewmodel_layer() -> RenderLayers {
@@ -306,17 +322,35 @@ fn animate_viewmodel(
     anim.kick = ((anim.kick + shots as f32).min(KICK_MAX)) * (-KICK_DECAY * dt).exp();
     let kick = anim.kick * 1.0_f32.lerp(ADS_KICK_SCALE, ads);
 
+    let stats = data.weapon(weapon.id);
     let dip = weapon
-        .reload_progress(data.weapon(weapon.id))
+        .reload_progress(stats)
         .map_or(0.0, |progress| (progress * PI).sin());
+
+    if weapon.sprinting {
+        anim.sprint.smooth_nudge(&1.0, SPRINT_IN_RATE, dt);
+    } else {
+        anim.sprint = anim.sprint.min(weapon.sprint_out_fraction(stats));
+    }
+    let sprint = ease(anim.sprint);
+    let mantle_target = if weapon.mantling { 1.0 } else { 0.0 };
+    anim.mantle.smooth_nudge(&mantle_target, MANTLE_RATE, dt);
+    let mantle = ease(anim.mantle);
 
     let wobble = (bob + anim.sway) * motion_scale;
     transform.translation = HIP_OFFSET.lerp(ADS_OFFSET, ads)
-        + Vec3::new(wobble.x, wobble.y - RELOAD_DROP * dip, KICK_BACK * kick);
+        + SPRINT_OFFSET * sprint
+        + Vec3::new(
+            wobble.x,
+            wobble.y - RELOAD_DROP * dip - MANTLE_DROP * mantle,
+            KICK_BACK * kick,
+        );
     transform.rotation = Quat::from_euler(
         EulerRot::YXZ,
-        anim.sway.x * SWAY_TILT * motion_scale,
-        KICK_PITCH * kick - RELOAD_TILT * dip + anim.sway.y * SWAY_TILT * motion_scale,
-        RELOAD_ROLL * dip,
+        anim.sway.x * SWAY_TILT * motion_scale + SPRINT_YAW * sprint,
+        KICK_PITCH * kick - RELOAD_TILT * dip + anim.sway.y * SWAY_TILT * motion_scale
+            + SPRINT_PITCH * sprint
+            - MANTLE_TILT * mantle,
+        RELOAD_ROLL * dip + SPRINT_ROLL * sprint,
     );
 }

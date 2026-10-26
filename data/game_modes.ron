@@ -1,0 +1,9 @@
+// Game Mode win conditions. Read at startup from ./data/ (falls back to the copy built into the
+// binary). Times in seconds.
+{
+    TeamDeathmatch: (
+        score_limit: 50,
+        time_limit_secs: 600,
+        end_screen_secs: 10,
+    ),
+}

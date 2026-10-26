@@ -1,4 +1,5 @@
-//! Local-player HUD: damage vignette and direction indicators, kill feed and the death screen.
+//! Local-player HUD: damage vignette and direction indicators, team-coloured kill feed and the
+//! death screen.
 
 use std::f32::consts::PI;
 
@@ -6,8 +7,11 @@ use bevy::prelude::*;
 
 use super::life::LocalLife;
 use crate::data::GameData;
+use crate::match_hud::{FRIENDLY_COLOR, relation_color};
 use crate::net::protocol::{Damaged, KillFeed};
-use crate::shared::{FromServer, Health, LocalPlayer, LocalPlayerReplica, PlayerName, PlayerPose};
+use crate::shared::{
+    FromServer, Health, LocalPlayer, LocalPlayerReplica, PlayerName, PlayerPose, PlayerTeam,
+};
 
 const DAMAGE_RED: Color = Color::srgb(0.75, 0.0, 0.0);
 /// Vignette opacity at zero health; scales linearly with missing health.
@@ -24,9 +28,8 @@ const FEED_LINES: usize = 5;
 const FEED_VISIBLE_SECS: f64 = 5.0;
 const FEED_FADE_SECS: f64 = 0.5;
 const FEED_FONT_SIZE: f32 = 15.0;
+/// Weapon and unknown names in the kill feed.
 const FEED_COLOR: Color = Color::srgb(0.95, 0.95, 0.95);
-/// Lines where the local player is the killer.
-const FEED_OWN_KILL_COLOR: Color = Color::srgb(1.0, 0.85, 0.3);
 
 const DEATH_TITLE_SIZE: f32 = 30.0;
 const DEATH_SUBTITLE_SIZE: f32 = 18.0;
@@ -52,7 +55,6 @@ pub(super) struct KillFeedList;
 #[derive(Component)]
 pub(super) struct KillFeedLine {
     born: f64,
-    color: Color,
 }
 
 #[derive(Component)]
@@ -141,16 +143,26 @@ pub(super) fn spawn_hud(mut commands: Commands) {
     ));
 }
 
-/// Red screen edges that deepen with missing health.
+/// Red screen edges that deepen with missing health; none while still choosing a Team.
 pub(super) fn update_damage_vignette(
     data: Res<GameData>,
-    replica: Query<&Health, (With<LocalPlayerReplica>, Changed<Health>)>,
+    replica: Query<
+        (&Health, &PlayerTeam),
+        (
+            With<LocalPlayerReplica>,
+            Or<(Changed<Health>, Changed<PlayerTeam>)>,
+        ),
+    >,
     mut vignette_node: Single<(&mut BackgroundGradient, &mut Visibility), With<DamageVignette>>,
 ) {
-    let Ok(health) = replica.single() else {
+    let Ok((health, team)) = replica.single() else {
         return;
     };
-    let missing = (1.0 - health.0 / data.rules().max_health).clamp(0.0, 1.0);
+    let missing = if team.0.is_some() {
+        (1.0 - health.0 / data.rules().max_health).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     let (gradient, visibility) = &mut *vignette_node;
     **gradient = vignette(missing * VIGNETTE_MAX_ALPHA);
     visibility.set_if_neq(if missing > 0.0 {
@@ -243,11 +255,18 @@ pub(super) fn update_damage_indicators(
     }
 }
 
+/// Base colour of a kill-feed text section, faded by `fade_kill_feed`.
+#[derive(Component)]
+pub(super) struct FeedColor(Color);
+
+/// Spawns one kill-feed line per message: friendly names blue, enemy names red.
 pub(super) fn add_kill_feed_lines(
     time: Res<Time>,
     data: Res<GameData>,
+    life: Res<LocalLife>,
     mut feed: MessageReader<FromServer<KillFeed>>,
     me: Query<&PlayerName, With<LocalPlayer>>,
+    players: Query<(&PlayerName, &PlayerTeam)>,
     list: Single<(Entity, Option<&Children>), With<KillFeedList>>,
     lines: Query<&KillFeedLine>,
     mut commands: Commands,
@@ -259,30 +278,57 @@ pub(super) fn add_kill_feed_lines(
     let mut existing: Vec<Entity> = children
         .map(|children| children.iter().filter(|&c| lines.contains(c)).collect())
         .unwrap_or_default();
+    let name_color = |name: &str| {
+        if me.single().is_ok_and(|me| me.0 == name) {
+            return FRIENDLY_COLOR;
+        }
+        players
+            .iter()
+            .find(|(player, _)| player.0 == name)
+            .map_or(FEED_COLOR, |(_, team)| relation_color(life.team(), team.0))
+    };
+    let font = TextFont {
+        font_size: FontSize::Px(FEED_FONT_SIZE),
+        ..default()
+    };
     for FromServer(line) in feed.read() {
         if existing.len() >= FEED_LINES {
             commands.entity(existing.remove(0)).try_despawn();
         }
         let weapon = &data.weapon(line.weapon).name;
         let headshot = if line.headshot { "  (headshot)" } else { "" };
-        let color = if me.single().is_ok_and(|me| me.0 == line.killer) {
-            FEED_OWN_KILL_COLOR
-        } else {
-            FEED_COLOR
-        };
+        let killer = name_color(&line.killer);
+        let victim = name_color(&line.victim);
         let entity = commands
             .spawn((
                 KillFeedLine {
                     born: time.elapsed_secs_f64(),
-                    color,
                 },
-                Text::new(format!("{}  [{weapon}]  {}{headshot}", line.killer, line.victim)),
-                TextFont {
-                    font_size: FontSize::Px(FEED_FONT_SIZE),
-                    ..default()
-                },
-                TextColor(color),
+                Text::new(line.killer.clone()),
+                font.clone(),
+                TextColor(killer),
+                FeedColor(killer),
                 ChildOf(list),
+                children![
+                    (
+                        TextSpan::new(format!("  [{weapon}]  ")),
+                        font.clone(),
+                        TextColor(FEED_COLOR),
+                        FeedColor(FEED_COLOR),
+                    ),
+                    (
+                        TextSpan::new(line.victim.clone()),
+                        font.clone(),
+                        TextColor(victim),
+                        FeedColor(victim),
+                    ),
+                    (
+                        TextSpan::new(headshot),
+                        font.clone(),
+                        TextColor(FEED_COLOR),
+                        FeedColor(FEED_COLOR),
+                    ),
+                ],
             ))
             .id();
         existing.push(entity);
@@ -292,20 +338,27 @@ pub(super) fn add_kill_feed_lines(
 /// Fades each kill-feed line out after `FEED_VISIBLE_SECS`.
 pub(super) fn fade_kill_feed(
     time: Res<Time>,
-    mut lines: Query<(Entity, &KillFeedLine, &mut TextColor)>,
+    lines: Query<(Entity, &KillFeedLine, &Children)>,
+    mut sections: Query<(&FeedColor, &mut TextColor)>,
     mut commands: Commands,
 ) {
     let now = time.elapsed_secs_f64();
-    for (entity, line, mut color) in &mut lines {
+    for (entity, line, children) in &lines {
         let left = line.born + FEED_VISIBLE_SECS + FEED_FADE_SECS - now;
         if left <= 0.0 {
             commands.entity(entity).despawn();
         } else if left < FEED_FADE_SECS {
-            color.0 = line.color.with_alpha((left / FEED_FADE_SECS) as f32);
+            let alpha = (left / FEED_FADE_SECS) as f32;
+            for section in std::iter::once(entity).chain(children.iter()) {
+                if let Ok((base, mut color)) = sections.get_mut(section) {
+                    color.0 = base.0.with_alpha(alpha);
+                }
+            }
         }
     }
 }
 
+/// Shown while dead; not while still choosing a Team.
 pub(super) fn update_death_screen(
     time: Res<Time>,
     data: Res<GameData>,
@@ -314,16 +367,18 @@ pub(super) fn update_death_screen(
     mut title: Single<&mut Text, (With<DeathTitle>, Without<DeathCountdown>)>,
     mut countdown: Single<&mut Text, (With<DeathCountdown>, Without<DeathTitle>)>,
 ) {
-    screen.set_if_neq(if life.is_dead() {
+    let shown = life.is_dead() && life.team().is_some();
+    screen.set_if_neq(if shown {
         Visibility::Inherited
     } else {
         Visibility::Hidden
     });
-    if !life.is_dead() {
+    if !shown {
         return;
     }
     let heading = match life.killer() {
         Some(killer) => format!("You were killed by {killer}"),
+        None if life.switched_team() => "You switched to the other team".to_owned(),
         None => "You were killed".to_owned(),
     };
     let left = f64::from(data.rules().respawn_delay_secs) - life.secs_dead(time.elapsed_secs_f64());

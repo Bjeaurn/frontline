@@ -9,24 +9,36 @@ use lightyear::prelude::*;
 
 use super::damage::{HitZone, shot_damage};
 use super::hitbox::{Hitboxes, set_hitboxes_enabled, spawn_hitboxes};
+use super::match_flow::is_live;
 use super::shots::PlayerHit;
 use super::spawn::choose_spawn;
 use crate::data::GameData;
 use crate::net::protocol::{Damaged, EventChannel, HitConfirm, KillFeed, PlayerOwner, Respawn};
-use crate::shared::{GameLayer, Health, PlayerName, PlayerPose, PlayerStats, Stance};
+use crate::shared::{
+    GameLayer, Health, MatchState, PlayerName, PlayerPose, PlayerStats, PlayerTeam, Stance, Team,
+};
 use crate::world::{SpawnPoints, yaw_towards_centre};
 
 /// A respawned client's poses are accepted again once one lands this close to the spawn.
 const RESPAWN_ACCEPT_RADIUS: f32 = 2.0;
+/// A spawn point with a living player within this horizontal distance is skipped while any
+/// other is free, so teammates respawning together don't stack.
+const SPAWN_CLEARANCE: f32 = 1.5;
 
 /// When the player last took damage (elapsed time); regen waits `regen_delay_secs` after it.
 #[derive(Component, Debug)]
 pub(super) struct LastDamaged(Duration);
 
-/// The player is out of play (dead, or just connected) and respawns at `at` (elapsed time).
+/// The player is out of play (dead, or just picked a Team) and respawns at `at` (elapsed time).
 #[derive(Component, Debug)]
 pub(super) struct PendingRespawn {
     at: Duration,
+}
+
+impl PendingRespawn {
+    pub(super) fn at(at: Duration) -> Self {
+        Self { at }
+    }
 }
 
 /// The server just placed this player at `spawn` and ignores the owner's `PoseUpdate`s until
@@ -43,24 +55,25 @@ impl PoseGate {
     }
 }
 
-/// Gives each new server Player its hitboxes and schedules its first spawn right away.
+/// Gives each new server Player its (disabled) hitboxes. It stays out of play, dead and
+/// unseen, until it picks a Team (`teams::choose_teams`).
 pub(super) fn init_player(
     add: On<Add<PlayerOwner>>,
     players: Query<(), With<ControlledBy>>,
-    time: Res<Time>,
     mut commands: Commands,
 ) {
     if !players.contains(add.entity) {
         return;
     }
     spawn_hitboxes(&mut commands, add.entity);
-    commands.entity(add.entity).insert((
-        LastDamaged(Duration::ZERO),
-        PendingRespawn { at: time.elapsed() },
-    ));
+    commands
+        .entity(add.entity)
+        .insert(LastDamaged(Duration::ZERO));
 }
 
-/// Applies each `PlayerHit`: damage, hit/damage feedback and, on a kill, score and kill feed.
+/// Applies each `PlayerHit` while the Match is live: damage, hit/damage feedback and, on a
+/// kill, stats, team score and kill feed. Teammates are immune unless the Match Rules allow
+/// friendly fire.
 pub(super) fn apply_hits(
     mut hits: MessageReader<PlayerHit>,
     mut players: Query<(
@@ -68,9 +81,11 @@ pub(super) fn apply_hits(
         &mut LastDamaged,
         &mut PlayerStats,
         &PlayerName,
+        &PlayerTeam,
         &ControlledBy,
         &Hitboxes,
     )>,
+    mut state: Single<&mut MatchState>,
     mut hit_confirms: Query<&mut MessageSender<HitConfirm>>,
     mut damaged: Query<&mut MessageSender<Damaged>>,
     mut kill_feeds: Query<&mut MessageSender<KillFeed>, (With<ClientOf>, With<Connected>)>,
@@ -80,18 +95,36 @@ pub(super) fn apply_hits(
 ) {
     let rules = data.rules();
     for hit in hits.read() {
-        let Ok((shooter_name, shooter_link)) = players
+        if !is_live(&state) {
+            continue;
+        }
+        let Ok((shooter_name, shooter_team, shooter_link)) = players
             .get(hit.shooter)
-            .map(|(_, _, _, name, link, _)| (name.0.clone(), link.owner))
+            .map(|(_, _, _, name, team, link, _)| (name.0.clone(), team.0, link.owner))
         else {
             continue;
         };
-        let Ok((mut health, mut last_damaged, mut stats, victim_name, victim_link, hitboxes)) =
-            players.get_mut(hit.victim)
+        let Ok((
+            mut health,
+            mut last_damaged,
+            mut stats,
+            victim_name,
+            victim_team,
+            victim_link,
+            hitboxes,
+        )) = players.get_mut(hit.victim)
         else {
             continue;
         };
         if health.is_dead() {
+            continue;
+        }
+        let enemy = hit.shooter != hit.victim && shooter_team != victim_team.0;
+        if !enemy && hit.shooter != hit.victim && !rules.friendly_fire {
+            debug!(
+                "{shooter_name} hit teammate {}: no friendly fire",
+                victim_name.0
+            );
             continue;
         }
         let headshot = hit.zone == HitZone::Head;
@@ -118,19 +151,25 @@ pub(super) fn apply_hits(
 
         stats.deaths += 1;
         set_hitboxes_enabled(&mut commands, hitboxes, false);
-        commands.entity(hit.victim).insert(PendingRespawn {
-            at: time.elapsed() + Duration::from_secs_f32(rules.respawn_delay_secs),
-        });
+        commands.entity(hit.victim).insert(PendingRespawn::at(
+            time.elapsed() + Duration::from_secs_f32(rules.respawn_delay_secs),
+        ));
         let feed = KillFeed {
             killer: shooter_name,
             victim: victim_name.0.clone(),
             weapon: hit.weapon,
             headshot,
         };
-        if hit.shooter != hit.victim
-            && let Ok((_, _, mut killer_stats, ..)) = players.get_mut(hit.shooter)
-        {
+        if enemy && let Ok((_, _, mut killer_stats, ..)) = players.get_mut(hit.shooter) {
             killer_stats.kills += 1;
+            if let Some(team) = shooter_team {
+                state.scores[team.index()] += 1;
+                info!(
+                    "{team:?} scores: Alpha {} - Bravo {}",
+                    state.scores[Team::Alpha.index()],
+                    state.scores[Team::Bravo.index()]
+                );
+            }
         }
         info!(
             "{} killed {}{}",
@@ -163,13 +202,16 @@ pub(super) fn regenerate(
     }
 }
 
-/// Brings due players back: picks a spawn, restores health, places them and tells the owner.
+/// Brings due players on a Team back: picks a spawn away from the other team and not on top of
+/// anyone, restores health, places them and tells the owner. Players placed earlier in the same
+/// tick count as living, so a whole team respawning at once spreads out.
 pub(super) fn respawn_players(
-    mut players: Query<(Entity, &mut Health, &mut PlayerPose, Has<PendingRespawn>)>,
+    mut players: Query<(Entity, &mut Health, &mut PlayerPose, &PlayerTeam, Has<PendingRespawn>)>,
     respawning: Query<(
         Entity,
         &PendingRespawn,
         &PlayerName,
+        &PlayerTeam,
         &PlayerOwner,
         &ControlledBy,
         &Hitboxes,
@@ -183,33 +225,56 @@ pub(super) fn respawn_players(
 ) {
     let now = time.elapsed();
     let world_only = SpatialQueryFilter::from_mask(GameLayer::World);
-    let eye = Vec3::Y * Stance::Standing.eye_height();
-    let spawn_eyes: Vec<Vec3> = spawns.0.iter().map(|&spawn| spawn + eye).collect();
+    let standing_eye = Vec3::Y * Stance::Standing.eye_height();
+    // Eye position and team of every living player.
+    let mut living: Vec<(Vec3, Option<Team>)> = players
+        .iter()
+        .filter(|(_, health, _, _, pending)| !health.is_dead() && !pending)
+        .map(|(_, _, pose, team, _)| {
+            (pose.position + Vec3::Y * pose.stance.eye_height(), team.0)
+        })
+        .collect();
 
-    for (entity, pending, name, owner, link, hitboxes) in &respawning {
+    for (entity, pending, name, team, owner, link, hitboxes) in &respawning {
+        let Some(team) = team.0 else {
+            continue;
+        };
         if pending.at > now {
             continue;
         }
-        // Free-for-all: every other living player is an enemy.
-        let enemy_eyes: Vec<Vec3> = players
+        let enemy_eyes: Vec<Vec3> = living
             .iter()
-            .filter(|(other, health, _, pending)| *other != entity && !health.is_dead() && !pending)
-            .map(|(_, _, pose, _)| pose.position + Vec3::Y * pose.stance.eye_height())
+            .filter(|(_, other)| *other == Some(team.other()))
+            .map(|(eye, _)| *eye)
             .collect();
+        let free: Vec<Vec3> = spawns
+            .0
+            .iter()
+            .copied()
+            .filter(|&spawn| {
+                living
+                    .iter()
+                    .all(|(eye, _)| eye.xz().distance(spawn.xz()) > SPAWN_CLEARANCE)
+            })
+            .collect();
+        let candidates = if free.is_empty() { &spawns.0 } else { &free };
+        let candidate_eyes: Vec<Vec3> =
+            candidates.iter().map(|&spawn| spawn + standing_eye).collect();
         let line_of_sight = |from: Vec3, to: Vec3| {
             let (direction, distance) = Dir3::new_and_length(to - from).unwrap_or((Dir3::Y, 0.0));
             spatial
                 .cast_ray(from, direction, distance, true, &world_only)
                 .is_none()
         };
-        let Some(index) = choose_spawn(&spawn_eyes, &enemy_eyes, line_of_sight) else {
+        let Some(index) = choose_spawn(&candidate_eyes, &enemy_eyes, line_of_sight) else {
             warn!("No spawn points; cannot respawn {}", name.0);
             continue;
         };
-        let position = spawns.0[index];
+        let position = candidates[index];
         let yaw = yaw_towards_centre(position);
+        living.push((position + standing_eye, Some(team)));
 
-        let Ok((_, mut health, mut pose, _)) = players.get_mut(entity) else {
+        let Ok((_, mut health, mut pose, ..)) = players.get_mut(entity) else {
             continue;
         };
         health.0 = data.rules().max_health;

@@ -8,10 +8,11 @@ use lightyear::prelude::*;
 
 use super::damage::HitZone;
 use super::hitbox::{Hitbox, HitboxOf, Hitboxes};
+use super::match_flow::is_live;
 use crate::data::{GameData, WeaponId};
 use crate::net::LinkPlayer;
 use crate::net::protocol::{EffectChannel, FireShot, PlayerOwner, ShotTracer};
-use crate::shared::{GameLayer, Health};
+use crate::shared::{GameLayer, Health, MatchState};
 
 /// A shot struck a player's hitbox.
 #[derive(bevy::ecs::message::Message, Clone, Copy, Debug)]
@@ -26,21 +27,24 @@ pub struct PlayerHit {
     pub origin: Vec3,
 }
 
+/// Resolves every received shot while the Match is live; after it has ended shots are ignored.
 pub(super) fn resolve_shots(
     mut links: Query<(Entity, &LinkPlayer, &mut MessageReceiver<FireShot>)>,
     shooters: Query<(&Health, &PlayerOwner, &Hitboxes)>,
     hitboxes: Query<(&Hitbox, &HitboxOf)>,
     mut tracer_senders: Query<(Entity, &mut MessageSender<ShotTracer>), (With<ClientOf>, With<Connected>)>,
+    state: Single<&MatchState>,
     spatial: SpatialQuery,
     data: Res<GameData>,
     mut hits: MessageWriter<PlayerHit>,
 ) {
+    let live = is_live(&state);
     for (link, player, mut receiver) in &mut links {
         for shot in receiver.receive() {
             let Ok((health, owner, own_hitboxes)) = shooters.get(player.0) else {
                 continue;
             };
-            if health.is_dead() {
+            if !live || health.is_dead() {
                 continue;
             }
             let Ok(direction) = Dir3::new(shot.direction) else {

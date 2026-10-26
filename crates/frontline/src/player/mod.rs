@@ -8,7 +8,9 @@ mod remote;
 
 use bevy::prelude::*;
 
-pub use controller::{ControllerModifiers, EyeCamera, Motor, MouseCaptured, PITCH_LIMIT};
+pub use controller::{
+    ControllerModifiers, EyeCamera, MenuOpen, Motor, MouseCaptured, PITCH_LIMIT,
+};
 pub use life::LocalLife;
 
 /// Body radius used for the local collider and remote capsules, in metres.
@@ -27,7 +29,7 @@ pub enum ControllerSystems {
 }
 
 /// Spawns the `LocalPlayer` with a first-person camera and drives it from keyboard and mouse.
-/// Client and Host only. Movement tuning lives at the top of `player/controller.rs`.
+/// Client and Host only. Movement tuning lives in `data/movement.ron`.
 pub struct LocalControllerPlugin;
 
 impl Plugin for LocalControllerPlugin {
@@ -35,6 +37,7 @@ impl Plugin for LocalControllerPlugin {
         app.init_resource::<input::Bindings>()
             .init_resource::<input::LookSensitivity>()
             .init_resource::<controller::MouseCaptured>()
+            .init_resource::<controller::MenuOpen>()
             .init_resource::<controller::StanceShapes>()
             .init_resource::<LocalLife>()
             .configure_sets(

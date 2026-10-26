@@ -42,6 +42,7 @@ mod tests {
             regen_per_sec: 20.0,
             respawn_delay_secs: 3.0,
             damage_scale,
+            friendly_fire: false,
         }
     }
 

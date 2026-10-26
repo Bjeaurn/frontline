@@ -7,7 +7,7 @@ use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::data::WeaponId;
-use crate::shared::{Health, PlayerName, PlayerPose, PlayerStats};
+use crate::shared::{Health, MatchState, PlayerName, PlayerPose, PlayerStats, PlayerTeam, Team};
 
 /// Netcode protocol id; client and server must agree on it.
 pub const PROTOCOL_ID: u64 = 0x4652_4f4e_544c_494e;
@@ -34,6 +34,11 @@ pub struct PoseUpdate(pub PlayerPose);
 pub struct Hello {
     pub name: String,
 }
+
+/// Client -> server (`ControlChannel`): put me on this team. Accepted any time; a living
+/// player who switches is killed without anyone getting credit, like a suicide.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChooseTeam(pub Team);
 
 /// Unreliable channel where only the newest pose is kept.
 pub struct PoseChannel;
@@ -105,6 +110,8 @@ pub(super) fn register(app: &mut App) {
     app.component::<PlayerOwner>().replicate();
     app.component::<Health>().replicate();
     app.component::<PlayerStats>().replicate();
+    app.component::<PlayerTeam>().replicate();
+    app.component::<MatchState>().replicate();
 
     app.add_channel::<PoseChannel>(ChannelSettings {
         mode: ChannelMode::SequencedUnreliable,
@@ -120,6 +127,8 @@ pub(super) fn register(app: &mut App) {
     app.register_message::<PoseUpdate>()
         .add_direction(NetworkDirection::ClientToServer);
     app.register_message::<Hello>()
+        .add_direction(NetworkDirection::ClientToServer);
+    app.register_message::<ChooseTeam>()
         .add_direction(NetworkDirection::ClientToServer);
 
     app.add_channel::<ShotChannel>(ChannelSettings {

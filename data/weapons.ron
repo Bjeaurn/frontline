@@ -4,6 +4,7 @@
     AssaultRifle: (
         name: "M4 (AR)",
         rpm: 750.0,
+        ads_rpm: 715.0,
         damage_near: 30.0,
         damage_far: 20.0,
         falloff_start: 20.0,
@@ -21,5 +22,12 @@
         recoil_yaw_deg: 0.35,
         recoil_recovery_per_sec: 6.0,
         ads_recoil_scale: 0.55,
+        move_spread_deg: 2.0,
+        air_spread_deg: 5.0,
+        bloom_follow_per_sec: 8.0,
+        crouch_accuracy_scale: 0.75,
+        prone_accuracy_scale: 0.5,
+        sprint_out_secs: 0.2,
+        move_scale: 1.0,
     ),
 }

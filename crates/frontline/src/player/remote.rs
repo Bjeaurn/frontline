@@ -1,12 +1,12 @@
-//! Capsule visuals for `RemotePlayer`s, smoothed toward their replicated `PlayerPose` and
-//! hidden while their `Health` is dead.
-
-use std::hash::{DefaultHasher, Hash, Hasher};
+//! Capsule visuals for `RemotePlayer`s, smoothed toward their replicated `PlayerPose`, tinted
+//! friendly or enemy relative to the local player's Team, and hidden while dead or teamless.
 
 use bevy::prelude::*;
 
 use super::BODY_RADIUS;
-use crate::shared::{Health, PlayerPose, RemotePlayer, Stance};
+use super::life::LocalLife;
+use crate::match_hud::is_friendly;
+use crate::shared::{Health, PlayerPose, PlayerTeam, RemotePlayer, Stance};
 
 /// Exponential decay rate (1/s) of the transform toward the pose; higher follows tighter.
 const FOLLOW_RATE: f32 = 20.0;
@@ -17,6 +17,8 @@ const PRONE_BODY_OFFSET: f32 = 0.55;
 const VISOR_SIZE: Vec3 = Vec3::new(0.36, 0.1, 0.15);
 /// Distance of the visor's centre in front of the eye.
 const VISOR_FORWARD: f32 = 0.3;
+const FRIENDLY_BODY: Color = Color::srgb(0.2, 0.42, 0.85);
+const ENEMY_BODY: Color = Color::srgb(0.8, 0.2, 0.16);
 
 #[derive(Resource)]
 pub(super) struct RemoteAssets {
@@ -24,6 +26,18 @@ pub(super) struct RemoteAssets {
     bodies: [Handle<Mesh>; 3],
     visor: Handle<Mesh>,
     visor_material: Handle<StandardMaterial>,
+    friendly_material: Handle<StandardMaterial>,
+    enemy_material: Handle<StandardMaterial>,
+}
+
+impl RemoteAssets {
+    fn body_material(&self, friendly: bool) -> Handle<StandardMaterial> {
+        if friendly {
+            self.friendly_material.clone()
+        } else {
+            self.enemy_material.clone()
+        }
+    }
 }
 
 const STANCES: [Stance; 3] = [Stance::Standing, Stance::Crouching, Stance::Prone];
@@ -43,6 +57,8 @@ pub(super) struct RemoteVisuals {
     visor: Entity,
     stance: Stance,
     eye_height: f32,
+    /// Whether the body currently wears the friendly tint.
+    friendly: bool,
 }
 
 fn body_mesh(stance: Stance) -> Capsule3d {
@@ -78,12 +94,12 @@ fn pose_transform(pose: &PlayerPose) -> Transform {
     Transform::from_translation(pose.position).with_rotation(Quat::from_rotation_y(pose.yaw))
 }
 
-/// A stable colour per entity, so each remote player is told apart at a glance.
-fn tint(entity: Entity) -> Color {
-    let mut hasher = DefaultHasher::new();
-    entity.hash(&mut hasher);
-    let hue = (hasher.finish() % 360) as f32;
-    Color::hsl(hue, 0.65, 0.5)
+fn body_material(color: Color) -> StandardMaterial {
+    StandardMaterial {
+        base_color: color,
+        perceptual_roughness: 0.8,
+        ..default()
+    }
 }
 
 pub(super) fn load_remote_assets(
@@ -99,6 +115,8 @@ pub(super) fn load_remote_assets(
             perceptual_roughness: 0.3,
             ..default()
         }),
+        friendly_material: materials.add(body_material(FRIENDLY_BODY)),
+        enemy_material: materials.add(body_material(ENEMY_BODY)),
     });
 }
 
@@ -106,24 +124,20 @@ pub(super) fn attach_remote_visuals(
     add: On<Add<RemotePlayer>>,
     mut commands: Commands,
     assets: Res<RemoteAssets>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    poses: Query<&PlayerPose>,
+    life: Res<LocalLife>,
+    players: Query<(&PlayerPose, Option<&PlayerTeam>)>,
 ) {
     let entity = add.entity;
-    let Ok(pose) = poses.get(entity) else {
+    let Ok((pose, team)) = players.get(entity) else {
         warn!("RemotePlayer {entity} has no PlayerPose; not drawing it");
         return;
     };
-    let material = materials.add(StandardMaterial {
-        base_color: tint(entity),
-        perceptual_roughness: 0.8,
-        ..default()
-    });
+    let friendly = is_friendly(life.team(), team.and_then(|team| team.0));
     let body = commands
         .spawn((
             Name::new("RemoteBody"),
             Mesh3d(assets.bodies[stance_index(pose.stance)].clone()),
-            MeshMaterial3d(material),
+            MeshMaterial3d(assets.body_material(friendly)),
             body_transform(pose.stance),
             ChildOf(entity),
         ))
@@ -144,21 +158,39 @@ pub(super) fn attach_remote_visuals(
             visor,
             stance: pose.stance,
             eye_height,
+            friendly,
         },
         pose_transform(pose),
         Visibility::default(),
     ));
 }
 
-/// Smooths each remote player's transform toward its pose and swaps the body on stance change.
+/// Smooths each remote player's transform toward its pose, swaps the body on stance change
+/// and re-tints it when either side's Team changes.
 pub(super) fn follow_remote_poses(
     time: Res<Time>,
     assets: Res<RemoteAssets>,
-    mut players: Query<(&PlayerPose, &mut Transform, &mut RemoteVisuals), With<RemotePlayer>>,
-    mut parts: Query<(&mut Transform, Option<&mut Mesh3d>), Without<RemotePlayer>>,
+    life: Res<LocalLife>,
+    mut players: Query<
+        (
+            &PlayerPose,
+            Option<&PlayerTeam>,
+            &mut Transform,
+            &mut RemoteVisuals,
+        ),
+        With<RemotePlayer>,
+    >,
+    mut parts: Query<
+        (
+            &mut Transform,
+            Option<&mut Mesh3d>,
+            Option<&mut MeshMaterial3d<StandardMaterial>>,
+        ),
+        Without<RemotePlayer>,
+    >,
 ) {
     let dt = time.delta_secs();
-    for (pose, mut transform, mut visuals) in &mut players {
+    for (pose, team, mut transform, mut visuals) in &mut players {
         let target = pose_transform(pose);
         transform
             .translation
@@ -169,29 +201,42 @@ pub(super) fn follow_remote_poses(
 
         if visuals.stance != pose.stance {
             visuals.stance = pose.stance;
-            if let Ok((mut body_transform_mut, Some(mut mesh))) = parts.get_mut(visuals.body) {
+            if let Ok((mut body_transform_mut, Some(mut mesh), _)) = parts.get_mut(visuals.body) {
                 *body_transform_mut = body_transform(pose.stance);
                 mesh.0 = assets.bodies[stance_index(pose.stance)].clone();
+            }
+        }
+
+        let friendly = is_friendly(life.team(), team.and_then(|team| team.0));
+        if visuals.friendly != friendly {
+            visuals.friendly = friendly;
+            if let Ok((_, _, Some(mut material))) = parts.get_mut(visuals.body) {
+                material.0 = assets.body_material(friendly);
             }
         }
 
         visuals
             .eye_height
             .smooth_nudge(&pose.stance.eye_height(), FOLLOW_RATE, dt);
-        if let Ok((mut visor, _)) = parts.get_mut(visuals.visor) {
+        if let Ok((mut visor, ..)) = parts.get_mut(visuals.visor) {
             *visor = visor_transform(visuals.eye_height, pose.pitch);
         }
     }
 }
 
+/// Hides remote players while dead or not on a Team yet.
 pub(super) fn hide_dead_players(
-    mut players: Query<(&Health, &mut Visibility), (With<RemotePlayer>, With<RemoteVisuals>)>,
+    mut players: Query<
+        (&Health, Option<&PlayerTeam>, &mut Visibility),
+        (With<RemotePlayer>, With<RemoteVisuals>),
+    >,
 ) {
-    for (health, mut visibility) in &mut players {
-        visibility.set_if_neq(if health.is_dead() {
-            Visibility::Hidden
-        } else {
+    for (health, team, mut visibility) in &mut players {
+        let in_play = !health.is_dead() && team.is_some_and(|team| team.0.is_some());
+        visibility.set_if_neq(if in_play {
             Visibility::Inherited
+        } else {
+            Visibility::Hidden
         });
     }
 }

@@ -43,6 +43,10 @@ pub struct Bindings {
     /// Hold to aim down sights.
     pub aim: MouseButton,
     pub reload: Binding,
+    /// Open the team picker.
+    pub team_menu: Binding,
+    /// Hold to show the Scoreboard.
+    pub scoreboard: Binding,
 }
 
 impl Default for Bindings {
@@ -61,6 +65,8 @@ impl Default for Bindings {
             fire: MouseButton::Left,
             aim: MouseButton::Right,
             reload: Binding::keys(&[KeyCode::KeyR]),
+            team_menu: Binding::keys(&[KeyCode::KeyT]),
+            scoreboard: Binding::keys(&[KeyCode::Tab]),
         }
     }
 }
