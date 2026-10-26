@@ -64,7 +64,11 @@ _Avoid_: Zone, point, objective, capture point
 
 **Team**:
 One of the two sides in a team **Game Mode**; each player sees their own as friendly and the other as enemy.
-_Avoid_: Faction, side, squad
+_Avoid_: Side, squad
+
+**Faction**:
+The identity a **Team** plays as in a **Game Mode**: name, emblem and colours (e.g. Task Force Ranger, Red Brigade).
+_Avoid_: Team (for the identity), army, clan
 
 **Scoreboard**:
 The view, held open with Tab and forced open at **Match** end, listing every player by **Team** with their score, kills and deaths.
@@ -179,6 +183,7 @@ _Avoid_: Combo, double/triple (as the general term)
 
 - "Online lobby management" (IDEA.md MVP) is deferred: the first playable target covers local network play only.
 - "Session" was used loosely for both a server's lifetime and a single round — resolved: use **Match** for a round; a server's lifetime needs no term.
+- "New teams" meant new identities, not more than two sides — resolved: a **Match** always has two **Teams**; each plays as a **Faction**, and new Factions are added as data.
 - "Level" could mean a playable area or a progression rank — resolved: **Level** is the progression rank; playable areas are **Maps**.
 - "Hardcore mode" suggested a separate **Game Mode** — resolved: **Hardcore** is a **Match Rules** preset combinable with any **Game Mode**.
 - **Join In Progress** first meant automatic placement on the smaller team — resolved: joiners choose a team, with the smaller one pre-selected.

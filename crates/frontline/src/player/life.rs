@@ -57,6 +57,11 @@ impl LocalLife {
     }
 }
 
+/// Forgets the finished session's life state.
+pub(super) fn reset_life(mut life: ResMut<LocalLife>) {
+    *life = LocalLife::default();
+}
+
 pub(super) fn track_life(
     time: Res<Time>,
     mut life: ResMut<LocalLife>,

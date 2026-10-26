@@ -21,6 +21,12 @@ The definition for a MVP would be Team deathmatch, 3-5 weapons with a different 
 - **Art:** CC0 low-poly (Quaternius/Kenney models, ambientCG/Poly Haven textures). First-person weapon animation is procedural (recoil, sway, ADS). Team colour comes from a tint. Audio is CC0 or cheap packs.
 - **Weapons:** AR, SMG, Sniper, Shotgun as **Primaries**, pistol as **Secondary**. All hitscan. Stats are data-driven and can be tuned without recompiling.
 - **Gunplay rules (per Weapon):** separate hip and ADS fire rates (ADS ~5% slower for most guns, equal for SMGs). Sprint-out delay before firing/aiming. Hip spread blooms while moving and more while airborne. Crouch/prone tighten spread and recoil. Weapon weight scales move speed.
+- **Hit Zones:** head, upper torso, lower torso and limbs, each with its own hitbox. Damage multipliers are set per Weapon (e.g. AR head 1.4, limbs 0.8; sniper upper torso 1.2, so chest shots one-shot and limb shots don't).
+- **Death presentation:** on death, a client-side body tips over and stays ~10 s, then fades (cosmetic, no hitbox). A respawn teleports with no visible glide; the player stays hidden until they're at the spawn.
+- **HUD in Match Rules:** each preset has a `hud` block (crosshair, hitmarkers, red kill hitmarker, kill feed, damage direction, later minimap). The server tells clients the active preset; personal settings can only hide more. `kill_feed_delay_secs` lets the kill feed show kills 5–10 s late (Rising Storm style). A **Hardcore** preset ships: 30 HP, no regen, no crosshair or hitmarkers, and a delayed kill feed.
+- **Maps (format):** TrenchBroom `.map` files loaded with bevy_trenchbroom. The first versions are generated from scripted layouts and stay editable in TrenchBroom. Map entities carry spawn points per Team, Domination Flags, HQ sites and S&D bomb sites.
+- **Homage Maps distribution:** a second private repo, `frontline-private`, cloned into `content/private/` (git-ignored here). See ADR 0003.
+- **Next Game Modes:** Domination, Search & Destroy, Headquarters, plus a **Rotation** with Host Map/Mode selection.
 - **Attachments:** two **Attachment Slots**, Optic (Red Dot, ACOG) and Muzzle (Silencer).
 - **Progression:** party-compressed XP **Levels** (~10 in an evening) unlock **Weapons**, **Attachments** and **Perks**.
 - **Perks:** 3 **Perk Slots** × 2 simple stat modifiers.

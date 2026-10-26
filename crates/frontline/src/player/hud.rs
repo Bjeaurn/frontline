@@ -7,11 +7,13 @@ use bevy::prelude::*;
 
 use super::life::LocalLife;
 use crate::data::GameData;
+use crate::flow::AppState;
 use crate::match_hud::{FRIENDLY_COLOR, relation_color};
 use crate::net::protocol::{Damaged, KillFeed};
 use crate::shared::{
     FromServer, Health, LocalPlayer, LocalPlayerReplica, PlayerName, PlayerPose, PlayerTeam,
 };
+use crate::ui::UiFonts;
 
 const DAMAGE_RED: Color = Color::srgb(0.75, 0.0, 0.0);
 /// Vignette opacity at zero health; scales linearly with missing health.
@@ -27,7 +29,7 @@ const INDICATOR_SECS: f32 = 1.0;
 const FEED_LINES: usize = 5;
 const FEED_VISIBLE_SECS: f64 = 5.0;
 const FEED_FADE_SECS: f64 = 0.5;
-const FEED_FONT_SIZE: f32 = 15.0;
+const FEED_FONT_SIZE: f32 = 17.0;
 /// Weapon and unknown names in the kill feed.
 const FEED_COLOR: Color = Color::srgb(0.95, 0.95, 0.95);
 
@@ -89,14 +91,21 @@ fn vignette(alpha: f32) -> BackgroundGradient {
 pub(super) fn spawn_hud(mut commands: Commands) {
     commands.spawn((
         Name::new("Damage vignette"),
+        DespawnOnExit(AppState::InGame),
         DamageVignette,
         full_screen(),
         vignette(0.0),
         Visibility::Hidden,
     ));
-    commands.spawn((Name::new("Damage indicators"), DamageIndicators, full_screen()));
+    commands.spawn((
+        Name::new("Damage indicators"),
+        DespawnOnExit(AppState::InGame),
+        DamageIndicators,
+        full_screen(),
+    ));
     commands.spawn((
         Name::new("Kill feed"),
+        DespawnOnExit(AppState::InGame),
         KillFeedList,
         Node {
             position_type: PositionType::Absolute,
@@ -110,6 +119,7 @@ pub(super) fn spawn_hud(mut commands: Commands) {
     ));
     commands.spawn((
         Name::new("Death screen"),
+        DespawnOnExit(AppState::InGame),
         DeathScreen,
         Node {
             flex_direction: FlexDirection::Column,
@@ -263,6 +273,7 @@ pub(super) struct FeedColor(Color);
 pub(super) fn add_kill_feed_lines(
     time: Res<Time>,
     data: Res<GameData>,
+    fonts: Res<UiFonts>,
     life: Res<LocalLife>,
     mut feed: MessageReader<FromServer<KillFeed>>,
     me: Query<&PlayerName, With<LocalPlayer>>,
@@ -288,6 +299,7 @@ pub(super) fn add_kill_feed_lines(
             .map_or(FEED_COLOR, |(_, team)| relation_color(life.team(), team.0))
     };
     let font = TextFont {
+        font: fonts.regular.clone().into(),
         font_size: FontSize::Px(FEED_FONT_SIZE),
         ..default()
     };

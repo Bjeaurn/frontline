@@ -1,12 +1,17 @@
-//! Frontline: one binary for client, Host (listen server + local player) and Dedicated Server.
+//! Frontline: one binary for the windowed game (main menu, Client or Host) and the headless
+//! Dedicated Server.
 
 mod cli;
 mod combat;
 mod data;
+mod flow;
+mod loadout;
 mod match_hud;
+mod menus;
 mod net;
 mod player;
 mod shared;
+mod ui;
 mod weapon;
 mod world;
 
@@ -23,53 +28,49 @@ use crate::cli::{Cli, Mode};
 pub const TICK_HZ: f64 = 64.0;
 
 fn main() -> AppExit {
-    let cli = Cli::parse();
-    let mode = cli.mode();
+    let mode = Cli::parse().mode();
+    let tick_duration = Duration::from_secs_f64(1.0 / TICK_HZ);
 
     let mut app = App::new();
+    app.insert_resource(mode.clone());
     match mode {
         Mode::Dedicated { .. } => {
             app.add_plugins((
-                MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(
-                    Duration::from_secs_f64(1.0 / TICK_HZ),
-                )),
+                MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(tick_duration)),
                 bevy::log::LogPlugin::default(),
                 TransformPlugin,
                 bevy::state::app::StatesPlugin,
+                ServerPlugins { tick_duration },
             ));
         }
-        Mode::Client { .. } | Mode::Host { .. } => {
-            app.add_plugins(DefaultPlugins.set(WindowPlugin {
-                primary_window: Some(Window {
-                    title: format!("Frontline ({})", mode.label()),
+        // Both sides up front: the main menu can Host or Join at any time.
+        Mode::Windowed { .. } => {
+            app.add_plugins((
+                DefaultPlugins.set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: "Frontline".into(),
+                        ..default()
+                    }),
                     ..default()
                 }),
-                ..default()
-            }));
+                ServerPlugins { tick_duration },
+                ClientPlugins { tick_duration },
+            ));
         }
     }
-    let tick_duration = Duration::from_secs_f64(1.0 / TICK_HZ);
-    match mode {
-        Mode::Client { .. } => app.add_plugins(ClientPlugins { tick_duration }),
-        Mode::Host { .. } => app.add_plugins((
-            ServerPlugins { tick_duration },
-            ClientPlugins { tick_duration },
-        )),
-        Mode::Dedicated { .. } => app.add_plugins(ServerPlugins { tick_duration }),
-    };
     app.add_plugins((data::DataPlugin, world::WorldPlugin));
-    if !matches!(mode, Mode::Dedicated { .. }) {
+    if matches!(mode, Mode::Windowed { .. }) {
         app.add_plugins((
+            flow::FlowPlugin,
+            ui::UiPlugin,
+            menus::MenusPlugin,
             player::LocalControllerPlugin,
             player::RemotePlayerVisualsPlugin,
             weapon::WeaponClientPlugin,
             match_hud::MatchHudPlugin,
+            loadout::LoadoutPlugin,
         ));
     }
-    if !matches!(mode, Mode::Client { .. }) {
-        app.add_plugins(combat::CombatServerPlugin);
-    }
-    app.insert_resource(mode);
-    app.add_plugins(net::NetPlugin);
+    app.add_plugins((combat::CombatServerPlugin, net::NetPlugin));
     app.run()
 }

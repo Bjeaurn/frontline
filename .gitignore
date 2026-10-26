@@ -3,3 +3,6 @@
 
 # Homage Maps and other private content; must never be committed (docs/adr/0003).
 /content/private/
+
+# Raw asset downloads waiting to be picked through; only processed files get committed.
+/content/incoming/

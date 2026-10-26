@@ -8,6 +8,8 @@ mod remote;
 
 use bevy::prelude::*;
 
+use crate::flow::AppState;
+
 pub use controller::{
     ControllerModifiers, EyeCamera, MenuOpen, Motor, MouseCaptured, PITCH_LIMIT,
 };
@@ -28,14 +30,13 @@ pub enum ControllerSystems {
     View,
 }
 
-/// Spawns the `LocalPlayer` with a first-person camera and drives it from keyboard and mouse.
-/// Client and Host only. Movement tuning lives in `data/movement.ron`.
+/// Spawns the `LocalPlayer` with a first-person camera when a game starts and drives it from
+/// keyboard and mouse. Client and Host only. Movement tuning lives in `data/movement.ron`.
 pub struct LocalControllerPlugin;
 
 impl Plugin for LocalControllerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<input::Bindings>()
-            .init_resource::<input::LookSensitivity>()
             .init_resource::<controller::MouseCaptured>()
             .init_resource::<controller::MenuOpen>()
             .init_resource::<controller::StanceShapes>()
@@ -49,7 +50,11 @@ impl Plugin for LocalControllerPlugin {
                 )
                     .chain(),
             )
-            .add_systems(Startup, (controller::spawn_local_player, hud::spawn_hud))
+            .add_systems(
+                OnEnter(AppState::InGame),
+                (controller::spawn_local_player, hud::spawn_hud),
+            )
+            .add_systems(OnExit(AppState::InGame), life::reset_life)
             .add_systems(
                 Update,
                 (

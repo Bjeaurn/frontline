@@ -4,4 +4,4 @@ The first Maps (Backlot and Vacant) are Homage Maps: faithful recreations of Cal
 
 ## Consequences
 
-- Homage Map files need to be kept out of anything that might later become public. A separate private content location is the likely shape.
+- Homage Map files live in a separate private repo, `frontline-private`, cloned into `content/private/` (git-ignored by the main repo). The game loads Maps from there when present, so the main repo can go public without scrubbing history.

@@ -8,19 +8,22 @@ A CoD4/MW2-inspired multiplayer FPS made for LAN parties. It's written in Rust o
 
 ## Run
 
-One binary does everything. The default port is UDP 5000.
+One binary does everything. Launched without flags it opens the main menu: HOST GAME starts a server and drops you in, JOIN GAME opens the Server Browser, which lists the servers on your LAN (click one) and also joins by IP (`192.168.1.20` or `192.168.1.20:5000`). If a Join fails you land back in the browser with the reason.
 
 ```sh
-cargo run -- --host --name Alice                       # Host: server + play in this window
-cargo run -- --connect 192.168.1.20:5000 --name Bob    # join a server
-cargo run -- --dedicated                               # headless Dedicated Server
+cargo run                                                # main menu
+cargo run -- --host --name Alice                         # skip the menu and Host: server + play in this window
+cargo run -- --connect 192.168.1.20:5000 --name Bob      # skip the menu and join a server
+cargo run -- --dedicated --name "Bob's server"           # headless Dedicated Server
 ```
 
-`--port <n>` changes the listen port. `--connect` defaults to `127.0.0.1:5000`. For faster rebuilds during development, add `--features dev` (dynamic linking).
+Servers listen on UDP 5000 (`--port <n>` changes it; it's also the port HOST GAME uses). Every server answers LAN discovery on UDP 5001; a second server on the same machine can't take that port, so it logs a warning and only shows up when joined by IP. `--name` sets your player name for this run (overriding Settings) or a Dedicated Server's name in the browser. For faster rebuilds during development, add `--features dev` (dynamic linking).
+
+Settings (name, mouse sensitivity, field of view, master volume) are saved to `<config dir>/frontline/settings.ron`: `~/Library/Application Support/` on macOS, `~/.config/` on Linux, `%APPDATA%` on Windows.
 
 ## Controls
 
-On joining, pick a Team with 1 / 2 and Enter (the smaller team is pre-selected). Left-click grabs the mouse and Esc releases it. Once grabbed, left-click fires.
+On joining, pick a Team (and then a Loadout). The mouse is grabbed while you play and freed whenever a menu is open; left-click grabs it again if the window lost focus.
 
 | Action | Key |
 |---|---|
@@ -30,22 +33,28 @@ On joining, pick a Team with 1 / 2 and Enter (the smaller team is pre-selected).
 | Mantle | Move into a ledge up to ~1.6 m (jumping helps) |
 | Crouch | C |
 | Prone | Left Ctrl or Z |
-| Fire (full auto) | Left mouse |
+| Fire (full auto, or one round per click for semi/bolt-action) | Left mouse |
 | Aim down sights | Right mouse (hold) |
 | Reload | R (sprinting cancels it) |
 | Scoreboard | Tab (hold) |
 | Switch Team | T (dying counts as a switch, no credit to anyone) |
+| Change Loadout (applies on next spawn, or at once within 5 s of spawning) | B |
+| Pause menu (Resume, Change Team, Change Loadout, Settings, Leave Game) | Esc; Esc again steps back |
 
-Tuning lives in `data/`: `weapons.ron`, `movement.ron`, `match_rules.ron` and `game_modes.ron` (Team Deathmatch: 50 kills or 10 min). The game reads them at startup from `./data/` (relative to where you launch it), so edit and restart to retune. Without that folder it uses the copies built into the binary. Both machines should use the same files: damage and score are decided on the server, but movement, recoil, spread and fire rate come from each client's own copy.
+Tuning lives in `data/`: `weapons.ron`, `loadouts.ron` (Default Loadouts and the instant-swap window), `movement.ron`, `match_rules.ron` and `game_modes.ron` (Team Deathmatch: 50 kills or 10 min). The game reads them at startup from `./data/` (relative to where you launch it), so edit and restart to retune. Without that folder it uses the copies built into the binary. Both machines should use the same files: damage and score are decided on the server, but movement, recoil, spread and fire rate come from each client's own copy.
 
 ## Layout
 
-- `crates/frontline/src/match_hud/`: Team picker, top-centre score, Tab Scoreboard, friendly name tags
+- `crates/frontline/src/flow.rs`: screen states (main menu, in game, overlays), flow commands, Settings file
+- `crates/frontline/src/menus/`: title, Server Browser, Connecting, Pause and Settings screens
+- `crates/frontline/src/ui/`: shared menu look: fonts, palette, buttons, panels, sliders, text fields
+- `crates/frontline/src/match_hud/`: team select (Faction cards), top-centre score with Faction emblems, Tab Scoreboard and end screen, friendly name tags
 - `crates/frontline/src/combat/`: server-side shots, hitboxes, damage, health/regen, death and respawn, spawn selection
 - `crates/frontline/src/data.rs`: loads the `data/*.ron` tuning files
-- `crates/frontline/src/net/`: lightyear protocol, server, client, Host wiring
+- `crates/frontline/src/net/`: lightyear protocol, server, client, Host/Join/Leave sessions, LAN discovery
 - `crates/frontline/src/player/`: first-person controller, input bindings, damage/kill-feed/death HUD, remote player visuals
-- `crates/frontline/src/weapon/`: local Weapon (firing, ammo, aiming, recoil), viewmodel, shot effects, crosshair/hitmarker/ammo HUD
+- `crates/frontline/src/weapon/`: local Weapon (firing, ammo, aiming, recoil, bolt cycle), per-weapon viewmodels, shot effects, crosshair/hitmarker/ammo/scope HUD
+- `crates/frontline/src/loadout/`: chosen Loadout (saved with Settings), CoD swap rule, Loadout screen
 - `crates/frontline/src/world.rs`: greybox arena and spawn points
 - `crates/frontline/src/shared.rs`: pose and stance types shared by netcode and gameplay
 

@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use bevy::prelude::*;
+use lightyear::prelude::server::Started;
 use lightyear::prelude::*;
 
 use super::health::PendingRespawn;
@@ -38,8 +39,16 @@ fn whole_secs(left: f32) -> u32 {
     left.max(0.0).ceil() as u32
 }
 
-/// Spawns the replicated `MatchState` entity of the first Match.
-pub(super) fn spawn_match_state(data: Res<GameData>, mut commands: Commands) {
+/// Spawns the replicated `MatchState` entity of the first Match when a server starts.
+pub(super) fn start_match(
+    trigger: On<Add<Started>>,
+    servers: Query<(), With<Server>>,
+    data: Res<GameData>,
+    mut commands: Commands,
+) {
+    if !servers.contains(trigger.entity) {
+        return;
+    }
     let settings = data.game_mode(MODE);
     commands.insert_resource(MatchClock {
         left: settings.time_limit_secs as f32,
@@ -55,6 +64,24 @@ pub(super) fn spawn_match_state(data: Res<GameData>, mut commands: Commands) {
         },
         Replicate::to_clients(NetworkTarget::All),
     ));
+    info!("Match started ({MODE:?})");
+}
+
+/// Drops the Match when its server stops (Host leaving).
+pub(super) fn end_match(
+    trigger: On<Remove<Started>>,
+    servers: Query<(), With<Server>>,
+    matches: Query<Entity, With<MatchState>>,
+    mut commands: Commands,
+) {
+    if !servers.contains(trigger.entity) {
+        return;
+    }
+    for entity in &matches {
+        commands.entity(entity).try_despawn();
+    }
+    commands.remove_resource::<MatchClock>();
+    info!("Match ended: server stopped");
 }
 
 /// Advances the Match: ends it at the score or time limit, and restarts it after the end screen.

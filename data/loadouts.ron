@@ -1,0 +1,11 @@
+// Default Loadouts offered on the Loadout screen, in order.
+(
+    // A Loadout picked within this many seconds of spawning swaps the held Weapon at once;
+    // later picks apply on the next spawn.
+    swap_window_secs: 5.0,
+    defaults: [
+        (name: "Assault", primary: AssaultRifle),
+        (name: "Close Quarters", primary: Smg),
+        (name: "Marksman", primary: SniperRifle),
+    ],
+)

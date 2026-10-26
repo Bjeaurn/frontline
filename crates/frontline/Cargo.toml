@@ -25,6 +25,7 @@ avian3d.workspace = true
 clap.workspace = true
 serde.workspace = true
 ron.workspace = true
+dirs.workspace = true
 
 [lints]
 workspace = true

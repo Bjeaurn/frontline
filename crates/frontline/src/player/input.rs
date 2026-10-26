@@ -34,16 +34,16 @@ pub struct Bindings {
     pub crouch: Binding,
     /// Toggle prone.
     pub prone: Binding,
-    /// Grab the cursor for mouse look.
+    /// Grab the cursor for mouse look (when it got freed, e.g. by losing window focus).
     pub grab_cursor: MouseButton,
-    /// Release the cursor.
-    pub release_cursor: Binding,
+    /// Open the pause menu; steps back out of menus.
+    pub pause: Binding,
     /// Hold to fire.
     pub fire: MouseButton,
     /// Hold to aim down sights.
     pub aim: MouseButton,
     pub reload: Binding,
-    /// Open the team picker.
+    /// Open the team select screen.
     pub team_menu: Binding,
     /// Hold to show the Scoreboard.
     pub scoreboard: Binding,
@@ -61,22 +61,12 @@ impl Default for Bindings {
             crouch: Binding::keys(&[KeyCode::KeyC]),
             prone: Binding::keys(&[KeyCode::ControlLeft, KeyCode::KeyZ]),
             grab_cursor: MouseButton::Left,
-            release_cursor: Binding::keys(&[KeyCode::Escape]),
+            pause: Binding::keys(&[KeyCode::Escape]),
             fire: MouseButton::Left,
             aim: MouseButton::Right,
             reload: Binding::keys(&[KeyCode::KeyR]),
             team_menu: Binding::keys(&[KeyCode::KeyT]),
             scoreboard: Binding::keys(&[KeyCode::Tab]),
         }
-    }
-}
-
-/// Mouse-look sensitivity in radians per unit of raw mouse motion.
-#[derive(Resource, Clone, Copy, Debug)]
-pub struct LookSensitivity(pub f32);
-
-impl Default for LookSensitivity {
-    fn default() -> Self {
-        Self(0.002)
     }
 }

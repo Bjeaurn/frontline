@@ -3,13 +3,18 @@ use std::net::SocketAddr;
 use bevy::prelude::Resource;
 use clap::Parser;
 
+use crate::flow::FlowCommand;
+
 /// Default UDP port a server listens on.
 pub const DEFAULT_PORT: u16 = 5000;
+
+/// Name a Dedicated Server announces on the LAN when `--name` isn't given.
+const DEFAULT_SERVER_NAME: &str = "Frontline Server";
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Frontline: LAN-first multiplayer FPS")]
 pub struct Cli {
-    /// Run a Host: a server plus a local player in this window.
+    /// Skip the main menu and Host: a server plus a local player in this window.
     #[arg(long, conflicts_with_all = ["dedicated", "connect"])]
     host: bool,
 
@@ -17,7 +22,7 @@ pub struct Cli {
     #[arg(long, conflicts_with = "connect")]
     dedicated: bool,
 
-    /// Join a server at this address, e.g. `192.168.1.20:5000`.
+    /// Skip the main menu and join a server at this address, e.g. `192.168.1.20:5000`.
     #[arg(long)]
     connect: Option<SocketAddr>,
 
@@ -25,45 +30,44 @@ pub struct Cli {
     #[arg(long, default_value_t = DEFAULT_PORT)]
     port: u16,
 
-    /// Player name shown to others.
-    #[arg(long, default_value = "Player")]
-    name: String,
+    /// Player name (overrides the saved Settings), or the Dedicated Server's name on the LAN.
+    #[arg(long)]
+    name: Option<String>,
 }
 
 /// How this process participates in a game. Inserted as a resource at startup.
 #[derive(Resource, Clone, Debug)]
 pub enum Mode {
-    Client { server: SocketAddr, name: String },
-    Host { port: u16, name: String },
-    Dedicated { port: u16 },
+    /// A window with menus. Hosting uses `port`; `start` skips the main menu.
+    Windowed {
+        port: u16,
+        start: Option<FlowCommand>,
+        name: Option<String>,
+    },
+    /// A headless server announcing itself as `name`.
+    Dedicated { port: u16, name: String },
 }
 
 impl Cli {
     pub fn mode(&self) -> Mode {
         if self.dedicated {
-            Mode::Dedicated { port: self.port }
-        } else if self.host {
-            Mode::Host {
+            return Mode::Dedicated {
                 port: self.port,
-                name: self.name.clone(),
-            }
-        } else {
-            Mode::Client {
-                server: self
-                    .connect
-                    .unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT))),
-                name: self.name.clone(),
-            }
+                name: self
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_SERVER_NAME.to_owned()),
+            };
         }
-    }
-}
-
-impl Mode {
-    pub fn label(&self) -> &'static str {
-        match self {
-            Mode::Client { .. } => "client",
-            Mode::Host { .. } => "host",
-            Mode::Dedicated { .. } => "dedicated",
+        let start = if self.host {
+            Some(FlowCommand::Host)
+        } else {
+            self.connect.map(FlowCommand::Join)
+        };
+        Mode::Windowed {
+            port: self.port,
+            start,
+            name: self.name.clone(),
         }
     }
 }

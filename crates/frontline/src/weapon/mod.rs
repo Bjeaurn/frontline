@@ -10,14 +10,20 @@ use std::hash::{BuildHasher, RandomState};
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::data::{GameData, WeaponId, WeaponStats};
+use crate::data::{FireMode, GameData, WeaponId, WeaponStats};
+use crate::loadout::{ChosenLoadout, SpawnClock};
 use crate::net::protocol::{FireShot, Respawn};
 use crate::player::input::Bindings;
 use crate::player::{
-    ControllerModifiers, ControllerSystems, EyeCamera, LocalLife, Motor, MouseCaptured,
-    PITCH_LIMIT,
+    ControllerModifiers, ControllerSystems, EyeCamera, LocalLife, Motor, MouseCaptured, PITCH_LIMIT,
 };
 use crate::shared::{FromServer, GameLayer, LocalPlayer, PlayerPose, Stance, ToServer};
+
+/// Part of a bolt cycle (as a fraction of the fire-rate cooldown) spent working the bolt;
+/// the gun is off the sights meanwhile.
+const BOLT_WINDOW: (f32, f32) = (0.15, 0.7);
+/// ADS blend from which a scoped Weapon shows the scope instead of the viewmodel.
+const SCOPE_MIN_ADS: f32 = 0.9;
 
 pub struct WeaponClientPlugin;
 
@@ -34,7 +40,8 @@ impl Plugin for WeaponClientPlugin {
             .add_systems(
                 Update,
                 (
-                    reset_on_respawn,
+                    equip_on_respawn,
+                    swap_loadout,
                     track_body,
                     aim,
                     reload,
@@ -55,7 +62,7 @@ struct WeaponSystems;
 
 /// The Weapon the local player holds and its moment-to-moment state.
 #[derive(Component, Debug)]
-struct HeldWeapon {
+pub struct HeldWeapon {
     id: WeaponId,
     rounds: u32,
     /// Seconds left of the reload in progress.
@@ -64,6 +71,10 @@ struct HeldWeapon {
     cooldown: f32,
     /// Trigger held, counting only presses made while the cursor was already grabbed.
     trigger: bool,
+    /// A `Semi` Weapon already fired (or clicked empty) on this trigger pull.
+    pull_spent: bool,
+    /// Bolt cycle after a bolt-action shot, from 0 (just fired) to 1 (chambered).
+    bolt: Option<f32>,
     /// Aim-down-sights blend: 0 at the hip, 1 fully aimed.
     ads: f32,
     /// Recoil not yet recovered, as (yaw, pitch) in radians.
@@ -88,6 +99,8 @@ impl HeldWeapon {
             reload_left: None,
             cooldown: 0.0,
             trigger: false,
+            pull_spent: false,
+            bolt: None,
             ads: 0.0,
             recoil: Vec2::ZERO,
             sprinting: false,
@@ -98,10 +111,15 @@ impl HeldWeapon {
         }
     }
 
+    pub fn id(&self) -> WeaponId {
+        self.id
+    }
+
     fn start_reload(&mut self, stats: &WeaponStats) {
         if self.reload_left.is_none() && self.rounds < stats.magazine {
             info!("Reloading ({} rounds left)", self.rounds);
             self.reload_left = Some(stats.reload_secs);
+            self.bolt = None;
         }
     }
 
@@ -134,24 +152,55 @@ impl HeldWeapon {
     }
 
     /// Runs the trigger for a frame of `dt` seconds and returns how many rounds leave the
-    /// barrel: as many as the fire rate owes since the last shot, so a long frame fires
-    /// several. Running dry starts a reload.
+    /// barrel. `Auto` fires as many as the fire rate owes since the last shot, so a long frame
+    /// fires several; `Semi` fires one per pull once the cooldown allows. Pulling on an empty
+    /// magazine starts a reload.
     fn rounds_to_fire(&mut self, stats: &WeaponStats, dt: f32) -> u32 {
         self.cooldown -= dt;
+        let spacing = stats.seconds_per_shot(self.ads_eased());
+        if let Some(bolt) = &mut self.bolt {
+            *bolt += dt / spacing;
+            if *bolt >= 1.0 {
+                self.bolt = None;
+            }
+        }
+        if !self.trigger {
+            self.pull_spent = false;
+        }
         let mut fired = 0;
         if self.trigger && self.ready() && self.reload_left.is_none() {
-            while self.cooldown <= 0.0 {
+            while self.cooldown <= 0.0 && !self.pull_spent {
                 if self.rounds == 0 {
                     self.start_reload(stats);
+                    self.pull_spent = stats.fire_mode == FireMode::Semi;
                     break;
                 }
                 self.rounds -= 1;
                 self.cooldown += stats.seconds_per_shot(self.ads_eased());
                 fired += 1;
+                if stats.fire_mode == FireMode::Semi {
+                    self.pull_spent = true;
+                    if stats.bolt_action && self.rounds > 0 {
+                        self.bolt = Some(0.0);
+                    }
+                }
             }
         }
         self.cooldown = self.cooldown.max(0.0);
         fired
+    }
+
+    /// How far the bolt is worked, 0 to 1, while it is off the sights mid-cycle.
+    fn bolt_phase(&self) -> Option<f32> {
+        let (start, end) = BOLT_WINDOW;
+        self.bolt
+            .filter(|bolt| (start..end).contains(bolt))
+            .map(|bolt| (bolt - start) / (end - start))
+    }
+
+    /// Looking through the scope: the viewmodel hides and the scope mask shows.
+    fn scoped(&self, stats: &WeaponStats) -> bool {
+        stats.scope && self.ads > SCOPE_MIN_ADS
     }
 
     /// The ADS blend eased in and out.
@@ -233,25 +282,64 @@ fn ease(t: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-fn equip_local_player(add: On<Add<LocalPlayer>>, data: Res<GameData>, mut commands: Commands) {
-    let id = WeaponId::AssaultRifle;
+fn equip_local_player(
+    add: On<Add<LocalPlayer>>,
+    data: Res<GameData>,
+    chosen: Res<ChosenLoadout>,
+    mut commands: Commands,
+) {
+    let id = chosen.get(&data).primary;
     commands
         .entity(add.entity)
         .insert(HeldWeapon::new(id, data.weapon(id)));
 }
 
-/// A respawn hands out a fresh magazine and a settled aim.
-fn reset_on_respawn(
+/// A respawn hands out the chosen Loadout's primary with a fresh magazine and a settled aim.
+fn equip_on_respawn(
     mut respawns: MessageReader<FromServer<Respawn>>,
     data: Res<GameData>,
+    chosen: Res<ChosenLoadout>,
     mut weapons: Query<&mut HeldWeapon, With<LocalPlayer>>,
 ) {
     if respawns.read().count() == 0 {
         return;
     }
+    let loadout = chosen.get(&data);
     for mut weapon in &mut weapons {
-        let id = weapon.id;
-        *weapon = HeldWeapon::new(id, data.weapon(id));
+        *weapon = HeldWeapon::new(loadout.primary, data.weapon(loadout.primary));
+        info!(
+            "Spawned with Loadout \"{}\" ({})",
+            loadout.name,
+            data.weapon(loadout.primary).name
+        );
+    }
+}
+
+/// A Loadout chosen within the swap window of spawning replaces the held Weapon at once;
+/// otherwise it waits for the next spawn.
+fn swap_loadout(
+    time: Res<Time>,
+    data: Res<GameData>,
+    chosen: Res<ChosenLoadout>,
+    clock: Res<SpawnClock>,
+    life: Res<LocalLife>,
+    mut weapons: Query<&mut HeldWeapon, With<LocalPlayer>>,
+) {
+    if !chosen.is_changed() || chosen.is_added() {
+        return;
+    }
+    let loadout = chosen.get(&data);
+    let open = clock.swap_open(time.elapsed_secs_f64(), &life, &data);
+    for mut weapon in &mut weapons {
+        if weapon.id == loadout.primary {
+            continue;
+        }
+        if open {
+            *weapon = HeldWeapon::new(loadout.primary, data.weapon(loadout.primary));
+            info!("Loadout \"{}\" applied now", loadout.name);
+        } else {
+            info!("Loadout \"{}\" applies on next spawn", loadout.name);
+        }
     }
 }
 
@@ -279,9 +367,15 @@ fn track_body(
     let velocity = motor.velocity();
     let speed = Vec2::new(velocity.x, velocity.z).length();
     let walk = (speed / data.movement.walk_speed.max(f32::EPSILON)).clamp(0.0, 1.5);
-    let air = if motor.grounded() { 0.0 } else { stats.air_spread_deg };
+    let air = if motor.grounded() {
+        0.0
+    } else {
+        stats.air_spread_deg
+    };
     let bloom = stats.move_spread_deg * walk + air;
-    weapon.bloom.smooth_nudge(&bloom, stats.bloom_follow_per_sec, dt);
+    weapon
+        .bloom
+        .smooth_nudge(&bloom, stats.bloom_follow_per_sec, dt);
 
     weapon.accuracy = match pose.stance {
         Stance::Standing => 1.0,
@@ -290,8 +384,9 @@ fn track_body(
     };
 }
 
-/// Blends toward the sights while the aim button is held and the weapon is up, and feeds the
-/// controller hooks: aiming zooms and slows, and aiming or firing stops a sprint.
+/// Blends toward the sights while the aim button is held and the weapon is up (a bolt being
+/// worked takes it off them), and feeds the controller hooks: aiming zooms and slows, and
+/// aiming or firing stops a sprint.
 fn aim(
     time: Res<Time>,
     data: Res<GameData>,
@@ -308,7 +403,7 @@ fn aim(
     let in_control = captured.active() && !life.is_dead();
     let wants = in_control && mouse.pressed(bindings.aim) && weapon.reload_left.is_none();
     let step = time.delta_secs() / stats.ads_secs.max(f32::EPSILON);
-    weapon.ads = if wants && weapon.ready() {
+    weapon.ads = if wants && weapon.ready() && weapon.bolt_phase().is_none() {
         (weapon.ads + step).min(1.0)
     } else {
         (weapon.ads - step).max(0.0)
@@ -342,9 +437,9 @@ fn reload(
     weapon.tick_reload(stats, time.delta_secs(), motor.sprinting());
 }
 
-/// Full-auto fire at the Weapon's rpm, blending to its ADS rpm with the sights, once the
-/// weapon is up. Each round goes to the server with spread and the current recoil already
-/// applied, then kicks the view.
+/// Fires the Weapon at its rpm (blending to its ADS rpm with the sights) once it is up: held
+/// for `Auto`, one round per pull for `Semi`. Each round goes to the server with spread and
+/// the current recoil already applied, then kicks the view.
 fn fire(
     time: Res<Time>,
     data: Res<GameData>,
@@ -370,7 +465,9 @@ fn fire(
 
     let rounds = weapon.rounds_to_fire(stats, time.delta_secs());
     if rounds > 0 {
-        let eye_height = eye.single().map_or(pose.stance.eye_height(), EyeCamera::height);
+        let eye_height = eye
+            .single()
+            .map_or(pose.stance.eye_height(), EyeCamera::height);
         let origin = pose.position + Vec3::Y * eye_height;
         let gun = gun.single().copied().unwrap_or_default();
         let filter = SpatialQueryFilter::from_mask(GameLayer::World);
@@ -378,7 +475,10 @@ fn fire(
         let kick = weapon.recoil_scale(stats);
         for _ in 0..rounds {
             let aim = aim_rotation(pose.yaw, pose.pitch);
-            let (angle, radius) = (rng.next() * std::f32::consts::TAU, spread * rng.next().sqrt());
+            let (angle, radius) = (
+                rng.next() * std::f32::consts::TAU,
+                spread * rng.next().sqrt(),
+            );
             let offset = Quat::from_rotation_y(radius * angle.cos())
                 * Quat::from_rotation_x(radius * angle.sin());
             let direction = Dir3::new_unchecked((aim * offset * Vec3::NEG_Z).normalize());
@@ -393,7 +493,7 @@ fn fire(
                 .map_or(stats.range, |hit| hit.distance);
             let muzzle = Transform::from_translation(origin)
                 .with_rotation(aim)
-                .transform_point(gun.transform_point(viewmodel::MUZZLE));
+                .transform_point(gun.transform_point(Vec3::from(stats.muzzle_offset)));
             fired.write(ShotFired {
                 muzzle,
                 end: origin + *direction * end,
@@ -442,10 +542,14 @@ mod tests {
     }
 
     #[test]
-    fn fire_rate_holds_at_any_frame_rate_and_idle_time_banks_nothing() {
+    fn fire_rate_holds_at_any_frame_rate_and_semi_fires_once_per_pull() {
         // 480 rpm: a round every 0.125 s, so holding for 1 s fires at 0, 0.125, ..., 1.0.
         // Fully aimed it's 240 rpm: a round every 0.25 s.
-        let stats = WeaponStats { magazine: 100, ads_rpm: 240.0, ..WeaponStats::fixture() };
+        let stats = WeaponStats {
+            magazine: 100,
+            ads_rpm: 240.0,
+            ..WeaponStats::fixture()
+        };
 
         let mut low_fps = HeldWeapon::new(WeaponId::AssaultRifle, &stats);
         low_fps.trigger = true;
@@ -467,19 +571,68 @@ mod tests {
         aimed.trigger = true;
         let fired: u32 = (0..4).map(|_| frame(&mut aimed, &stats, 0.25)).sum();
         assert_eq!(fired, 5);
+
+        // Semi at 60 rpm: holding fires one round; the next needs a new pull and the 1 s
+        // cooldown, during which a bolt-action works its bolt off the sights.
+        let semi = WeaponStats {
+            fire_mode: FireMode::Semi,
+            rpm: 60.0,
+            ads_rpm: 60.0,
+            bolt_action: true,
+            ..WeaponStats::fixture()
+        };
+        let mut bolt = HeldWeapon::new(WeaponId::SniperRifle, &semi);
+        bolt.trigger = true;
+        let held: u32 = (0..30).map(|_| frame(&mut bolt, &semi, 0.1)).sum();
+        assert_eq!(held, 1, "holding fires once");
+        bolt.trigger = false;
+        assert_eq!(frame(&mut bolt, &semi, 0.1), 0);
+        bolt.trigger = true;
+        assert_eq!(frame(&mut bolt, &semi, 0.1), 1, "a new pull fires");
+        assert!(
+            bolt.bolt_phase().is_none(),
+            "the bolt waits a moment after the shot"
+        );
+        frame(&mut bolt, &semi, 0.2);
+        assert!(bolt.bolt_phase().is_some(), "then works the bolt");
+        bolt.trigger = false;
+        frame(&mut bolt, &semi, 0.1);
+        bolt.trigger = true;
+        let early: u32 = (0..3).map(|_| frame(&mut bolt, &semi, 0.1)).sum();
+        assert_eq!(early, 0, "no round before the cooldown ends");
+        let late: u32 = (0..4).map(|_| frame(&mut bolt, &semi, 0.1)).sum();
+        assert_eq!(
+            late, 1,
+            "a pull held through the cooldown fires once it ends"
+        );
+        assert!(bolt.bolt_phase().is_none());
     }
 
     #[test]
     fn running_dry_reloads_then_fires_again_unless_sprint_cancels() {
-        let stats = WeaponStats { magazine: 3, ..WeaponStats::fixture() };
+        let stats = WeaponStats {
+            magazine: 3,
+            ..WeaponStats::fixture()
+        };
         let mut weapon = HeldWeapon::new(WeaponId::AssaultRifle, &stats);
         weapon.trigger = true;
 
         assert_eq!(frame(&mut weapon, &stats, 1.0), 3);
         assert_eq!(weapon.rounds, 0);
-        assert!(weapon.reload_left.is_some(), "an empty magazine starts a reload");
-        assert_eq!(frame(&mut weapon, &stats, 0.5), 0, "no rounds while reloading");
-        assert_eq!(frame(&mut weapon, &stats, 0.5), 3, "fires again once reloaded");
+        assert!(
+            weapon.reload_left.is_some(),
+            "an empty magazine starts a reload"
+        );
+        assert_eq!(
+            frame(&mut weapon, &stats, 0.5),
+            0,
+            "no rounds while reloading"
+        );
+        assert_eq!(
+            frame(&mut weapon, &stats, 0.5),
+            3,
+            "fires again once reloaded"
+        );
 
         // Empty again and reloading: sprinting cancels without refilling.
         weapon.tick_reload(&stats, 0.1, true);

@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 
 use super::{FRIENDLY_COLOR, is_friendly};
+use crate::flow::AppState;
 use crate::player::{EyeCamera, LocalLife};
 use crate::shared::{Health, PlayerName, PlayerPose, PlayerTeam, RemotePlayer};
 
@@ -33,6 +34,7 @@ pub(super) fn attach_name_tags(
         commands.spawn((
             Name::new("Name tag"),
             NameTag { target },
+            DespawnOnExit(AppState::InGame),
             Node {
                 position_type: PositionType::Absolute,
                 width: px(TAG_WIDTH),

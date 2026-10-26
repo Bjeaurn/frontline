@@ -17,6 +17,7 @@ avian3d = "=0.8.0"
 clap = { version = "4.6", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 ron = "0.12"
+dirs = "7"
 
 # Bevy systems routinely take many params and complex query types.
 [workspace.lints.clippy]

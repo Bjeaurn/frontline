@@ -7,19 +7,23 @@ use std::cmp::Reverse;
 use bevy::prelude::*;
 
 use super::{ENEMY_COLOR, FRIENDLY_COLOR, MatchQuery, own_side};
+use crate::data::GameData;
+use crate::flow::AppState;
 use crate::net::protocol::PlayerOwner;
 use crate::player::LocalLife;
 use crate::player::input::Bindings;
-use crate::shared::{LocalPlayerReplica, MatchPhase, PlayerName, PlayerStats, PlayerTeam, Team};
+use crate::shared::{LocalPlayerReplica, MatchPhase, PlayerName, PlayerStats, PlayerTeam};
+use crate::ui::{self, UiFonts};
 
-const WIDTH: f32 = 520.0;
-const BANNER_SIZE: f32 = 40.0;
+const WIDTH: f32 = 560.0;
+const BANNER_SIZE: f32 = 56.0;
+const WINNER_SIZE: f32 = 24.0;
 const SUBTITLE_SIZE: f32 = 18.0;
-const SECTION_SIZE: f32 = 20.0;
-const ROW_SIZE: f32 = 16.0;
+const SECTION_SIZE: f32 = 24.0;
+const SECTION_EMBLEM_SIZE: f32 = 30.0;
+const ROW_SIZE: f32 = 18.0;
 const STAT_WIDTH: f32 = 48.0;
-const DIM: Color = Color::srgba(1.0, 1.0, 1.0, 0.6);
-const SELF_BG: Color = Color::srgba(1.0, 1.0, 1.0, 0.14);
+const SELF_BG: Color = Color::srgba(1.0, 1.0, 1.0, 0.12);
 const DRAW_COLOR: Color = Color::srgb(0.9, 0.9, 0.9);
 
 #[derive(Component)]
@@ -31,16 +35,27 @@ pub(super) struct ScoreboardPanel;
 
 #[derive(PartialEq, Default)]
 pub(super) struct Board {
-    /// Result banner and seconds to the next Match, at Match end.
-    result: Option<(&'static str, Color, u32)>,
+    result: Option<MatchResult>,
     sections: Vec<Section>,
     /// Players still choosing a Team.
     choosing: Vec<String>,
 }
 
+/// What the Scoreboard announces at Match end.
+#[derive(PartialEq)]
+struct MatchResult {
+    banner: &'static str,
+    color: Color,
+    /// Name of the winning Faction; `None` on a draw.
+    winner: Option<String>,
+    next_in: u32,
+}
+
 #[derive(PartialEq)]
 struct Section {
-    team: Team,
+    faction: String,
+    /// Asset path of the Faction emblem.
+    icon: String,
     score: u32,
     color: Color,
     rows: Vec<Row>,
@@ -58,6 +73,7 @@ pub(super) fn spawn_scoreboard(mut commands: Commands) {
     commands.spawn((
         Name::new("Scoreboard"),
         ScoreboardRoot,
+        DespawnOnExit(AppState::InGame),
         Node {
             position_type: PositionType::Absolute,
             width: percent(100.0),
@@ -70,30 +86,25 @@ pub(super) fn spawn_scoreboard(mut commands: Commands) {
         Visibility::Hidden,
         children![(
             ScoreboardPanel,
+            BackgroundColor(ui::PANEL),
+            BorderColor::all(ui::PANEL_BORDER),
             Node {
                 width: px(WIDTH),
                 flex_direction: FlexDirection::Column,
-                padding: UiRect::all(px(16.0)),
+                padding: UiRect::all(px(18.0)),
                 row_gap: px(4.0),
+                border: UiRect::all(px(1.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.02, 0.02, 0.04, 0.82)),
         )],
     ));
-}
-
-fn font(size: f32) -> TextFont {
-    TextFont {
-        font_size: FontSize::Px(size),
-        ..default()
-    }
 }
 
 /// A row of a name column that takes the remaining width and two right-aligned stat columns.
 fn columns(
     parent: &mut ChildSpawnerCommands,
+    fonts: &UiFonts,
     cells: [String; 3],
-    size: f32,
     color: Color,
     background: Color,
 ) {
@@ -101,7 +112,7 @@ fn columns(
     parent
         .spawn((
             Node {
-                padding: UiRect::axes(px(6.0), px(2.0)),
+                padding: UiRect::axes(px(6.0), px(1.0)),
                 ..default()
             },
             BackgroundColor(background),
@@ -112,9 +123,7 @@ fn columns(
                     flex_grow: 1.0,
                     ..default()
                 },
-                Text::new(name),
-                font(size),
-                TextColor(color),
+                ui::label(fonts, &name, ROW_SIZE, color),
             ));
             for stat in [kills, deaths] {
                 row.spawn((
@@ -122,17 +131,15 @@ fn columns(
                         width: px(STAT_WIDTH),
                         ..default()
                     },
-                    Text::new(stat),
-                    font(size),
-                    TextColor(color),
+                    ui::label(fonts, &stat, ROW_SIZE, color),
                     TextLayout::justify(Justify::Right),
                 ));
             }
         });
 }
 
-fn build(panel: &mut ChildSpawnerCommands, board: &Board) {
-    if let Some((banner, color, next_in)) = board.result {
+fn build(panel: &mut ChildSpawnerCommands, fonts: &UiFonts, assets: &AssetServer, board: &Board) {
+    if let Some(result) = &board.result {
         panel
             .spawn(Node {
                 flex_direction: FlexDirection::Column,
@@ -141,49 +148,72 @@ fn build(panel: &mut ChildSpawnerCommands, board: &Board) {
                 ..default()
             })
             .with_children(|header| {
-                header.spawn((Text::new(banner), font(BANNER_SIZE), TextColor(color)));
-                header.spawn((
-                    Text::new(format!("Next match in {next_in}")),
-                    font(SUBTITLE_SIZE),
-                    TextColor(DIM),
+                header
+                    .spawn(ui::title(fonts, result.banner, BANNER_SIZE))
+                    .insert(TextColor(result.color));
+                if let Some(winner) = &result.winner {
+                    header.spawn(ui::title(fonts, &format!("{winner} wins"), WINNER_SIZE));
+                }
+                header.spawn(ui::label(
+                    fonts,
+                    &format!("Next match in {}", result.next_in),
+                    SUBTITLE_SIZE,
+                    ui::TEXT_DIM,
                 ));
             });
     }
     for section in &board.sections {
         panel
-            .spawn(Node {
-                justify_content: JustifyContent::SpaceBetween,
-                margin: UiRect::top(px(8.0)),
-                border: UiRect::bottom(px(1.0)),
-                padding: UiRect::axes(px(6.0), px(2.0)),
-                ..default()
-            })
-            .insert(BorderColor::all(section.color))
+            .spawn((
+                Node {
+                    align_items: AlignItems::Center,
+                    column_gap: px(10.0),
+                    margin: UiRect::top(px(10.0)),
+                    border: UiRect::bottom(px(1.0)),
+                    padding: UiRect::axes(px(6.0), px(3.0)),
+                    ..default()
+                },
+                BorderColor::all(section.color),
+            ))
             .with_children(|title| {
                 title.spawn((
-                    Text::new(format!("{:?}", section.team)),
-                    font(SECTION_SIZE),
-                    TextColor(section.color),
+                    ImageNode::new(assets.load(section.icon.clone())),
+                    Node {
+                        width: px(SECTION_EMBLEM_SIZE),
+                        height: px(SECTION_EMBLEM_SIZE),
+                        ..default()
+                    },
                 ));
-                title.spawn((
-                    Text::new(section.score.to_string()),
-                    font(SECTION_SIZE),
-                    TextColor(section.color),
-                ));
+                title
+                    .spawn((
+                        Node {
+                            flex_grow: 1.0,
+                            ..default()
+                        },
+                        ui::title(fonts, &section.faction, SECTION_SIZE),
+                    ))
+                    .insert(TextColor(section.color));
+                title
+                    .spawn(ui::title(fonts, &section.score.to_string(), SECTION_SIZE))
+                    .insert(TextColor(section.color));
             });
         columns(
             panel,
+            fonts,
             ["Name".into(), "K".into(), "D".into()],
-            ROW_SIZE,
-            DIM,
+            ui::TEXT_DIM,
             Color::NONE,
         );
         for row in &section.rows {
             columns(
                 panel,
-                [row.name.clone(), row.kills.to_string(), row.deaths.to_string()],
-                ROW_SIZE,
-                Color::WHITE,
+                fonts,
+                [
+                    row.name.clone(),
+                    row.kills.to_string(),
+                    row.deaths.to_string(),
+                ],
+                ui::TEXT,
                 if row.me { SELF_BG } else { Color::NONE },
             );
         }
@@ -194,9 +224,12 @@ fn build(panel: &mut ChildSpawnerCommands, board: &Board) {
                 margin: UiRect::top(px(10.0)),
                 ..default()
             },
-            Text::new(format!("Choosing a team: {}", board.choosing.join(", "))),
-            font(ROW_SIZE),
-            TextColor(DIM),
+            ui::label(
+                fonts,
+                &format!("Choosing a team: {}", board.choosing.join(", ")),
+                ROW_SIZE,
+                ui::TEXT_DIM,
+            ),
         ));
     }
 }
@@ -207,13 +240,21 @@ pub(super) fn update_scoreboard(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<Bindings>,
     life: Res<LocalLife>,
+    data: Res<GameData>,
+    fonts: Res<UiFonts>,
+    assets: Res<AssetServer>,
     state: MatchQuery,
     players: Query<
-        (&PlayerName, &PlayerTeam, &PlayerStats, Has<LocalPlayerReplica>),
+        (
+            &PlayerName,
+            &PlayerTeam,
+            &PlayerStats,
+            Has<LocalPlayerReplica>,
+        ),
         With<PlayerOwner>,
     >,
     mut root: Single<&mut Visibility, With<ScoreboardRoot>>,
-    panel: Single<Entity, With<ScoreboardPanel>>,
+    panel: Single<(Entity, Has<Children>), With<ScoreboardPanel>>,
     mut shown: Local<Board>,
     mut commands: Commands,
 ) {
@@ -245,7 +286,12 @@ pub(super) fn update_scoreboard(
             Some(team) if team == ours => ("VICTORY", FRIENDLY_COLOR),
             Some(_) => ("DEFEAT", ENEMY_COLOR),
         };
-        (banner, color, next_in)
+        MatchResult {
+            banner,
+            color,
+            winner: winner.map(|team| data.faction(state.mode, team).name.clone()),
+            next_in,
+        }
     });
     let display_name = |name: &PlayerName| {
         if name.0.is_empty() {
@@ -273,8 +319,10 @@ pub(super) fn update_scoreboard(
                     .then(a.deaths.cmp(&b.deaths))
                     .then_with(|| a.name.cmp(&b.name))
             });
+            let faction = data.faction(state.mode, team);
             Section {
-                team,
+                faction: faction.name.clone(),
+                icon: faction.icon.clone(),
                 score: state.scores[team.index()],
                 color,
                 rows,
@@ -292,12 +340,14 @@ pub(super) fn update_scoreboard(
         sections,
         choosing,
     };
-    if *shown == board {
+    let (panel, built) = *panel;
+    // A fresh panel (new session) is empty even when the board matches the last one shown.
+    if built && *shown == board {
         return;
     }
     commands
-        .entity(*panel)
+        .entity(panel)
         .despawn_related::<Children>()
-        .with_children(|panel| build(panel, &board));
+        .with_children(|panel| build(panel, &fonts, &assets, &board));
     *shown = board;
 }

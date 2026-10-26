@@ -1,11 +1,14 @@
 //! Weapon HUD: centred crosshair (opening with spread, fading out when aiming), hitmarker,
-//! and the ammo counter.
+//! the ammo counter with the held Weapon's name, and the black scope mask of scoped Weapons.
 
+use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::window::PrimaryWindow;
 
 use super::{HeldWeapon, WeaponSystems};
 use crate::data::GameData;
+use crate::flow::AppState;
 use crate::net::protocol::HitConfirm;
 use crate::player::{EyeCamera, LocalLife};
 use crate::shared::{FromServer, LocalPlayer};
@@ -34,15 +37,35 @@ const AMMO_LOW: u32 = 5;
 
 pub(super) struct WeaponHudPlugin;
 
+/// Side of the generated scope mask texture, in pixels.
+const SCOPE_MASK_PX: u32 = 512;
+/// The lens edge darkens from this fraction of the radius outward.
+const SCOPE_VIGNETTE: f32 = 0.93;
+const SCOPE_LINE: f32 = 2.0;
+const SCOPE_POST: f32 = 7.0;
+/// How far the thick posts reach in from the lens edge, in percent of its diameter.
+const SCOPE_POST_LENGTH: f32 = 38.0;
+
 impl Plugin for WeaponHudPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_weapon_hud).add_systems(
-            Update,
-            (update_crosshair, show_hitmarker, fade_hitmarker, update_ammo)
-                .after(WeaponSystems),
-        );
+        app.add_systems(OnEnter(AppState::InGame), spawn_weapon_hud)
+            .add_systems(
+                Update,
+                (
+                    update_crosshair,
+                    show_hitmarker,
+                    fade_hitmarker,
+                    update_ammo,
+                    update_scope,
+                )
+                    .after(WeaponSystems)
+                    .run_if(in_state(AppState::InGame)),
+            );
     }
 }
+
+#[derive(Component)]
+struct ScopeOverlay;
 
 /// The crosshair, centred: its arms sit at the edge of the hip spread cone on screen.
 #[derive(Component)]
@@ -121,9 +144,132 @@ fn centred() -> Node {
     }
 }
 
-fn spawn_weapon_hud(mut commands: Commands) {
+/// A black texture with a transparent circle (the lens) and a soft dark rim.
+fn scope_mask() -> Image {
+    let size = SCOPE_MASK_PX;
+    let radius = size as f32 / 2.0;
+    let data = (0..size * size)
+        .flat_map(|i| {
+            let at = Vec2::new((i % size) as f32, (i / size) as f32) + 0.5 - radius;
+            let edge = (at.length() / radius - SCOPE_VIGNETTE) / (1.0 - SCOPE_VIGNETTE);
+            let alpha = edge.clamp(0.0, 1.0);
+            [0, 0, 0, (alpha * alpha * 255.0) as u8]
+        })
+        .collect();
+    Image::new(
+        Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+}
+
+/// A black reticle bar placed inside the lens square.
+fn reticle(node: Node) -> impl Bundle {
+    (
+        Node {
+            position_type: PositionType::Absolute,
+            ..node
+        },
+        BackgroundColor(Color::BLACK),
+    )
+}
+
+/// Full-window scope view: black bars either side of a square lens mask with a crosshair of
+/// thin lines and thick posts, as on a CoD4 M40.
+fn spawn_scope(commands: &mut Commands, mask: Handle<Image>) {
+    let black = || {
+        (
+            Node {
+                flex_grow: 1.0,
+                height: percent(100.0),
+                ..default()
+            },
+            BackgroundColor(Color::BLACK),
+        )
+    };
+    let thin = SCOPE_LINE;
+    let post = SCOPE_POST;
+    commands.spawn((
+        Name::new("Scope"),
+        ScopeOverlay,
+        DespawnOnExit(AppState::InGame),
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100.0),
+            height: percent(100.0),
+            flex_direction: FlexDirection::Row,
+            ..default()
+        },
+        Visibility::Hidden,
+        children![
+            black(),
+            (
+                Node {
+                    height: percent(100.0),
+                    aspect_ratio: Some(1.0),
+                    flex_shrink: 0.0,
+                    ..default()
+                },
+                ImageNode::new(mask),
+                children![
+                    reticle(Node {
+                        left: percent(0.0),
+                        width: percent(100.0),
+                        top: percent(50.0),
+                        height: px(thin),
+                        margin: UiRect::top(px(-thin / 2.0)),
+                        ..default()
+                    }),
+                    reticle(Node {
+                        top: percent(0.0),
+                        height: percent(100.0),
+                        left: percent(50.0),
+                        width: px(thin),
+                        margin: UiRect::left(px(-thin / 2.0)),
+                        ..default()
+                    }),
+                    reticle(Node {
+                        left: percent(0.0),
+                        width: percent(SCOPE_POST_LENGTH),
+                        top: percent(50.0),
+                        height: px(post),
+                        margin: UiRect::top(px(-post / 2.0)),
+                        ..default()
+                    }),
+                    reticle(Node {
+                        right: percent(0.0),
+                        width: percent(SCOPE_POST_LENGTH),
+                        top: percent(50.0),
+                        height: px(post),
+                        margin: UiRect::top(px(-post / 2.0)),
+                        ..default()
+                    }),
+                    reticle(Node {
+                        bottom: percent(0.0),
+                        height: percent(SCOPE_POST_LENGTH),
+                        left: percent(50.0),
+                        width: px(post),
+                        margin: UiRect::left(px(-post / 2.0)),
+                        ..default()
+                    }),
+                ],
+            ),
+            black(),
+        ],
+    ));
+}
+
+fn spawn_weapon_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    spawn_scope(&mut commands, images.add(scope_mask()));
     commands.spawn((
         Name::new("Crosshair"),
+        DespawnOnExit(AppState::InGame),
         centred(),
         children![(
             Crosshair,
@@ -138,6 +284,7 @@ fn spawn_weapon_hud(mut commands: Commands) {
     ));
     commands.spawn((
         Name::new("Hitmarker"),
+        DespawnOnExit(AppState::InGame),
         centred(),
         children![(
             Hitmarker::default(),
@@ -157,6 +304,7 @@ fn spawn_weapon_hud(mut commands: Commands) {
     ));
     commands.spawn((
         Name::new("Ammo"),
+        DespawnOnExit(AppState::InGame),
         Node {
             position_type: PositionType::Absolute,
             right: px(24.0),
@@ -285,19 +433,19 @@ fn fade_hitmarker(time: Res<Time>, mut marker: Single<(&mut Hitmarker, &mut Visi
     }
 }
 
-/// Rewrites the counter only when the rounds or reload state shown actually change.
+/// Rewrites the counter only when the Weapon, rounds or reload state shown actually change.
 fn update_ammo(
     data: Res<GameData>,
     weapons: Query<&HeldWeapon, With<LocalPlayer>>,
-    mut shown: Local<Option<(u32, bool)>>,
+    mut shown: Local<Option<(crate::data::WeaponId, u32, bool)>>,
     mut count: Single<(&mut Text, &mut TextColor), (With<AmmoCount>, Without<WeaponLabel>)>,
     mut label: Single<&mut Text, (With<WeaponLabel>, Without<AmmoCount>)>,
 ) {
     let Ok(weapon) = weapons.single() else {
         return;
     };
-    let state = (weapon.rounds, weapon.reload_left.is_some());
-    if *shown == Some(state) {
+    let state = (weapon.id, weapon.rounds, weapon.reload_left.is_some());
+    if *shown == Some(state) && !label.is_added() {
         return;
     }
     *shown = Some(state);
@@ -309,9 +457,26 @@ fn update_ammo(
         AMMO_COLOR
     };
     let name = &data.weapon(weapon.id).name;
-    label.0 = if state.1 {
+    label.0 = if state.2 {
         format!("{name}  reloading")
     } else {
         name.clone()
     };
+}
+
+/// Shows the scope mask while a scoped Weapon is aimed far enough in.
+fn update_scope(
+    data: Res<GameData>,
+    life: Res<LocalLife>,
+    weapons: Query<&HeldWeapon, With<LocalPlayer>>,
+    mut scope: Single<&mut Visibility, With<ScopeOverlay>>,
+) {
+    let scoped = weapons
+        .single()
+        .is_ok_and(|weapon| !life.is_dead() && weapon.scoped(data.weapon(weapon.id)));
+    scope.set_if_neq(if scoped {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    });
 }

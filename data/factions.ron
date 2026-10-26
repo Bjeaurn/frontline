@@ -1,0 +1,19 @@
+// Factions: the identity a Team plays as. Add one here (with an emblem PNG) and reference its id
+// from a Game Mode in game_modes.ron. Built-in emblems live under embedded://frontline/icons/;
+// other icon paths are loaded from the assets folder.
+[
+    (
+        id: "ranger",
+        name: "Task Force Ranger",
+        short_name: "Rangers",
+        icon: "embedded://frontline/icons/factions/ranger.png",
+        color: (0.45, 0.55, 0.32),
+    ),
+    (
+        id: "brigade",
+        name: "Red Brigade",
+        short_name: "Brigade",
+        icon: "embedded://frontline/icons/factions/brigade.png",
+        color: (0.62, 0.18, 0.15),
+    ),
+]

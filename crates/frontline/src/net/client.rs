@@ -16,22 +16,16 @@ use super::protocol::{
     KillFeed, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseChannel, PoseUpdate, Respawn,
     ShotChannel, ShotTracer,
 };
+use crate::flow::Settings;
 use crate::shared::{
     FromServer, LocalPlayer, LocalPlayerReplica, PlayerPose, RemotePlayer, ToServer,
 };
 
-/// Name this process introduces itself with after connecting.
-#[derive(Resource)]
-struct LocalPlayerName(String);
-
-pub(super) struct ClientNetPlugin {
-    pub name: String,
-}
+pub(super) struct ClientNetPlugin;
 
 impl Plugin for ClientNetPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(LocalPlayerName(self.name.clone()))
-            .add_message::<FromServer<HitConfirm>>()
+        app.add_message::<FromServer<HitConfirm>>()
             .add_message::<FromServer<Damaged>>()
             .add_message::<FromServer<KillFeed>>()
             .add_message::<FromServer<Respawn>>()
@@ -41,7 +35,6 @@ impl Plugin for ClientNetPlugin {
             .add_observer(on_connected)
             .add_observer(on_disconnected)
             .add_systems(FixedUpdate, send_pose)
-            .add_systems(Startup, super::status::spawn_status_text)
             .add_systems(
                 PreUpdate,
                 (
@@ -57,14 +50,7 @@ impl Plugin for ClientNetPlugin {
                 PostUpdate,
                 (send_shots, send_team_choices).before(MessageSystems::Send),
             )
-            .add_systems(
-                Update,
-                (
-                    mark_remote_players,
-                    mark_local_replica,
-                    super::status::update_status_text,
-                ),
-            );
+            .add_systems(Update, (mark_remote_players, mark_local_replica));
     }
 }
 
@@ -116,14 +102,14 @@ fn random_client_id() -> u64 {
 fn on_connected(
     trigger: On<Add<Connected>>,
     mut clients: Query<(&LocalId, &mut MessageSender<Hello>), With<Client>>,
-    name: Res<LocalPlayerName>,
+    settings: Res<Settings>,
 ) {
     let Ok((local_id, mut sender)) = clients.get_mut(trigger.entity) else {
         return;
     };
     info!("Connected to server as {}", local_id.0);
     sender.send::<ControlChannel>(Hello {
-        name: name.0.clone(),
+        name: settings.name.clone(),
     });
 }
 
@@ -136,7 +122,9 @@ fn on_disconnected(
         return;
     };
     let server = peer.map_or_else(|| "host server".to_owned(), |peer| peer.0.to_string());
-    if was_connected {
+    if matches!(disconnected.reason, DisconnectedReason::UserRequested(_)) {
+        info!("Left {server}");
+    } else if was_connected {
         warn!("Disconnected from {server}: {}", disconnected.reason);
     } else if was_connecting {
         error!("Failed to connect to {server}: {}", disconnected.reason);

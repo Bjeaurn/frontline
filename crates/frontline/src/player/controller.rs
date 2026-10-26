@@ -13,10 +13,10 @@ use bevy::{
 };
 
 use super::BODY_RADIUS;
-use super::input::{Binding, Bindings, LookSensitivity};
+use super::input::{Binding, Bindings};
 use super::life::LocalLife;
-use crate::cli::Mode;
 use crate::data::{GameData, MovementTuning};
+use crate::flow::{AppState, Settings};
 use crate::net::protocol::Respawn;
 use crate::shared::{FromServer, GameLayer, LocalPlayer, PlayerName, PlayerPose, Stance};
 use crate::world::{SpawnPoints, yaw_towards_centre};
@@ -45,8 +45,6 @@ const MANTLE_OVER_START: f32 = 0.35;
 // View tuning.
 /// Furthest the view may pitch up or down, in radians.
 pub const PITCH_LIMIT: f32 = FRAC_PI_2 - 0.01;
-/// Horizontal field of view, in degrees, kept constant across aspect ratios.
-const HORIZONTAL_FOV_DEG: f32 = 80.0;
 /// How fast the eye height follows stance changes (exponential decay rate, 1/s).
 const EYE_HEIGHT_RATE: f32 = 12.0;
 /// Camera dip (metres) and roll (radians) at the middle of a mantle.
@@ -212,8 +210,8 @@ impl MouseCaptured {
     }
 }
 
-/// Whether a menu (e.g. the team picker) owns the cursor. While set, the cursor stays free
-/// and clicks don't grab it.
+/// Whether a menu or overlay owns the cursor. While set, the cursor stays free and clicks
+/// don't grab it; when it clears, the cursor is grabbed again.
 #[derive(Resource, Default, Debug)]
 pub struct MenuOpen(pub bool);
 
@@ -349,17 +347,15 @@ pub(super) fn spawn_local_player(
     mut commands: Commands,
     data: Res<GameData>,
     spawns: Res<SpawnPoints>,
-    mode: Res<Mode>,
+    settings: Res<Settings>,
 ) {
-    let name = match &*mode {
-        Mode::Client { name, .. } | Mode::Host { name, .. } => name.clone(),
-        Mode::Dedicated { .. } => return,
-    };
+    let name = settings.name.clone();
     let feet = random_spawn(&spawns) + Vec3::Y * HEADROOM_LIFT;
     let yaw = yaw_towards_centre(feet);
     let stance = Stance::Standing;
     commands.spawn((
         Name::new("LocalPlayer"),
+        DespawnOnExit(AppState::InGame),
         LocalPlayer,
         PlayerName(name),
         PlayerPose {
@@ -387,22 +383,21 @@ pub(super) fn spawn_local_player(
     ));
 }
 
-/// Grab the cursor on click, release it on the release key, when the window loses focus, or
-/// while a menu is open.
+/// Grabs the cursor when a menu closes or on click; frees it while a menu is open or the window
+/// is unfocused.
 pub(super) fn grab_cursor(
     bindings: Res<Bindings>,
     menu: Res<MenuOpen>,
     mouse: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<KeyCode>>,
     mut captured: ResMut<MouseCaptured>,
     mut windows: Query<(&Window, &mut CursorOptions), With<PrimaryWindow>>,
 ) {
     let Ok((window, mut cursor)) = windows.single_mut() else {
         return;
     };
-    let capture = if menu.0 || !window.focused || bindings.release_cursor.just_pressed(&keys) {
+    let capture = if menu.0 || !window.focused {
         false
-    } else if mouse.just_pressed(bindings.grab_cursor) {
+    } else if menu.is_changed() || mouse.just_pressed(bindings.grab_cursor) {
         true
     } else {
         return;
@@ -446,7 +441,7 @@ pub(super) fn mouse_look(
     captured: Res<MouseCaptured>,
     life: Res<LocalLife>,
     motion: Res<AccumulatedMouseMotion>,
-    sensitivity: Res<LookSensitivity>,
+    settings: Res<Settings>,
     mut player: Query<&mut PlayerPose, With<LocalPlayer>>,
 ) {
     if !captured.0 || life.is_dead() || motion.delta == Vec2::ZERO {
@@ -455,7 +450,7 @@ pub(super) fn mouse_look(
     let Ok(mut pose) = player.single_mut() else {
         return;
     };
-    let delta = motion.delta * sensitivity.0;
+    let delta = motion.delta * settings.mouse_sensitivity;
     pose.yaw = (pose.yaw - delta.x + PI).rem_euclid(TAU) - PI;
     pose.pitch = (pose.pitch - delta.y).clamp(-PITCH_LIMIT, PITCH_LIMIT);
 }
@@ -759,9 +754,10 @@ pub(super) fn update_eye(
     }
 }
 
-/// Keeps the horizontal field of view at `HORIZONTAL_FOV_DEG` (times the weapon's
-/// `fov_scale`) whatever the window shape.
+/// Keeps the horizontal field of view at the Settings FOV (times the weapon's `fov_scale`)
+/// whatever the window shape.
 pub(super) fn apply_horizontal_fov(
+    settings: Res<Settings>,
     player: Query<&ControllerModifiers, With<LocalPlayer>>,
     mut cameras: Query<&mut Projection, With<EyeCamera>>,
 ) {
@@ -770,7 +766,7 @@ pub(super) fn apply_horizontal_fov(
         let Projection::Perspective(perspective) = &*projection else {
             continue;
         };
-        let half = (HORIZONTAL_FOV_DEG * scale).to_radians() / 2.0;
+        let half = (settings.fov_deg * scale).to_radians() / 2.0;
         let fov = 2.0 * (half.tan() / perspective.aspect_ratio).atan();
         if (perspective.fov - fov).abs() > 1e-4
             && let Projection::Perspective(perspective) = &mut *projection

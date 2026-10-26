@@ -10,17 +10,25 @@ use lightyear::prelude::*;
 use super::protocol::{
     CONNECTION_TIMEOUT_SECS, Hello, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseUpdate,
 };
+use super::server_running;
 use crate::combat::PoseGate;
 use crate::shared::{Health, PlayerName, PlayerPose, PlayerStats, PlayerTeam};
+
+/// Most players a server accepts.
+pub(super) const MAX_PLAYERS: usize = 16;
 
 pub(super) struct ServerNetPlugin;
 
 impl Plugin for ServerNetPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(log_started)
+            .add_observer(log_stopped)
             .add_observer(spawn_player)
             .add_observer(log_disconnect)
-            .add_systems(Update, (receive_hello, receive_poses));
+            .add_systems(
+                Update,
+                (receive_hello, receive_poses).run_if(server_running),
+            );
     }
 }
 
@@ -28,20 +36,28 @@ impl Plugin for ServerNetPlugin {
 #[derive(Component, Debug)]
 pub struct LinkPlayer(pub Entity);
 
+/// Name a server announces to LAN discovery.
+#[derive(Component, Debug)]
+pub(super) struct ServerName(pub String);
+
 /// Spawns the netcode/UDP server listening on all interfaces and starts it.
-pub(super) fn start_server(commands: &mut Commands, port: u16) -> Entity {
+pub(super) fn start_server(commands: &mut Commands, port: u16, name: String) -> Entity {
     let server = commands
         .spawn((
             Name::new("Server"),
-            NetcodeServer::new(NetcodeConfig {
-                protocol_id: PROTOCOL_ID,
-                private_key: PRIVATE_KEY,
-                client_timeout_secs: CONNECTION_TIMEOUT_SECS,
-                // Clients build their own token with whatever address they dialled (a LAN IP),
-                // which never equals the 0.0.0.0 bind address.
-                server_addr_check: false,
-                ..default()
-            }),
+            ServerName(name),
+            NetcodeServer::new(
+                NetcodeConfig {
+                    protocol_id: PROTOCOL_ID,
+                    private_key: PRIVATE_KEY,
+                    client_timeout_secs: CONNECTION_TIMEOUT_SECS,
+                    // Clients build their own token with whatever address they dialled (a LAN
+                    // IP), which never equals the 0.0.0.0 bind address.
+                    server_addr_check: false,
+                    ..default()
+                }
+                .with_max_clients(MAX_PLAYERS),
+            ),
             LocalAddr(SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port)),
             ServerUdpIo,
         ))
@@ -53,6 +69,12 @@ pub(super) fn start_server(commands: &mut Commands, port: u16) -> Entity {
 fn log_started(trigger: On<Add<Started>>, servers: Query<&LocalAddr, With<Server>>) {
     if let Ok(addr) = servers.get(trigger.entity) {
         info!("Server listening on udp://{}", addr.0);
+    }
+}
+
+fn log_stopped(trigger: On<Add<Stopped>>, servers: Query<&LocalAddr, With<Server>>) {
+    if let Ok(addr) = servers.get(trigger.entity) {
+        info!("Server on udp://{} stopped", addr.0);
     }
 }
 
