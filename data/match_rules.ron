@@ -1,0 +1,11 @@
+// Match Rules presets (see CONTEXT.md). Read at startup from ./data/ (falls back to the copy
+// built into the binary). Health in HP, times in seconds.
+{
+    "default": (
+        max_health: 100.0,
+        regen_delay_secs: 5.0,
+        regen_per_sec: 40.0,
+        respawn_delay_secs: 3.0,
+        damage_scale: 1.0,
+    ),
+}

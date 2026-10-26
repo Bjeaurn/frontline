@@ -1,5 +1,6 @@
 //! Client side (Client and the Host's local client): connects, reports the local pose every
-//! fixed tick and marks other players' replicated entities as `RemotePlayer`.
+//! fixed tick, marks replicated players as `RemotePlayer` or `LocalPlayerReplica`, and bridges
+//! gameplay messages: server messages become `FromServer<M>`, `ToServer<FireShot>` is sent.
 
 use std::hash::{BuildHasher, RandomState};
 use std::net::{Ipv4Addr, SocketAddr};
@@ -10,10 +11,13 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
 use super::protocol::{
-    CONNECTION_TIMEOUT_SECS, ControlChannel, Hello, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner,
-    PoseChannel, PoseUpdate,
+    CONNECTION_TIMEOUT_SECS, ControlChannel, Damaged, FireShot, Hello, HitConfirm, KillFeed,
+    PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseChannel, PoseUpdate, Respawn, ShotChannel,
+    ShotTracer,
 };
-use crate::shared::{LocalPlayer, PlayerPose, RemotePlayer};
+use crate::shared::{
+    FromServer, LocalPlayer, LocalPlayerReplica, PlayerPose, RemotePlayer, ToServer,
+};
 
 /// Name this process introduces itself with after connecting.
 #[derive(Resource)]
@@ -26,13 +30,35 @@ pub(super) struct ClientNetPlugin {
 impl Plugin for ClientNetPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(LocalPlayerName(self.name.clone()))
+            .add_message::<FromServer<HitConfirm>>()
+            .add_message::<FromServer<Damaged>>()
+            .add_message::<FromServer<KillFeed>>()
+            .add_message::<FromServer<Respawn>>()
+            .add_message::<FromServer<ShotTracer>>()
+            .add_message::<ToServer<FireShot>>()
             .add_observer(on_connected)
             .add_observer(on_disconnected)
             .add_systems(FixedUpdate, send_pose)
             .add_systems(Startup, super::status::spawn_status_text)
             .add_systems(
+                PreUpdate,
+                (
+                    forward_from_server::<HitConfirm>,
+                    forward_from_server::<Damaged>,
+                    forward_from_server::<KillFeed>,
+                    forward_from_server::<Respawn>,
+                    forward_from_server::<ShotTracer>,
+                )
+                    .after(MessageSystems::Receive),
+            )
+            .add_systems(PostUpdate, send_shots.before(MessageSystems::Send))
+            .add_systems(
                 Update,
-                (mark_remote_players, super::status::update_status_text),
+                (
+                    mark_remote_players,
+                    mark_local_replica,
+                    super::status::update_status_text,
+                ),
             );
     }
 }
@@ -138,6 +164,43 @@ fn mark_remote_players(
         if owner.0 != local_id.0 {
             debug!("Showing remote player {}", owner.0);
             commands.entity(entity).insert(RemotePlayer);
+        }
+    }
+}
+
+/// Our own Player entity becomes the `LocalPlayerReplica`, the source of our `Health`.
+fn mark_local_replica(
+    clients: Query<&LocalId, (With<Client>, With<Connected>)>,
+    players: Query<(Entity, &PlayerOwner), Without<LocalPlayerReplica>>,
+    mut commands: Commands,
+) {
+    let Ok(local_id) = clients.single() else {
+        return;
+    };
+    for (entity, owner) in &players {
+        if owner.0 == local_id.0 {
+            commands.entity(entity).insert(LocalPlayerReplica);
+        }
+    }
+}
+
+/// Drains server message `M` from the client link (the HostClient link too) into `FromServer<M>`.
+fn forward_from_server<M: lightyear::prelude::Message>(
+    mut receivers: Query<&mut MessageReceiver<M>, (With<Client>, With<Connected>)>,
+    mut messages: MessageWriter<FromServer<M>>,
+) {
+    for mut receiver in &mut receivers {
+        messages.write_batch(receiver.receive().map(FromServer));
+    }
+}
+
+fn send_shots(
+    mut shots: MessageReader<ToServer<FireShot>>,
+    mut senders: Query<&mut MessageSender<FireShot>, (With<Client>, With<Connected>)>,
+) {
+    for mut sender in &mut senders {
+        for ToServer(shot) in shots.read() {
+            sender.send::<ShotChannel>(*shot);
         }
     }
 }

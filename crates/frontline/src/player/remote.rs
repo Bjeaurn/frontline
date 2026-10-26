@@ -1,11 +1,12 @@
-//! Capsule visuals for `RemotePlayer`s, smoothed toward their replicated `PlayerPose`.
+//! Capsule visuals for `RemotePlayer`s, smoothed toward their replicated `PlayerPose` and
+//! hidden while their `Health` is dead.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use bevy::prelude::*;
 
 use super::BODY_RADIUS;
-use crate::shared::{PlayerPose, RemotePlayer, Stance};
+use crate::shared::{Health, PlayerPose, RemotePlayer, Stance};
 
 /// Exponential decay rate (1/s) of the transform toward the pose; higher follows tighter.
 const FOLLOW_RATE: f32 = 20.0;
@@ -180,5 +181,17 @@ pub(super) fn follow_remote_poses(
         if let Ok((mut visor, _)) = parts.get_mut(visuals.visor) {
             *visor = visor_transform(visuals.eye_height, pose.pitch);
         }
+    }
+}
+
+pub(super) fn hide_dead_players(
+    mut players: Query<(&Health, &mut Visibility), (With<RemotePlayer>, With<RemoteVisuals>)>,
+) {
+    for (health, mut visibility) in &mut players {
+        visibility.set_if_neq(if health.is_dead() {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        });
     }
 }

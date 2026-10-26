@@ -38,6 +38,11 @@ pub struct Bindings {
     pub grab_cursor: MouseButton,
     /// Release the cursor.
     pub release_cursor: Binding,
+    /// Hold to fire.
+    pub fire: MouseButton,
+    /// Hold to aim down sights.
+    pub aim: MouseButton,
+    pub reload: Binding,
 }
 
 impl Default for Bindings {
@@ -53,6 +58,9 @@ impl Default for Bindings {
             prone: Binding::keys(&[KeyCode::ControlLeft, KeyCode::KeyZ]),
             grab_cursor: MouseButton::Left,
             release_cursor: Binding::keys(&[KeyCode::Escape]),
+            fire: MouseButton::Left,
+            aim: MouseButton::Right,
+            reload: Binding::keys(&[KeyCode::KeyR]),
         }
     }
 }

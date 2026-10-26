@@ -4,11 +4,13 @@
 //! Add [`NetPlugin`] after lightyear's `ClientPlugins`/`ServerPlugins` and after inserting [`Mode`].
 
 mod client;
-mod protocol;
+pub mod protocol;
 mod server;
 mod status;
 
 use bevy::prelude::*;
+
+pub use server::LinkPlayer;
 
 use crate::cli::Mode;
 

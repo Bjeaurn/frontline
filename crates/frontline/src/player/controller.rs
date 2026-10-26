@@ -1,5 +1,5 @@
-//! First-person kinematic controller for the `LocalPlayer`: mouse look, stances, sprint and
-//! move-and-slide against the static arena.
+//! First-person kinematic controller for the `LocalPlayer`: mouse look, stances, sprint,
+//! move-and-slide against the static arena, and server-ordered respawns.
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::hash::{BuildHasher, RandomState};
@@ -13,8 +13,10 @@ use bevy::{
 
 use super::BODY_RADIUS;
 use super::input::{Bindings, LookSensitivity};
+use super::life::LocalLife;
 use crate::cli::Mode;
-use crate::shared::{LocalPlayer, PlayerName, PlayerPose, Stance};
+use crate::net::protocol::Respawn;
+use crate::shared::{FromServer, GameLayer, LocalPlayer, PlayerName, PlayerPose, Stance};
 use crate::world::SpawnPoints;
 
 // Movement tuning (metres, seconds).
@@ -43,7 +45,8 @@ const GROUND_SNAP: f32 = 0.35;
 const KILL_Y: f32 = -20.0;
 
 // View tuning.
-const PITCH_LIMIT: f32 = FRAC_PI_2 - 0.01;
+/// Furthest the view may pitch up or down, in radians.
+pub const PITCH_LIMIT: f32 = FRAC_PI_2 - 0.01;
 /// Horizontal field of view, in degrees, kept constant across aspect ratios.
 const HORIZONTAL_FOV_DEG: f32 = 80.0;
 /// How fast the eye height follows stance changes (exponential decay rate, 1/s).
@@ -56,7 +59,7 @@ const HEADROOM_LIFT: f32 = 0.02;
 
 /// Movement state of the local player, beyond what `PlayerPose` carries.
 #[derive(Component, Debug)]
-pub(super) struct Motor {
+pub struct Motor {
     velocity: Vec3,
     grounded: bool,
     stamina: f32,
@@ -92,17 +95,64 @@ impl Motor {
             (self.stamina + STAMINA_REGEN * dt).min(SPRINT_STAMINA)
         };
     }
+
+    pub fn velocity(&self) -> Vec3 {
+        self.velocity
+    }
+
+    pub fn grounded(&self) -> bool {
+        self.grounded
+    }
+
+    pub fn sprinting(&self) -> bool {
+        self.sprinting
+    }
+}
+
+/// Hooks the weapon uses to adjust the controller, e.g. while aiming down sights.
+/// Lives on the `LocalPlayer`.
+#[derive(Component, Debug)]
+pub struct ControllerModifiers {
+    /// Multiplies movement speed.
+    pub move_scale: f32,
+    /// Multiplies the horizontal field of view.
+    pub fov_scale: f32,
+    /// Sprinting is not allowed (and an ongoing sprint stops).
+    pub sprint_blocked: bool,
+}
+
+impl Default for ControllerModifiers {
+    fn default() -> Self {
+        Self {
+            move_scale: 1.0,
+            fov_scale: 1.0,
+            sprint_blocked: false,
+        }
+    }
 }
 
 /// The first-person camera, a child of the local player; `height` is the smoothed eye height.
 #[derive(Component, Debug)]
-pub(super) struct EyeCamera {
+pub struct EyeCamera {
     height: f32,
+}
+
+impl EyeCamera {
+    /// Current (smoothed) eye height above the feet, in metres.
+    pub fn height(&self) -> f32 {
+        self.height
+    }
 }
 
 /// Whether the cursor is grabbed for mouse look. Input is ignored while it isn't.
 #[derive(Resource, Default, Debug)]
-pub(super) struct MouseCaptured(bool);
+pub struct MouseCaptured(bool);
+
+impl MouseCaptured {
+    pub fn active(&self) -> bool {
+        self.0
+    }
+}
 
 /// Collision shapes per stance: the body for movement and a shrunken one for headroom tests.
 #[derive(Resource)]
@@ -155,7 +205,7 @@ impl StanceShapes {
             &self.headroom[stance_index(stance)],
             center,
             Quat::IDENTITY,
-            &SpatialQueryFilter::default(),
+            &SpatialQueryFilter::from_mask(GameLayer::World),
             |_| {
                 blocked = true;
                 false
@@ -198,6 +248,7 @@ pub(super) fn spawn_local_player(
             stance,
         },
         Motor::default(),
+        ControllerModifiers::default(),
         Transform::from_translation(feet).with_rotation(Quat::from_rotation_y(yaw)),
         Visibility::default(),
         children![(
@@ -244,22 +295,45 @@ pub(super) fn grab_cursor(
     }
 }
 
+/// Applies the server's `Respawn`: teleport, face its yaw, level the view, stop moving.
+pub(super) fn apply_respawn(
+    mut respawns: MessageReader<FromServer<Respawn>>,
+    mut player: Query<(&mut PlayerPose, &mut Motor, &mut Transform), With<LocalPlayer>>,
+) {
+    let Some(FromServer(respawn)) = respawns.read().last() else {
+        return;
+    };
+    let Ok((mut pose, mut motor, mut transform)) = player.single_mut() else {
+        return;
+    };
+    info!("Respawning at {}", respawn.position);
+    *pose = PlayerPose {
+        position: respawn.position + Vec3::Y * HEADROOM_LIFT,
+        yaw: respawn.yaw,
+        pitch: 0.0,
+        stance: Stance::Standing,
+    };
+    *motor = Motor::default();
+    *transform = Transform::from_translation(pose.position)
+        .with_rotation(Quat::from_rotation_y(pose.yaw));
+}
+
 pub(super) fn mouse_look(
     captured: Res<MouseCaptured>,
+    life: Res<LocalLife>,
     motion: Res<AccumulatedMouseMotion>,
     sensitivity: Res<LookSensitivity>,
-    mut player: Query<(&mut PlayerPose, &mut Transform), With<LocalPlayer>>,
+    mut player: Query<&mut PlayerPose, With<LocalPlayer>>,
 ) {
-    if !captured.0 || motion.delta == Vec2::ZERO {
+    if !captured.0 || life.is_dead() || motion.delta == Vec2::ZERO {
         return;
     }
-    let Ok((mut pose, mut transform)) = player.single_mut() else {
+    let Ok(mut pose) = player.single_mut() else {
         return;
     };
     let delta = motion.delta * sensitivity.0;
     pose.yaw = (pose.yaw - delta.x + PI).rem_euclid(TAU) - PI;
     pose.pitch = (pose.pitch - delta.y).clamp(-PITCH_LIMIT, PITCH_LIMIT);
-    transform.rotation = Quat::from_rotation_y(pose.yaw);
 }
 
 /// The stance-relevant key press this frame, in priority order.
@@ -301,6 +375,7 @@ fn next_stance(
 /// Applies stance keys. Taller stances need headroom; Space jumps only when already standing.
 pub(super) fn change_stance(
     captured: Res<MouseCaptured>,
+    life: Res<LocalLife>,
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<Bindings>,
     shapes: Res<StanceShapes>,
@@ -311,7 +386,7 @@ pub(super) fn change_stance(
         return;
     };
     motor.jump_requested = false;
-    if !captured.0 {
+    if !captured.0 || life.is_dead() {
         return;
     }
 
@@ -343,22 +418,32 @@ fn axis(negative: bool, positive: bool) -> f32 {
 pub(super) fn move_player(
     time: Res<Time>,
     captured: Res<MouseCaptured>,
+    life: Res<LocalLife>,
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<Bindings>,
     shapes: Res<StanceShapes>,
     spawns: Res<SpawnPoints>,
     move_and_slide: MoveAndSlide,
-    mut player: Query<(&mut PlayerPose, &mut Motor, &mut Transform), With<LocalPlayer>>,
+    mut player: Query<
+        (
+            &mut PlayerPose,
+            &mut Motor,
+            &mut Transform,
+            &ControllerModifiers,
+        ),
+        With<LocalPlayer>,
+    >,
 ) {
     let dt = time.delta_secs();
-    let Ok((mut pose, mut motor, mut transform)) = player.single_mut() else {
+    let Ok((mut pose, mut motor, mut transform, modifiers)) = player.single_mut() else {
         return;
     };
     if dt <= 0.0 {
         return;
     }
 
-    let pressed = |binding: &super::input::Binding| captured.0 && binding.pressed(&keys);
+    let active = captured.0 && !life.is_dead();
+    let pressed = |binding: &super::input::Binding| active && binding.pressed(&keys);
     let (forward, back) = (pressed(&bindings.forward), pressed(&bindings.back));
     let input = Vec2::new(
         axis(pressed(&bindings.left), pressed(&bindings.right)),
@@ -366,8 +451,11 @@ pub(super) fn move_player(
     );
 
     // Sprint: forward only, standing only, limited by stamina.
-    let wants_sprint =
-        pressed(&bindings.sprint) && forward && !back && pose.stance == Stance::Standing;
+    let wants_sprint = pressed(&bindings.sprint)
+        && forward
+        && !back
+        && pose.stance == Stance::Standing
+        && !modifiers.sprint_blocked;
     motor.tick_sprint(wants_sprint, dt);
 
     let speed = match pose.stance {
@@ -375,7 +463,7 @@ pub(super) fn move_player(
         Stance::Standing => WALK_SPEED,
         Stance::Crouching => CROUCH_SPEED,
         Stance::Prone => PRONE_SPEED,
-    };
+    } * modifiers.move_scale;
     let wish = Quat::from_rotation_y(pose.yaw) * Vec3::new(input.x, 0.0, -input.y).normalize_or_zero()
         * speed;
 
@@ -401,7 +489,7 @@ pub(super) fn move_player(
     let shape = shapes.body(pose.stance);
     let half_height = pose.stance.body_height() / 2.0;
     let config = MoveAndSlideConfig::default();
-    let filter = SpatialQueryFilter::default();
+    let filter = SpatialQueryFilter::from_mask(GameLayer::World);
     let out = move_and_slide.move_and_slide(
         shape,
         pose.position + Vec3::Y * half_height,
@@ -444,7 +532,8 @@ pub(super) fn move_player(
         pose.position = random_spawn(&spawns) + Vec3::Y * HEADROOM_LIFT;
         *motor = Motor::default();
     }
-    transform.translation = pose.position;
+    *transform = Transform::from_translation(pose.position)
+        .with_rotation(Quat::from_rotation_y(pose.yaw));
 }
 
 /// Places the camera at the (smoothed) eye height and applies pitch.
@@ -464,13 +553,18 @@ pub(super) fn update_eye(
     }
 }
 
-/// Keeps the horizontal field of view at `HORIZONTAL_FOV_DEG` whatever the window shape.
-pub(super) fn apply_horizontal_fov(mut cameras: Query<&mut Projection, With<EyeCamera>>) {
+/// Keeps the horizontal field of view at `HORIZONTAL_FOV_DEG` (times the weapon's
+/// `fov_scale`) whatever the window shape.
+pub(super) fn apply_horizontal_fov(
+    player: Query<&ControllerModifiers, With<LocalPlayer>>,
+    mut cameras: Query<&mut Projection, With<EyeCamera>>,
+) {
+    let scale = player.single().map_or(1.0, |modifiers| modifiers.fov_scale);
     for mut projection in &mut cameras {
         let Projection::Perspective(perspective) = &*projection else {
             continue;
         };
-        let half = HORIZONTAL_FOV_DEG.to_radians() / 2.0;
+        let half = (HORIZONTAL_FOV_DEG * scale).to_radians() / 2.0;
         let fov = 2.0 * (half.tan() / perspective.aspect_ratio).atan();
         if (perspective.fov - fov).abs() > 1e-4
             && let Projection::Perspective(perspective) = &mut *projection

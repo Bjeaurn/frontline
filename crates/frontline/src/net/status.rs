@@ -1,5 +1,5 @@
-//! Top-left overlay: connection state and every known player with distance, so a failed
-//! connection or a missing remote player is visible in-game instead of only in the log.
+//! Top-left overlay: connection state and every known player with kills/deaths and distance,
+//! so a failed connection or a missing remote player is visible in-game, not only in the log.
 
 use std::fmt::Write;
 
@@ -8,7 +8,7 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
 use super::protocol::PlayerOwner;
-use crate::shared::{LocalPlayer, PlayerName, PlayerPose};
+use crate::shared::{LocalPlayer, PlayerName, PlayerPose, PlayerStats};
 
 const FONT_SIZE: f32 = 14.0;
 const TEXT_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.9);
@@ -47,7 +47,12 @@ pub(super) fn update_status_text(
         With<Client>,
     >,
     local: Query<&PlayerPose, With<LocalPlayer>>,
-    players: Query<(&PlayerOwner, &PlayerName, Option<&PlayerPose>)>,
+    players: Query<(
+        &PlayerOwner,
+        &PlayerName,
+        Option<&PlayerPose>,
+        Option<&PlayerStats>,
+    )>,
     mut text: Single<&mut Text, With<StatusText>>,
 ) {
     let mut out = String::new();
@@ -65,7 +70,7 @@ pub(super) fn update_status_text(
     }
 
     let here = local.single().ok().map(|pose| pose.position);
-    for (owner, name, pose) in &players {
+    for (owner, name, pose, stats) in &players {
         let name = if name.0.is_empty() { "?" } else { name.0.as_str() };
         let _ = write!(out, "\n  {name}");
         if Some(owner.0) == local_id {
@@ -78,6 +83,9 @@ pub(super) fn update_status_text(
                 (None, _) => out.push_str("  (no position yet)"),
                 (Some(_), None) => {}
             }
+        }
+        if let Some(stats) = stats {
+            let _ = write!(out, "  K {} / D {}", stats.kills, stats.deaths);
         }
     }
 

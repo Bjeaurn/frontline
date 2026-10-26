@@ -1,9 +1,12 @@
 //! Frontline: one binary for client, Host (listen server + local player) and Dedicated Server.
 
 mod cli;
+mod combat;
+mod data;
 mod net;
 mod player;
 mod shared;
+mod weapon;
 mod world;
 
 use std::time::Duration;
@@ -53,9 +56,16 @@ fn main() -> AppExit {
         )),
         Mode::Dedicated { .. } => app.add_plugins(ServerPlugins { tick_duration }),
     };
-    app.add_plugins(world::WorldPlugin);
+    app.add_plugins((data::DataPlugin, world::WorldPlugin));
     if !matches!(mode, Mode::Dedicated { .. }) {
-        app.add_plugins((player::LocalControllerPlugin, player::RemotePlayerVisualsPlugin));
+        app.add_plugins((
+            player::LocalControllerPlugin,
+            player::RemotePlayerVisualsPlugin,
+            weapon::WeaponClientPlugin,
+        ));
+    }
+    if !matches!(mode, Mode::Client { .. }) {
+        app.add_plugins(combat::CombatServerPlugin);
     }
     app.insert_resource(mode);
     app.add_plugins(net::NetPlugin);

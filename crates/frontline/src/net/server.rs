@@ -10,7 +10,9 @@ use lightyear::prelude::*;
 use super::protocol::{
     CONNECTION_TIMEOUT_SECS, Hello, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseUpdate,
 };
-use crate::shared::{PlayerName, PlayerPose};
+use crate::combat::PoseGate;
+use crate::data::GameData;
+use crate::shared::{Health, PlayerName, PlayerPose, PlayerStats};
 
 pub(super) struct ServerNetPlugin;
 
@@ -25,7 +27,7 @@ impl Plugin for ServerNetPlugin {
 
 /// The server-side Player entity of a client link.
 #[derive(Component, Debug)]
-struct LinkPlayer(Entity);
+pub struct LinkPlayer(pub Entity);
 
 /// Spawns the netcode/UDP server listening on all interfaces and starts it.
 pub(super) fn start_server(commands: &mut Commands, port: u16) -> Entity {
@@ -58,6 +60,7 @@ fn log_started(trigger: On<Add<Started>>, servers: Query<&LocalAddr, With<Server
 fn spawn_player(
     trigger: On<Add<Connected>>,
     links: Query<&RemoteId, With<ClientOf>>,
+    data: Res<GameData>,
     mut commands: Commands,
 ) {
     let Ok(&RemoteId(peer)) = links.get(trigger.entity) else {
@@ -69,6 +72,8 @@ fn spawn_player(
             Name::new(format!("Player {peer}")),
             PlayerPose::default(),
             PlayerName::default(),
+            Health(data.rules().max_health),
+            PlayerStats::default(),
             PlayerOwner(peer),
             Replicate::to_clients(NetworkTarget::All),
             InterpolationTarget::to_clients(NetworkTarget::AllExceptSingle(peer)),
@@ -118,16 +123,27 @@ fn receive_hello(
     }
 }
 
+/// Writes each client's newest pose into its Player, except while a `PoseGate` holds it at a
+/// fresh spawn point.
 fn receive_poses(
     mut links: Query<(&LinkPlayer, &mut MessageReceiver<PoseUpdate>)>,
-    mut poses: Query<&mut PlayerPose>,
+    mut poses: Query<(&mut PlayerPose, Option<&PoseGate>)>,
+    mut commands: Commands,
 ) {
     for (player, mut receiver) in &mut links {
         let Some(PoseUpdate(latest)) = receiver.receive().last() else {
             continue;
         };
-        if let Ok(mut pose) = poses.get_mut(player.0) {
-            pose.set_if_neq(latest);
+        let Ok((mut pose, gate)) = poses.get_mut(player.0) else {
+            continue;
+        };
+        if let Some(gate) = gate {
+            if !gate.releases(latest.position) {
+                continue;
+            }
+            debug!("{}: client pose accepted again after respawn", player.0);
+            commands.entity(player.0).remove::<PoseGate>();
         }
+        pose.set_if_neq(latest);
     }
 }

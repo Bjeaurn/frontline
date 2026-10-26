@@ -6,7 +6,8 @@ use bevy::prelude::*;
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::shared::{PlayerName, PlayerPose};
+use crate::data::WeaponId;
+use crate::shared::{Health, PlayerName, PlayerPose, PlayerStats};
 
 /// Netcode protocol id; client and server must agree on it.
 pub const PROTOCOL_ID: u64 = 0x4652_4f4e_544c_494e;
@@ -40,12 +41,70 @@ pub struct PoseChannel;
 /// Reliable, ordered channel for session control messages.
 pub struct ControlChannel;
 
+/// Reliable, unordered channel for shots (client -> server).
+pub struct ShotChannel;
+
+/// Reliable, ordered channel for gameplay events (server -> client).
+pub struct EventChannel;
+
+/// Unreliable channel for cosmetic effects such as tracers (server -> client).
+pub struct EffectChannel;
+
+/// Client -> server: the local player fired one round. `direction` already includes spread
+/// and recoil (clients are trusted, docs/adr/0002); the server decides what it hit.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FireShot {
+    pub weapon: WeaponId,
+    pub origin: Vec3,
+    pub direction: Vec3,
+}
+
+/// Server -> all clients except the shooter: draw a tracer for someone else's shot.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ShotTracer {
+    pub shooter: PeerId,
+    pub origin: Vec3,
+    pub end: Vec3,
+}
+
+/// Server -> shooter: one of their shots hit a player (hitmarker).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HitConfirm {
+    pub headshot: bool,
+    pub kill: bool,
+}
+
+/// Server -> victim: they took damage from a shooter standing at `from`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Damaged {
+    pub amount: f32,
+    pub from: Vec3,
+}
+
+/// Server -> all clients: a kill-feed line.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct KillFeed {
+    pub killer: String,
+    pub victim: String,
+    pub weapon: WeaponId,
+    pub headshot: bool,
+}
+
+/// Server -> the respawning player: move the local player here and resume control.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Respawn {
+    pub position: Vec3,
+    pub yaw: f32,
+}
+
 pub(super) fn register(app: &mut App) {
     app.component::<PlayerPose>()
         .replicate()
         .add_interpolation_with(lerp_pose);
     app.component::<PlayerName>().replicate();
     app.component::<PlayerOwner>().replicate();
+    app.component::<Health>().replicate();
+    app.component::<PlayerStats>().replicate();
 
     app.add_channel::<PoseChannel>(ChannelSettings {
         mode: ChannelMode::SequencedUnreliable,
@@ -62,6 +121,35 @@ pub(super) fn register(app: &mut App) {
         .add_direction(NetworkDirection::ClientToServer);
     app.register_message::<Hello>()
         .add_direction(NetworkDirection::ClientToServer);
+
+    app.add_channel::<ShotChannel>(ChannelSettings {
+        mode: ChannelMode::UnorderedReliable(ReliableSettings::default()),
+        ..default()
+    })
+    .add_direction(NetworkDirection::ClientToServer);
+    app.add_channel::<EventChannel>(ChannelSettings {
+        mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
+        ..default()
+    })
+    .add_direction(NetworkDirection::ServerToClient);
+    app.add_channel::<EffectChannel>(ChannelSettings {
+        mode: ChannelMode::UnorderedUnreliable,
+        ..default()
+    })
+    .add_direction(NetworkDirection::ServerToClient);
+
+    app.register_message::<FireShot>()
+        .add_direction(NetworkDirection::ClientToServer);
+    app.register_message::<ShotTracer>()
+        .add_direction(NetworkDirection::ServerToClient);
+    app.register_message::<HitConfirm>()
+        .add_direction(NetworkDirection::ServerToClient);
+    app.register_message::<Damaged>()
+        .add_direction(NetworkDirection::ServerToClient);
+    app.register_message::<KillFeed>()
+        .add_direction(NetworkDirection::ServerToClient);
+    app.register_message::<Respawn>()
+        .add_direction(NetworkDirection::ServerToClient);
 }
 
 /// Interpolates between two confirmed poses: linear position and pitch, shortest-arc yaw,

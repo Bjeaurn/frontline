@@ -1,0 +1,25 @@
+// Weapon tuning. Read at startup from ./data/ (falls back to the copy built into the binary).
+// Distances in metres, angles in degrees, times in seconds.
+{
+    AssaultRifle: (
+        name: "M4 (AR)",
+        rpm: 750.0,
+        damage_near: 30.0,
+        damage_far: 20.0,
+        falloff_start: 20.0,
+        falloff_end: 40.0,
+        headshot_multiplier: 1.4,
+        range: 300.0,
+        magazine: 30,
+        reload_secs: 2.2,
+        hip_spread_deg: 3.0,
+        ads_spread_deg: 0.25,
+        ads_secs: 0.25,
+        ads_fov_scale: 0.7,
+        ads_move_scale: 0.6,
+        recoil_pitch_deg: 0.9,
+        recoil_yaw_deg: 0.35,
+        recoil_recovery_per_sec: 6.0,
+        ads_recoil_scale: 0.55,
+    ),
+}

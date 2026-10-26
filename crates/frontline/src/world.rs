@@ -4,6 +4,7 @@ use avian3d::prelude::*;
 use bevy::{mesh::MeshPlugin, prelude::*};
 
 use crate::cli::Mode;
+use crate::shared::GameLayer;
 
 /// Arena floor is `ARENA_SIZE` x `ARENA_SIZE` metres, centred on the origin, top face at y = 0.
 const ARENA_SIZE: f32 = 60.0;
@@ -42,6 +43,11 @@ pub struct SpawnPoints(pub Vec<Vec3>);
 /// Run condition: this process draws the world (Client or Host).
 pub fn is_rendering(mode: Res<Mode>) -> bool {
     !matches!(*mode, Mode::Dedicated { .. })
+}
+
+/// Yaw that faces the arena centre from `position`.
+pub fn yaw_towards_centre(position: Vec3) -> f32 {
+    position.x.atan2(position.z)
 }
 
 /// Surface category of an arena block; picks its greybox colour.
@@ -112,6 +118,7 @@ fn spawn_arena(mut commands: Commands) {
             transform,
             RigidBody::Static,
             Collider::cuboid(block.size.x, block.size.y, block.size.z),
+            CollisionLayers::new(GameLayer::World, LayerMask::ALL),
         ));
     }
 }
