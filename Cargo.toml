@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.98"
+license = "UNLICENSED"
+publish = false
+
+# Bevy, lightyear, avian3d and bevy_trenchbroom are pinned as one compatible set
+# (all on Bevy 0.20). Upgrade them together, never one at a time. See docs/adr/0001.
+[workspace.dependencies]
+bevy = "=0.20.0"
+lightyear = { version = "=0.31.0", default-features = false }
+avian3d = "=0.8.0"
+clap = { version = "4.6", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+
+# Bevy systems routinely take many params and complex query types.
+[workspace.lints.clippy]
+too_many_arguments = "allow"
+type_complexity = "allow"
+
+# Fast iteration: optimise dependencies, keep our own code quick to compile.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+debug = false
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

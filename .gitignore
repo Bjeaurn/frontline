@@ -1,0 +1,5 @@
+/target
+.DS_Store
+
+# Homage Maps and other private content; must never be committed (docs/adr/0003).
+/content/private/
