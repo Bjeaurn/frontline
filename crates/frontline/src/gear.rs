@@ -381,6 +381,7 @@ impl GameData {
             stats.muzzle_offset.2 -= muzzle.muzzle_length;
         }
         stats.reload_secs *= perks.reload_time_mul;
+        stats.empty_reload_secs *= perks.reload_time_mul;
         stats.move_scale *= perks.move_speed_mul;
         stats
     }
@@ -455,14 +456,15 @@ mod tests {
             PerkId::StoppingPower,
             PerkId::Marathon,
         ]);
-        assert!((effects.reload_time_mul - 0.6).abs() < 1e-6);
+        assert!((effects.reload_time_mul - 0.7).abs() < 1e-6);
         assert!((effects.damage_mul - 1.25).abs() < 1e-6);
         assert!((effects.sprint_stamina_mul - 2.5).abs() < 1e-6);
         assert!(!effects.silent_footsteps && !effects.scavenger);
 
         let base = data.weapon(WeaponId::Smg);
         let stats = data.effective_weapon(WeaponId::Smg, Attachments::default(), &effects);
-        assert!((stats.reload_secs - base.reload_secs * 0.6).abs() < 1e-4);
+        assert!((stats.reload_secs - base.reload_secs * 0.7).abs() < 1e-4);
+        assert!((stats.empty_reload_secs - base.empty_reload_secs * 0.7).abs() < 1e-4);
 
         let light = data.perk_effects(&[PerkId::Lightweight, PerkId::Ninja, PerkId::Scavenger]);
         assert!((light.move_speed_mul - 1.1).abs() < 1e-6);

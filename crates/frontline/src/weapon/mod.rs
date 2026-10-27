@@ -81,6 +81,8 @@ pub struct HeldWeapon {
     rounds: u32,
     /// Seconds left of the reload in progress.
     reload_left: Option<f32>,
+    /// Full length of the reload in progress (tactical or empty).
+    reload_total: f32,
     /// Seconds until the next round may fire; non-positive when ready.
     cooldown: f32,
     /// Trigger held, counting only presses made while the cursor was already grabbed.
@@ -174,6 +176,7 @@ impl HeldWeapon {
             rounds: stats.magazine,
             stats,
             reload_left: None,
+            reload_total: 0.0,
             cooldown: 0.0,
             trigger: false,
             pull_spent: false,
@@ -191,19 +194,18 @@ impl HeldWeapon {
 
     fn start_reload(&mut self, stats: &WeaponStats) {
         if self.reload_left.is_none() && self.rounds < stats.magazine {
-            info!(
-                "Reloading ({} rounds left, {:.2} s)",
-                self.rounds, stats.reload_secs
-            );
-            self.reload_left = Some(stats.reload_secs);
+            let secs = stats.reload_secs_for(self.rounds);
+            info!("Reloading ({} rounds left, {:.2} s)", self.rounds, secs);
+            self.reload_total = secs;
+            self.reload_left = Some(secs);
             self.bolt = None;
         }
     }
 
     /// Reload progress from 0 to 1, if reloading.
-    fn reload_progress(&self, stats: &WeaponStats) -> Option<f32> {
+    fn reload_progress(&self) -> Option<f32> {
         self.reload_left
-            .map(|left| 1.0 - left / stats.reload_secs.max(f32::EPSILON))
+            .map(|left| 1.0 - left / self.reload_total.max(f32::EPSILON))
     }
 
     /// Advances a reload in progress by `dt` seconds; sprinting cancels it.
@@ -393,7 +395,7 @@ fn equip(loadout: &Loadout, data: &GameData) -> (HeldWeapon, Stowed, Kit) {
     let secondary =
         Arc::new(data.effective_weapon(loadout.secondary, Attachments::default(), &effects));
     info!(
-        "Loadout \"{}\": {} {:?}, {}; Perks {:?}; effective: reload {:.2} s, damage x{:.2}, \
+        "Loadout \"{}\": {} {:?}, {}; Perks {:?}; effective: reload {:.2} s (empty {:.2} s), damage x{:.2}, \
          move x{:.2}, sprint stamina {:.1} s, falloff {:.0}-{:.0} m",
         loadout.name,
         primary.name,
@@ -401,6 +403,7 @@ fn equip(loadout: &Loadout, data: &GameData) -> (HeldWeapon, Stowed, Kit) {
         secondary.name,
         loadout.perks,
         primary.reload_secs,
+        primary.empty_reload_secs,
         effects.damage_mul,
         primary.move_scale,
         data.movement.sprint_stamina_secs * effects.sprint_stamina_mul,
@@ -890,5 +893,33 @@ mod tests {
         weapon.tick_reload(&stats, 0.1, true);
         assert_eq!(weapon.reload_left, None);
         assert_eq!(weapon.rounds, 0);
+    }
+
+    #[test]
+    fn an_empty_magazine_reloads_slower_and_the_dip_follows_the_actual_time() {
+        let stats = WeaponStats {
+            reload_secs: 1.0,
+            empty_reload_secs: 2.0,
+            ..WeaponStats::fixture()
+        };
+        let mut tactical = held(WeaponId::AssaultRifle, &stats);
+        tactical.rounds = 5;
+        tactical.start_reload(&stats);
+        assert_eq!(tactical.reload_left, Some(1.0));
+        tactical.tick_reload(&stats, 0.5, false);
+        assert_eq!(tactical.reload_progress(), Some(0.5));
+
+        let mut empty = held(WeaponId::AssaultRifle, &stats);
+        empty.rounds = 0;
+        empty.start_reload(&stats);
+        assert_eq!(empty.reload_left, Some(2.0));
+        empty.tick_reload(&stats, 1.0, false);
+        assert_eq!(
+            empty.reload_progress(),
+            Some(0.5),
+            "half way through the longer reload"
+        );
+        empty.tick_reload(&stats, 1.0, false);
+        assert_eq!((empty.rounds, empty.reload_left), (stats.magazine, None));
     }
 }

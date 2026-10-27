@@ -65,20 +65,23 @@ On joining, pick a Team (and then a Loadout). The mouse is grabbed while you pla
 | Move | WASD |
 | Sprint | Left Shift (forward only, limited stamina) |
 | Jump / stand up | Space |
-| Mantle | Move into a ledge up to ~1.6 m (jumping helps) |
+| Mantle | Move into a ledge up to ~1.6 m (jumping helps); steps and ramps (stairs) up to 0.45 m per step are simply walked up at full speed |
 | Crouch | C |
 | Prone (while sprinting: dive) | Left Ctrl or Z |
 | Fire (full auto, or one round per click for semi/bolt-action) | Left mouse |
 | Aim down sights | Right mouse (hold) |
-| Reload | R (sprinting cancels it) |
+| Reload | R (sprinting cancels it). Takes longer from an empty magazine (AR 2.5 / 3.1 s, SMG 2.4 / 2.9, Sniper 3.5 / 4.0, Pistol 1.7 / 2.1; Sleight of Hand x0.7) |
 | Scoreboard | Tab (hold) |
 | Plant / defuse the bomb (Search & Destroy; hold) | F |
-| Switch Team | T (dying counts as a switch, no credit to anyone) |
+| Switch Team | T (switching kills you, no credit to anyone, and the death screen shows until you respawn on the new Team's spawns; in Search & Destroy you wait for the next round) |
 | Change Loadout (applies on next spawn, or at once within 5 s of spawning) | B |
 | Primary / Secondary (lowers one and raises the other, about 0.4 s) | 1 / 2, or the mouse wheel |
-| Pause menu (Resume, Change Team, Change Loadout, Settings, Leave Game) | Esc; Esc again steps back |
+| Respawn early (dead, once `min_respawn_secs` have passed; the death screen says when) | Space or click |
+| Pause menu (Resume, Change Team, Change Loadout, Respawn, Settings, Leave Game) | Esc; Esc again steps back. RESPAWN is for getting unstuck: it kills you with no credit (a death in your stats, "X respawned" in the kill feed) and respawns you as usual; not in Search & Destroy |
 
-Tuning lives in `data/`: `weapons.ron` (including per-Weapon Hit Zone damage multipliers), `attachments.ron` (Optics and Muzzles as stat modifiers), `perks.ron` (the six Perks and the ammo pack), `loadouts.ron` (Default Loadouts, the instant-swap window and the Weapon switch time), `movement.ron`, `match_rules.ron` (presets, each with its HUD block), `game_modes.ron` (score and time limits, capture, HQ and bomb tuning of every Game Mode), `factions.ron`, `maps.ron` (every built-in Map: file, look, Game Modes, and the two Factions its theater plays), `looks.ron` (per-Map look presets: grade, fog, sun, ambient, sky), `presentation.ron` (how long bodies stay and how many at once) and `progression.ron` (XP awards, the Level curve, unlocks and camo Challenges). The game reads them at startup from `./data/` (relative to where you launch it), so edit and restart to retune. Without that folder it uses the copies built into the binary. Both machines should use the same files: damage and score are decided on the server, but movement, recoil, spread and fire rate come from each client's own copy.
+Fall damage (CoD style, from the peak of the fall): none below `min_height` (4.5 m by default, 3.5 m in hardcore), then linear up to a lethal fall at `max_height` (12 m, 8 m in hardcore). The kill feed says "X fell to their death". The Tab Scoreboard's header shows the win condition, e.g. `FIRST TO 50 · 10:00 LIMIT` (Search & Destroy: `FIRST TO 4 ROUNDS`), with the Host's limit overrides applied.
+
+Tuning lives in `data/`: `weapons.ron` (including per-Weapon Hit Zone damage multipliers), `attachments.ron` (Optics and Muzzles as stat modifiers), `perks.ron` (the six Perks and the ammo pack), `loadouts.ron` (Default Loadouts, the instant-swap window and the Weapon switch time), `movement.ron`, `match_rules.ron` (presets: health, regen, respawn delay and the earliest early respawn, damage scale, friendly fire, fall damage and the HUD block), `game_modes.ron` (score and time limits, capture, HQ and bomb tuning of every Game Mode), `factions.ron`, `maps.ron` (every built-in Map: file, look, Game Modes, and the two Factions its theater plays), `looks.ron` (per-Map look presets: grade, fog, sun, ambient, sky), `presentation.ron` (how long bodies stay and how many at once) and `progression.ron` (XP awards, the Level curve, unlocks and camo Challenges). The game reads them at startup from `./data/` (relative to where you launch it), so edit and restart to retune. Without that folder it uses the copies built into the binary. Both machines should use the same files: damage and score are decided on the server, but movement, recoil, spread and fire rate come from each client's own copy.
 
 ## Loadouts
 
@@ -92,7 +95,7 @@ The Profile is a client-local file, `<config dir>/frontline/profile.ron`, next t
 |---|---|
 | Optic | none (iron sights), Red Dot, ACOG (about 4x zoom, slower to aim, swayier; not on the Sniper) |
 | Muzzle | none, Silencer (no muzzle flash, a quieter and duller shot, damage falls off at 0.75x the distance) |
-| Perk 1 | Sleight of Hand (reload 40% faster), Scavenger (walk over a dead player's ammo pack to refill ammo) |
+| Perk 1 | Sleight of Hand (reload 30% faster), Scavenger (walk over a dead player's ammo pack to refill ammo) |
 | Perk 2 | Stopping Power (+25% bullet damage), Lightweight (+10% move speed) |
 | Perk 3 | Marathon (sprint 2.5x as long), Ninja (your footsteps make no sound) |
 

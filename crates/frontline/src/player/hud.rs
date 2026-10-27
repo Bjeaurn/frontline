@@ -7,12 +7,12 @@ use std::f32::consts::PI;
 
 use bevy::prelude::*;
 
-use super::life::LocalLife;
+use super::life::{LocalLife, can_request_respawn, respawn_hold};
 use crate::data::{ActiveRules, GameData};
 use crate::flow::AppState;
 use crate::match_hud::{FRIENDLY_COLOR, relation_color};
-use crate::modes::{ModeView, SdPhaseView};
-use crate::net::protocol::{Damaged, KillFeed};
+use crate::modes::ModeView;
+use crate::net::protocol::{Damaged, DeathCause, KillFeed};
 use crate::shared::{
     FromServer, Health, LocalPlayer, LocalPlayerReplica, PlayerName, PlayerPose, PlayerTeam,
 };
@@ -338,44 +338,62 @@ pub(super) fn add_kill_feed_lines(
         ..default()
     };
     while let Some((_, line)) = pending.0.pop_front_if(|(at, _)| *at <= now) {
-        debug!("Kill feed shows: {} killed {}", line.killer, line.victim);
+        debug!("Kill feed shows: {} died ({:?})", line.victim, line.cause);
         if existing.len() >= FEED_LINES {
             commands.entity(existing.remove(0)).try_despawn();
         }
-        let weapon = &data.weapon(line.weapon).name;
-        let headshot = if line.headshot { "  (headshot)" } else { "" };
-        let killer = name_color(&line.killer);
         let victim = name_color(&line.victim);
-        let entity = commands
-            .spawn((
-                KillFeedLine { born: now },
-                Text::new(line.killer.clone()),
+        let span = |text: String, color: Color| {
+            (
+                TextSpan::new(text),
                 font.clone(),
-                TextColor(killer),
-                FeedColor(killer),
-                ChildOf(list),
-                children![
-                    (
-                        TextSpan::new(format!("  [{weapon}]  ")),
+                TextColor(color),
+                FeedColor(color),
+            )
+        };
+        let entity = match &line.cause {
+            DeathCause::Shot {
+                killer,
+                weapon,
+                headshot,
+            } => {
+                let weapon = &data.weapon(*weapon).name;
+                let headshot = if *headshot { "  (headshot)" } else { "" };
+                let killer_color = name_color(killer);
+                commands
+                    .spawn((
+                        KillFeedLine { born: now },
+                        Text::new(killer.clone()),
                         font.clone(),
-                        TextColor(FEED_COLOR),
-                        FeedColor(FEED_COLOR),
-                    ),
-                    (
-                        TextSpan::new(line.victim.clone()),
+                        TextColor(killer_color),
+                        FeedColor(killer_color),
+                        ChildOf(list),
+                        children![
+                            span(format!("  [{weapon}]  "), FEED_COLOR),
+                            span(line.victim.clone(), victim),
+                            span(headshot.to_owned(), FEED_COLOR),
+                        ],
+                    ))
+                    .id()
+            }
+            DeathCause::Fall | DeathCause::Respawn => {
+                let what = match line.cause {
+                    DeathCause::Fall => " fell to their death",
+                    _ => " respawned",
+                };
+                commands
+                    .spawn((
+                        KillFeedLine { born: now },
+                        Text::new(line.victim.clone()),
                         font.clone(),
                         TextColor(victim),
                         FeedColor(victim),
-                    ),
-                    (
-                        TextSpan::new(headshot),
-                        font.clone(),
-                        TextColor(FEED_COLOR),
-                        FeedColor(FEED_COLOR),
-                    ),
-                ],
-            ))
-            .id();
+                        ChildOf(list),
+                        children![span(what.to_owned(), FEED_COLOR)],
+                    ))
+                    .id()
+            }
+        };
         existing.push(entity);
     }
 }
@@ -422,21 +440,24 @@ pub(super) fn update_death_screen(
     if !shown {
         return;
     }
-    let heading = match life.killer() {
-        Some(killer) => format!("You were killed by {killer}"),
+    let heading = match life.cause() {
+        Some(DeathCause::Shot { killer, .. }) => format!("You were killed by {killer}"),
+        Some(DeathCause::Fall) => "You fell to your death".to_owned(),
+        Some(DeathCause::Respawn) => "You respawned".to_owned(),
         None if life.switched_team() => "You switched to the other team".to_owned(),
         None => "You were killed".to_owned(),
     };
-    let left = f64::from(rules.get().respawn_delay_secs) - life.secs_dead(time.elapsed_secs_f64());
-    let status = match modes.single() {
-        Ok(ModeView::Headquarters(hq)) if hq.position.is_some() && hq.zone.owner == life.team() => {
-            "Your team holds the HQ: waiting for it to fall".to_owned()
-        }
-        Ok(ModeView::SearchAndDestroy(sd)) if sd.phase != SdPhaseView::Waiting => {
-            "Waiting for the next round".to_owned()
-        }
-        _ if left > 0.0 => format!("Respawning in {left:.1}"),
-        _ => "Respawning...".to_owned(),
+    let now = time.elapsed_secs_f64();
+    let rules = rules.get();
+    let left = f64::from(rules.respawn_delay_secs) - life.secs_dead(now);
+    let status = if let Some(hold) = respawn_hold(modes.single().ok(), life.team()) {
+        hold.to_owned()
+    } else if left <= 0.0 {
+        "Respawning...".to_owned()
+    } else if can_request_respawn(&life, modes.single().ok(), rules, now) {
+        "Press SPACE or click to respawn".to_owned()
+    } else {
+        format!("Respawning in {left:.1}")
     };
     if title.0 != heading {
         title.0 = heading;

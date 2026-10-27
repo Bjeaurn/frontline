@@ -1,7 +1,8 @@
 //! Client side (Client and the Host's local client): connects, reports the local pose every
 //! fixed tick, marks replicated players as `RemotePlayer` or `LocalPlayerReplica`, and bridges
 //! gameplay messages: server messages become `FromServer<M>`; `ToServer<FireShot>` and
-//! `ToServer<ChooseTeam>` are sent.
+//! `ToServer<ChooseTeam>`, `ToServer<FallDamage>`, `ToServer<RequestRespawn>` and
+//! `ToServer<ForceRespawn>` are sent.
 
 use std::hash::{BuildHasher, RandomState};
 use std::net::{Ipv4Addr, SocketAddr};
@@ -13,8 +14,9 @@ use lightyear::prelude::*;
 
 use super::protocol::{
     AmmoRefill, BombExploded, CONNECTION_TIMEOUT_SECS, ChooseTeam, ControlChannel, Damaged,
-    EquipPerks, FireShot, Hello, HitConfirm, KillFeed, ObjectiveHold, PRIVATE_KEY, PROTOCOL_ID,
-    PlayerOwner, PoseChannel, PoseUpdate, Respawn, ShotChannel, ShotTracer, XpAward,
+    EquipPerks, FallDamage, FireShot, ForceRespawn, Hello, HitConfirm, KillFeed, ObjectiveHold,
+    PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseChannel, PoseUpdate, RequestRespawn, Respawn,
+    ShotChannel, ShotTracer, XpAward,
 };
 use crate::flow::Settings;
 use crate::gear::PerkSet;
@@ -38,6 +40,9 @@ impl Plugin for ClientNetPlugin {
             .add_message::<ToServer<FireShot>>()
             .add_message::<ToServer<ChooseTeam>>()
             .add_message::<ToServer<ObjectiveHold>>()
+            .add_message::<ToServer<FallDamage>>()
+            .add_message::<ToServer<RequestRespawn>>()
+            .add_message::<ToServer<ForceRespawn>>()
             .add_observer(on_connected)
             .add_observer(on_disconnected)
             .add_systems(FixedUpdate, send_pose)
@@ -62,6 +67,9 @@ impl Plugin for ClientNetPlugin {
                     send_perks,
                     send_team_choices,
                     send_objective_holds,
+                    send_control::<FallDamage>,
+                    send_control::<RequestRespawn>,
+                    send_control::<ForceRespawn>,
                 )
                     .before(MessageSystems::Send),
             )
@@ -258,6 +266,18 @@ fn send_objective_holds(
     for mut sender in &mut senders {
         for ToServer(hold) in holds.read() {
             sender.send::<ControlChannel>(*hold);
+        }
+    }
+}
+
+/// Sends each `ToServer<M>` on the `ControlChannel`.
+fn send_control<M: lightyear::prelude::Message + Clone>(
+    mut messages: MessageReader<ToServer<M>>,
+    mut senders: Query<&mut MessageSender<M>, (With<Client>, With<Connected>)>,
+) {
+    for mut sender in &mut senders {
+        for ToServer(message) in messages.read() {
+            sender.send::<ControlChannel>(message.clone());
         }
     }
 }

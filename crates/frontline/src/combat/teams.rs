@@ -1,7 +1,5 @@
 //! Team choice (server): applies each client's `ChooseTeam`.
 
-use std::time::Duration;
-
 use bevy::prelude::*;
 use lightyear::prelude::*;
 
@@ -51,10 +49,12 @@ pub(super) fn choose_teams(
             }
             health.0 = 0.0;
             set_hitboxes_enabled(&mut commands, hitboxes, false);
-            commands.entity(player.0).insert(PendingRespawn::at(
-                time.elapsed()
-                    + Duration::from_secs_f32(data.rules(&state.rules).respawn_delay_secs),
-            ));
+            commands
+                .entity(player.0)
+                .insert(PendingRespawn::after_death(
+                    time.elapsed(),
+                    data.rules(&state.rules),
+                ));
         }
     }
 }

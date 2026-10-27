@@ -66,6 +66,7 @@ impl Plugin for LocalControllerPlugin {
                 (
                     (
                         life::track_life,
+                        life::request_respawn,
                         controller::apply_respawn,
                         controller::grab_cursor,
                         controller::mouse_look,

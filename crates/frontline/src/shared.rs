@@ -122,6 +122,9 @@ pub struct MatchState {
     pub scores: [u32; 2],
     /// Points to win; in Search & Destroy, rounds.
     pub score_limit: u32,
+    /// The Match's time limit in seconds (the Host's override or the Game Mode's own); in
+    /// Search & Destroy, one round's clock.
+    pub time_limit_secs: u32,
     /// Whole seconds left on the clock while playing; in Search & Destroy, on the round clock.
     pub seconds_left: u32,
     pub phase: MatchPhase,

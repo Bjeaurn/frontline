@@ -112,13 +112,42 @@ pub struct Damaged {
     pub from: Vec3,
 }
 
+/// Client -> server (`ControlChannel`): the local player landed after falling `height` metres
+/// from the peak of the fall. The server applies the Match Rules' fall damage, with no attacker.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FallDamage {
+    pub height: f32,
+}
+
+/// Client -> server (`ControlChannel`): a dead player asks to respawn now. Honoured once the
+/// Match Rules' `min_respawn_secs` have passed since the death and the Game Mode lets them back.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RequestRespawn;
+
+/// Client -> server (`ControlChannel`): a living player (stuck somewhere) gives up their life:
+/// a death with no credit, then the usual respawn. Refused in Search & Destroy.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ForceRespawn;
+
+/// How a player died, as the kill feed tells it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum DeathCause {
+    Shot {
+        killer: String,
+        weapon: WeaponId,
+        headshot: bool,
+    },
+    /// Fell from too high.
+    Fall,
+    /// Used the pause menu's RESPAWN.
+    Respawn,
+}
+
 /// Server -> all clients: a kill-feed line.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct KillFeed {
-    pub killer: String,
     pub victim: String,
-    pub weapon: WeaponId,
-    pub headshot: bool,
+    pub cause: DeathCause,
 }
 
 /// Server -> the player who earned it (`EventChannel`): XP for `reason`. The client adds it to
@@ -174,6 +203,12 @@ pub(super) fn register(app: &mut App) {
     app.register_message::<ObjectiveHold>()
         .add_direction(NetworkDirection::ClientToServer);
     app.register_message::<EquipPerks>()
+        .add_direction(NetworkDirection::ClientToServer);
+    app.register_message::<FallDamage>()
+        .add_direction(NetworkDirection::ClientToServer);
+    app.register_message::<RequestRespawn>()
+        .add_direction(NetworkDirection::ClientToServer);
+    app.register_message::<ForceRespawn>()
         .add_direction(NetworkDirection::ClientToServer);
 
     app.add_channel::<ShotChannel>(ChannelSettings {

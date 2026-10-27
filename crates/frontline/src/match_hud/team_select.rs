@@ -1,6 +1,7 @@
 //! Team select ("choose your side"), shown while `Overlay::TeamSelect`: one card per Team with
 //! its Faction's emblem, name and roster. Hover or 1/2 highlight a card; a click or Enter picks
-//! it, AUTO-ASSIGN joins the smaller Team. Picking moves on to the Loadout screen. The flow
+//! it, AUTO-ASSIGN joins the smaller Team. A first pick moves on to the Loadout screen; switching
+//! Teams goes back to play, to the death screen the switch causes. The flow
 //! opens this overlay; CANCEL (shown once on a Team) and Esc close it, Esc going to the pause
 //! menu while still without a Team.
 
@@ -263,7 +264,8 @@ fn spawn_card(
     });
 }
 
-/// Applies keys and clicks: picking a Team sends the choice and opens the Loadout screen.
+/// Applies keys and clicks: picking a Team sends the choice and opens the Loadout screen (or,
+/// when switching Teams, closes the overlay).
 pub(super) fn drive_team_select(
     keys: Res<ButtonInput<KeyCode>>,
     mut select: ResMut<TeamSelect>,
@@ -313,7 +315,15 @@ pub(super) fn drive_team_select(
         choices.write(ToServer(ChooseTeam(team)));
         pending.0 = Some(team);
     }
-    overlay.set(Overlay::Loadout);
+    // A first choice goes on to the Loadout screen. Switching sides kills the player, so it
+    // goes straight back to play instead: the Loadout screen would cover the death screen and
+    // the respawn (CHANGE LOADOUT in the pause menu is still there for it).
+    let switching = current.is_some_and(|current| current != team);
+    overlay.set(if switching {
+        Overlay::None
+    } else {
+        Overlay::Loadout
+    });
 }
 
 /// Keeps headcounts, rosters, the RECOMMENDED tag and the card highlight current.

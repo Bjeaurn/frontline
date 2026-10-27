@@ -10,9 +10,9 @@
     perks: {
         SleightOfHand: (
             name: "Sleight of Hand",
-            description: "Reload 40% faster.",
+            description: "Reload 30% faster.",
             slot: 1,
-            effects: (reload_time_mul: 0.6),
+            effects: (reload_time_mul: 0.7),
         ),
         Scavenger: (
             name: "Scavenger",

@@ -1,5 +1,5 @@
 //! Server-side combat (Dedicated and Host): Teams, hitboxes, hitscan shots, damage, health
-//! regen, death and respawn, the Match flow (Rotation, scores, end) and the objective Game Modes.
+//! regen, death (shots, falls) and respawn, the Match flow (Rotation, scores, end) and the objective Game Modes.
 //! The server is the only writer of `Health`, `PlayerStats`, `PlayerTeam`, `MatchState` and
 //! `ModeView` (docs/adr/0002).
 //!
@@ -9,6 +9,7 @@
 mod damage;
 mod health;
 mod hitbox;
+mod lives;
 mod match_flow;
 mod mode_systems;
 mod packs;
@@ -61,6 +62,9 @@ impl Plugin for CombatServerPlugin {
                     match_flow::change_map,
                     mode_systems::receive_use,
                     teams::choose_teams,
+                    lives::apply_falls,
+                    lives::force_respawns,
+                    lives::request_respawns,
                     shots::resolve_shots,
                     health::apply_hits,
                 )

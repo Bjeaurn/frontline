@@ -54,6 +54,7 @@ fn fresh_match(config: &ServerConfig, data: &GameData) -> MatchState {
         rules: entry.rules.clone(),
         scores: [0; 2],
         score_limit,
+        time_limit_secs,
         seconds_left: time_limit_secs,
         phase: MatchPhase::Playing,
         next: (upcoming.map.clone(), upcoming.mode),

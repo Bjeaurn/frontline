@@ -5,6 +5,7 @@
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::hash::{BuildHasher, RandomState};
+use std::time::Duration;
 
 use avian3d::prelude::*;
 use bevy::{
@@ -16,11 +17,11 @@ use bevy::{
 use super::BODY_RADIUS;
 use super::input::{Binding, Bindings};
 use super::life::LocalLife;
-use crate::data::{GameData, MovementTuning};
+use crate::data::{ActiveRules, GameData, MovementTuning};
 use crate::flow::{AppState, Settings};
 use crate::maps::MapSpawns;
-use crate::net::protocol::Respawn;
-use crate::shared::{FromServer, GameLayer, LocalPlayer, PlayerName, PlayerPose, Stance};
+use crate::net::protocol::{FallDamage, Respawn};
+use crate::shared::{FromServer, GameLayer, LocalPlayer, PlayerName, PlayerPose, Stance, ToServer};
 
 // Collision geometry (metres).
 /// Surfaces whose normal has at least this much `y` count as ground (about 50 degrees).
@@ -29,6 +30,21 @@ const MIN_GROUND_NORMAL_Y: f32 = 0.64;
 const GROUND_PROBE: f32 = 0.05;
 /// While grounded, the body is pulled down this far to follow ramps and small drops.
 const GROUND_SNAP: f32 = 0.35;
+/// Slopes whose normal has at least this much `y` (about 37 degrees) are walked at full
+/// horizontal speed: stairs are ramps, and sliding along one would cost a quarter of the speed
+/// every frame.
+const STAIR_MIN_NORMAL_Y: f32 = 0.8;
+/// The highest step the body climbs by walking into it. Anything taller is a jump or a mantle,
+/// so waist-high cover stays cover (the map generators' `STEP` assumes 0.4 m).
+const STEP_HEIGHT: f32 = 0.45;
+/// A move that covered less than this share of the wanted distance counts as blocked, and
+/// a step is tried.
+const STEP_BLOCKED_FRACTION: f32 = 0.9;
+/// A step is taken only if it gains at least this share of the wanted distance over the plain
+/// slide, so walls and glancing slides never count.
+const STEP_MIN_GAIN: f32 = 0.3;
+/// How fast the camera catches up with a step (exponential decay rate, 1/s).
+const STEP_VIEW_RATE: f32 = 14.0;
 /// Falling below this height respawns the player.
 const KILL_Y: f32 = -20.0;
 /// A mantle ends with the body centre this far past the wall face, so thin walls hold it too.
@@ -79,6 +95,12 @@ pub struct Motor {
     dive: Option<Dive>,
     /// Seconds left after a dive's recovery during which stance changes stay blocked.
     getup: f32,
+    /// Normal of the ground the body stands on (up when airborne).
+    ground_normal: Vec3,
+    /// Highest feet height since the body last stood on something: a fall is measured from it.
+    peak_y: f32,
+    /// How far below the body the camera still sits after a step up (metres); it eases to 0.
+    view_lag: f32,
 }
 
 impl Motor {
@@ -95,6 +117,9 @@ impl Motor {
             mantle: None,
             dive: None,
             getup: 0.0,
+            ground_normal: Vec3::Y,
+            peak_y: f32::NEG_INFINITY,
+            view_lag: 0.0,
         }
     }
 
@@ -640,6 +665,8 @@ pub(super) fn move_player(
     shapes: Res<StanceShapes>,
     spawns: Option<Res<MapSpawns>>,
     move_and_slide: MoveAndSlide,
+    rules: ActiveRules,
+    mut falls: MessageWriter<ToServer<FallDamage>>,
     mut player: Query<
         (
             &mut PlayerPose,
@@ -695,6 +722,7 @@ pub(super) fn move_player(
         motor.sprinting = false;
     }
 
+    let mut fall = None;
     if let Some(mantle) = &mut motor.mantle {
         mantle.elapsed += dt;
         let progress = mantle.progress();
@@ -704,12 +732,13 @@ pub(super) fn move_player(
             motor.mantle = None;
             motor.grounded = true;
             motor.ground_y = pose.position.y;
+            motor.peak_y = pose.position.y;
         }
         motor.tick_sprint(false, dt, tuning);
     } else if let Some(dive) = motor.dive.as_mut() {
         // Dive: the lunge keeps its momentum, the recovery stops dead; no input either way.
         let (wish, finished) = dive.advance(dt, tuning);
-        slide(
+        fall = slide(
             &mut pose,
             &mut motor,
             wish,
@@ -740,7 +769,7 @@ pub(super) fn move_player(
         } * modifiers.move_scale
             * motor.landing_scale(tuning);
         let wish = facing * Vec3::new(input.x, 0.0, -input.y).normalize_or_zero() * speed;
-        slide(
+        fall = slide(
             &mut pose,
             &mut motor,
             wish,
@@ -751,6 +780,16 @@ pub(super) fn move_player(
         );
     }
 
+    // The server applies the Match Rules' fall damage to the height we report; only falls
+    // that can hurt are worth a message.
+    if let Some(height) = fall
+        && !life.is_dead()
+        && height > rules.get().fall_damage.min_height
+    {
+        info!("Landed after falling {height:.1} m");
+        falls.write(ToServer(FallDamage { height }));
+    }
+
     if pose.position.y < KILL_Y {
         pose.position = random_spawn(spawns.as_deref()).0 + Vec3::Y * HEADROOM_LIFT;
         *motor = Motor::new(tuning);
@@ -759,8 +798,90 @@ pub(super) fn move_player(
         Transform::from_translation(pose.position).with_rotation(Quat::from_rotation_y(pose.yaw));
 }
 
+/// Vertical speed that keeps `horizontal` parallel to ground with `normal`, so a stair-like slope
+/// is climbed (or descended) at the full horizontal speed. Steeper ground is left to the slide.
+fn along_slope(horizontal: Vec3, normal: Vec3) -> f32 {
+    if normal.y < STAIR_MIN_NORMAL_Y {
+        return 0.0;
+    }
+    -(normal.x * horizontal.x + normal.z * horizontal.z) / normal.y
+}
+
+/// Tries to climb a step of up to `STEP_HEIGHT` in the way of a body at `start` (shape centre)
+/// walking `horizontal` for `dt`, which the plain slide ended at `slid`. Lifts the body, walks
+/// it forward and sets it down again; returns the new centre and the slide's remaining velocity
+/// if that gets clearly further than the plain slide did and ends on walkable ground.
+#[allow(clippy::too_many_arguments)]
+fn step_up(
+    move_and_slide: &MoveAndSlide,
+    shape: &Collider,
+    start: Vec3,
+    slid: Vec3,
+    horizontal: Vec3,
+    dt: f32,
+    config: &MoveAndSlideConfig,
+    filter: &SpatialQueryFilter,
+) -> Option<(Vec3, Vec3)> {
+    let wanted = horizontal.length() * dt;
+    let flat = |from: Vec3, to: Vec3| (to - from).xz().length();
+    let done = flat(start, slid);
+    if wanted < 1e-4 || done >= wanted * STEP_BLOCKED_FRACTION {
+        return None;
+    }
+    let reach = STEP_HEIGHT + config.skin_width;
+    let up = move_and_slide
+        .spatial_query
+        .cast_shape(
+            shape,
+            start,
+            Quat::IDENTITY,
+            Dir3::Y,
+            &ShapeCastConfig::from_max_distance(reach),
+            filter,
+        )
+        .map_or(STEP_HEIGHT, |hit| {
+            (hit.distance - config.skin_width).max(0.0)
+        });
+    if up <= config.skin_width {
+        return None;
+    }
+    let raised = start + Vec3::Y * up;
+    let over = move_and_slide.move_and_slide(
+        shape,
+        raised,
+        Quat::IDENTITY,
+        Vec3::new(horizontal.x, 0.0, horizontal.z),
+        Duration::from_secs_f32(dt),
+        config,
+        filter,
+        |_| MoveAndSlideHitResponse::Accept,
+    );
+    if flat(raised, over.position) < done + STEP_MIN_GAIN * wanted {
+        return None;
+    }
+    let down = move_and_slide
+        .spatial_query
+        .cast_shape(
+            shape,
+            over.position,
+            Quat::IDENTITY,
+            Dir3::NEG_Y,
+            &ShapeCastConfig::from_max_distance(up + config.skin_width),
+            filter,
+        )
+        .filter(|hit| hit.normal1.y >= MIN_GROUND_NORMAL_Y)?;
+    let centre = over.position - Vec3::Y * hit_distance(&down, config);
+    (centre.y > start.y + config.skin_width).then_some((centre, over.projected_velocity))
+}
+
+/// How far a ground cast travelled before touching, less the skin the body keeps off it.
+fn hit_distance(hit: &ShapeHitData, config: &MoveAndSlideConfig) -> f32 {
+    (hit.distance - config.skin_width).max(0.0)
+}
+
 /// One frame of walking, jumping or falling towards horizontal velocity `wish`, sliding along
-/// the Map.
+/// the Map. Returns the height of the fall if the body touched down this frame, measured from
+/// the peak of the fall.
 fn slide(
     pose: &mut PlayerPose,
     motor: &mut Motor,
@@ -769,7 +890,7 @@ fn slide(
     shapes: &StanceShapes,
     move_and_slide: &MoveAndSlide,
     tuning: &MovementTuning,
-) {
+) -> Option<f32> {
     let dt = time.delta_secs();
     // Horizontal: snappy on the ground, limited steering in the air, momentum kept when idle.
     let horizontal = Vec3::new(motor.velocity.x, 0.0, motor.velocity.z);
@@ -785,7 +906,7 @@ fn slide(
     let vertical = if jumped {
         (2.0 * tuning.gravity * tuning.jump_height).sqrt()
     } else if motor.grounded {
-        0.0
+        along_slope(horizontal, motor.ground_normal)
     } else {
         (motor.velocity.y - tuning.gravity * dt).max(-tuning.terminal_fall_speed)
     };
@@ -794,9 +915,10 @@ fn slide(
     let half_height = pose.stance.body_height() / 2.0;
     let config = MoveAndSlideConfig::default();
     let filter = SpatialQueryFilter::from_mask(GameLayer::World);
+    let start = pose.position + Vec3::Y * half_height;
     let out = move_and_slide.move_and_slide(
         shape,
-        pose.position + Vec3::Y * half_height,
+        start,
         Quat::IDENTITY,
         horizontal + Vec3::Y * vertical,
         time.delta(),
@@ -807,8 +929,27 @@ fn slide(
     let mut center = out.position;
     let mut velocity = out.projected_velocity;
 
+    // Walking into a low step climbs it.
+    if motor.grounded
+        && !jumped
+        && let Some((stepped, remaining)) = step_up(
+            move_and_slide,
+            shape,
+            start,
+            center,
+            horizontal,
+            dt,
+            &config,
+            &filter,
+        )
+    {
+        motor.view_lag += stepped.y - start.y;
+        center = stepped;
+        velocity = remaining;
+    }
+
     // Ground check; while walking, reach further down so ramps and small drops stay grounded.
-    let ground = if vertical > 0.0 {
+    let ground = if (vertical > 0.0 && !motor.grounded) || jumped {
         None
     } else {
         let reach = if motor.grounded {
@@ -830,8 +971,9 @@ fn slide(
     };
     let landed = !motor.grounded && ground.is_some();
     motor.grounded = ground.is_some();
+    motor.ground_normal = ground.map_or(Vec3::Y, |hit| hit.normal1);
     if let Some(hit) = ground {
-        center.y -= (hit.distance - config.skin_width).max(0.0);
+        center.y -= hit_distance(&hit, &config);
         velocity.y = 0.0;
     }
     // Touchdown bleeds the speed carried through the air, then `landing_scale` eases back.
@@ -844,20 +986,25 @@ fn slide(
     }
 
     pose.position = center - Vec3::Y * half_height;
+    let fall = landed.then_some(motor.peak_y - pose.position.y);
     if motor.grounded {
         motor.ground_y = pose.position.y;
+        motor.peak_y = pose.position.y;
+    } else {
+        motor.peak_y = motor.peak_y.max(pose.position.y);
     }
     motor.velocity = velocity;
+    fall
 }
 
 /// Places the camera at the (smoothed) eye height and applies pitch, plus a dip and roll while
 /// mantling.
 pub(super) fn update_eye(
     time: Res<Time>,
-    player: Query<(&PlayerPose, &Motor), With<LocalPlayer>>,
+    mut player: Query<(&PlayerPose, &mut Motor), With<LocalPlayer>>,
     mut camera: Query<(&mut EyeCamera, &mut Transform)>,
 ) {
-    let Ok((pose, motor)) = player.single() else {
+    let Ok((pose, mut motor)) = player.single_mut() else {
         return;
     };
     let mantle = motor
@@ -868,10 +1015,13 @@ pub(super) fn update_eye(
     } else {
         EYE_HEIGHT_RATE
     };
+    motor
+        .view_lag
+        .smooth_nudge(&0.0, STEP_VIEW_RATE, time.delta_secs());
     for (mut eye, mut transform) in &mut camera {
         eye.height
             .smooth_nudge(&pose.stance.eye_height(), rate, time.delta_secs());
-        transform.translation = Vec3::Y * (eye.height - MANTLE_VIEW_DIP * mantle);
+        transform.translation = Vec3::Y * (eye.height - MANTLE_VIEW_DIP * mantle - motor.view_lag);
         transform.rotation =
             Quat::from_rotation_x(pose.pitch) * Quat::from_rotation_z(MANTLE_VIEW_ROLL * mantle);
     }

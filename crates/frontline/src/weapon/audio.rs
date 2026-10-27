@@ -250,7 +250,7 @@ fn play_reload_sounds(
         *watch = ReloadWatch::default();
         return;
     };
-    let Some(progress) = weapon.reload_progress(&weapon.stats) else {
+    let Some(progress) = weapon.reload_progress() else {
         *watch = ReloadWatch::default();
         return;
     };

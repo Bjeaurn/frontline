@@ -47,7 +47,7 @@ The objective of a **Match**: how teams form, how points are scored, and how it 
 _Avoid_: Playlist, mode type, ruleset
 
 **Match Rules**:
-The tunable survival and HUD settings of a **Match**, such as max health, health regen or health packs, damage scale, respawn delay and HUD visibility.
+The tunable survival and HUD settings of a **Match**, such as max health, health regen or health packs, damage scale, respawn delay, fall damage and HUD visibility.
 _Avoid_: Ruleset, game settings, mutators
 
 **Hardcore**:
@@ -119,7 +119,7 @@ _Avoid_: Inspired map, clone
 ### Movement
 
 **Mantle**:
-Climbing onto a ledge up to about chest height by moving into it.
+Climbing onto a ledge up to about chest height by moving into it. Steps and ramps up to 0.45 m (the stairs) are not Mantles: they are simply walked.
 _Avoid_: Vault, climb, ledge grab
 
 **Dive**:

@@ -1,11 +1,14 @@
-//! Whether the local player is in play, from the server's `Health` and `PlayerTeam`, and who
-//! killed them last.
+//! Whether the local player is in play, from the server's `Health` and `PlayerTeam`, how they
+//! died last, and the request to respawn early.
 
 use bevy::prelude::*;
 
-use crate::net::protocol::KillFeed;
+use super::controller::MenuOpen;
+use crate::data::{ActiveRules, MatchRules};
+use crate::modes::{ModeView, SdPhaseView};
+use crate::net::protocol::{DeathCause, KillFeed, RequestRespawn};
 use crate::shared::{
-    FromServer, Health, LocalPlayer, LocalPlayerReplica, PlayerName, PlayerTeam, Team,
+    FromServer, Health, LocalPlayer, LocalPlayerReplica, PlayerName, PlayerTeam, Team, ToServer,
 };
 
 /// A kill-feed line naming us (or a team switch) counts as the cause of our death if it
@@ -20,8 +23,8 @@ pub struct LocalLife {
     team: Option<Team>,
     /// `Time::elapsed_secs_f64` of the latest death.
     died_at: f64,
-    /// Killer named by the latest kill-feed line with us as victim, and when it arrived.
-    last_killer: Option<(String, f64)>,
+    /// How the latest kill-feed line with us as victim says we died, and when it arrived.
+    last_cause: Option<(DeathCause, f64)>,
     /// When we last switched from one Team to the other.
     switched_at: Option<f64>,
 }
@@ -42,12 +45,12 @@ impl LocalLife {
         now - self.died_at
     }
 
-    /// Who killed us this death, if the kill-feed line has arrived.
-    pub fn killer(&self) -> Option<&str> {
-        self.last_killer
+    /// How we died this death, if the kill-feed line has arrived.
+    pub fn cause(&self) -> Option<&DeathCause> {
+        self.last_cause
             .as_ref()
             .filter(|(_, at)| *at >= self.died_at - KILLER_MATCH_SECS)
-            .map(|(name, _)| name.as_str())
+            .map(|(cause, _)| cause)
     }
 
     /// Whether this death came from switching Team.
@@ -73,7 +76,7 @@ pub(super) fn track_life(
     if let Ok(me) = me.single() {
         for FromServer(line) in feed.read() {
             if line.victim == me.0 {
-                life.last_killer = Some((line.killer.clone(), now));
+                life.last_cause = Some((line.cause.clone(), now));
             }
         }
     }
@@ -94,5 +97,58 @@ pub(super) fn track_life(
             life.died_at = now;
             info!("Local player died");
         }
+    }
+}
+
+/// What keeps a dead player from respawning on request, as the death screen says it: Search &
+/// Destroy rounds and a held Headquarters.
+pub(super) fn respawn_hold(view: Option<&ModeView>, team: Option<Team>) -> Option<&'static str> {
+    match view {
+        Some(ModeView::Headquarters(hq)) if hq.position.is_some() && hq.zone.owner == team => {
+            Some("Your team holds the HQ: waiting for it to fall")
+        }
+        Some(ModeView::SearchAndDestroy(sd)) if sd.phase != SdPhaseView::Waiting => {
+            Some("Waiting for the next round")
+        }
+        _ => None,
+    }
+}
+
+/// Whether the death screen offers (and the server honours) a respawn on request: the player
+/// has been dead for the Match Rules' minimum and nothing holds them back.
+pub(super) fn can_request_respawn(
+    life: &LocalLife,
+    view: Option<&ModeView>,
+    rules: &MatchRules,
+    now: f64,
+) -> bool {
+    life.is_dead()
+        && life.team().is_some()
+        && respawn_hold(view, life.team()).is_none()
+        && life.secs_dead(now) >= f64::from(rules.early_respawn_secs())
+}
+
+/// SPACE or a click asks the server to respawn once the death screen offers it.
+pub(super) fn request_respawn(
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    menu: Res<MenuOpen>,
+    life: Res<LocalLife>,
+    rules: ActiveRules,
+    modes: Query<&ModeView>,
+    mut requests: MessageWriter<ToServer<RequestRespawn>>,
+) {
+    if menu.0 || !(keys.just_pressed(KeyCode::Space) || mouse.just_pressed(MouseButton::Left)) {
+        return;
+    }
+    if can_request_respawn(
+        &life,
+        modes.single().ok(),
+        rules.get(),
+        time.elapsed_secs_f64(),
+    ) {
+        info!("Asking to respawn early");
+        requests.write(ToServer(RequestRespawn));
     }
 }

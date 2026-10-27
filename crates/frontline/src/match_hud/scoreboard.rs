@@ -8,7 +8,7 @@ use std::cmp::Reverse;
 use bevy::prelude::*;
 
 use super::{ENEMY_COLOR, FRIENDLY_COLOR, MatchQuery, own_side};
-use crate::data::GameData;
+use crate::data::{GameData, GameModeId};
 use crate::flow::AppState;
 use crate::maps::MapRegistry;
 use crate::net::protocol::PlayerOwner;
@@ -16,7 +16,9 @@ use crate::player::LocalLife;
 use crate::player::input::Bindings;
 use crate::profile::Profile;
 use crate::progression::{LevelProgress, MatchXp};
-use crate::shared::{LocalPlayerReplica, MatchPhase, PlayerName, PlayerStats, PlayerTeam};
+use crate::shared::{
+    LocalPlayerReplica, MatchPhase, MatchState, PlayerName, PlayerStats, PlayerTeam,
+};
 use crate::ui::{self, UiFonts};
 
 const WIDTH: f32 = 560.0;
@@ -38,6 +40,8 @@ pub(super) struct ScoreboardPanel;
 
 #[derive(PartialEq, Default)]
 pub(super) struct Board {
+    /// The win condition, e.g. "FIRST TO 50 · 10:00 LIMIT".
+    goal: String,
     result: Option<MatchResult>,
     sections: Vec<Section>,
     /// Players still choosing a Team.
@@ -163,7 +167,27 @@ fn columns(
         });
 }
 
+/// The win condition line at the top of the Scoreboard: the score to reach (rounds in Search &
+/// Destroy, which has no Match clock) and the time limit.
+fn goal_text(state: &MatchState) -> String {
+    if state.mode == GameModeId::SearchAndDestroy {
+        return format!("FIRST TO {} ROUNDS", state.score_limit);
+    }
+    format!(
+        "FIRST TO {} · {} LIMIT",
+        state.score_limit,
+        super::clock(state.time_limit_secs)
+    )
+}
+
 fn build(panel: &mut ChildSpawnerCommands, fonts: &UiFonts, assets: &AssetServer, board: &Board) {
+    panel
+        .spawn(Node {
+            justify_content: JustifyContent::Center,
+            margin: UiRect::bottom(px(6.0)),
+            ..default()
+        })
+        .with_child(ui::label(fonts, &board.goal, SUBTITLE_SIZE, ui::ACCENT));
     if let Some(result) = &board.result {
         panel
             .spawn(Node {
@@ -430,6 +454,7 @@ pub(super) fn update_scoreboard(
         .collect();
     choosing.sort();
     let board = Board {
+        goal: goal_text(state),
         result,
         sections,
         choosing,

@@ -62,7 +62,7 @@ pub fn shot_damage(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data::HudRules;
+    use crate::data::{FallDamageRules, HudRules};
 
     fn rules(damage_scale: f32) -> MatchRules {
         MatchRules {
@@ -70,8 +70,13 @@ mod tests {
             regen_delay_secs: 5.0,
             regen_per_sec: 20.0,
             respawn_delay_secs: 3.0,
+            min_respawn_secs: 1.5,
             damage_scale,
             friendly_fire: false,
+            fall_damage: FallDamageRules {
+                min_height: 4.5,
+                max_height: 12.0,
+            },
             hud: HudRules {
                 crosshair: true,
                 hitmarkers: true,

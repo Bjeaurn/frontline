@@ -1,6 +1,7 @@
 // Weapon tuning. Read at startup from ./data/ (falls back to the copy built into the binary).
 // Distances in metres, angles in degrees, times in seconds. `damage_near`/`damage_far` are
 // scaled by the Hit Zone struck: head, upper torso (chest), lower torso (belly) or limbs.
+// `reload_secs` is the reload with rounds left, `empty_reload_secs` from an empty magazine.
 {
     AssaultRifle: (
         name: "M4 (AR)",
@@ -14,7 +15,8 @@
         zone_multipliers: (head: 1.4, upper_torso: 1.0, lower_torso: 1.0, limbs: 0.8),
         range: 300.0,
         magazine: 30,
-        reload_secs: 2.2,
+        reload_secs: 2.5,
+        empty_reload_secs: 3.1,
         hip_spread_deg: 3.0,
         ads_spread_deg: 0.25,
         ads_secs: 0.25,
@@ -57,7 +59,8 @@
         zone_multipliers: (head: 1.4, upper_torso: 1.0, lower_torso: 0.9, limbs: 0.8),
         range: 200.0,
         magazine: 30,
-        reload_secs: 2.0,
+        reload_secs: 2.4,
+        empty_reload_secs: 2.9,
         hip_spread_deg: 2.5,
         ads_spread_deg: 0.6,
         ads_secs: 0.18,
@@ -100,7 +103,8 @@
         zone_multipliers: (head: 1.5, upper_torso: 1.2, lower_torso: 1.0, limbs: 0.75),
         range: 400.0,
         magazine: 5,
-        reload_secs: 3.0,
+        reload_secs: 3.5,
+        empty_reload_secs: 4.0,
         hip_spread_deg: 8.0,
         ads_spread_deg: 0.0,
         ads_secs: 0.35,
@@ -143,7 +147,8 @@
         zone_multipliers: (head: 1.4, upper_torso: 1.0, lower_torso: 0.9, limbs: 0.8),
         range: 150.0,
         magazine: 15,
-        reload_secs: 1.5,
+        reload_secs: 1.7,
+        empty_reload_secs: 2.1,
         hip_spread_deg: 1.6,
         ads_spread_deg: 0.5,
         ads_secs: 0.12,

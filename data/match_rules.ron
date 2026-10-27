@@ -1,14 +1,20 @@
 // Match Rules presets (see CONTEXT.md). Read at startup from ./data/ (falls back to the copy
 // built into the binary). Health in HP, times in seconds. A server runs `default` unless
 // started with `--rules <preset>`; clients take the preset's `hud` block from their own copy.
+// `respawn_delay_secs` is how long a dead player waits before respawning by themselves;
+// `min_respawn_secs` is how soon they may ask to respawn early (SPACE or click).
+// `fall_damage`: no damage up to `min_height` metres of fall (from the peak), then linear up to
+// a lethal fall of `max_height`.
 {
     "default": (
         max_health: 100.0,
         regen_delay_secs: 5.0,
         regen_per_sec: 40.0,
         respawn_delay_secs: 3.0,
+        min_respawn_secs: 1.5,
         damage_scale: 1.0,
         friendly_fire: false,
+        fall_damage: (min_height: 4.5, max_height: 12.0),
         hud: (
             crosshair: true,
             hitmarkers: true,
@@ -24,8 +30,10 @@
         regen_delay_secs: 5.0,
         regen_per_sec: 0.0,
         respawn_delay_secs: 3.0,
+        min_respawn_secs: 1.5,
         damage_scale: 1.0,
         friendly_fire: true,
+        fall_damage: (min_height: 3.5, max_height: 8.0),
         hud: (
             crosshair: false,
             hitmarkers: false,

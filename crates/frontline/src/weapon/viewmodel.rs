@@ -888,7 +888,7 @@ fn animate_viewmodel(
     let kick = anim.kick * 1.0_f32.lerp(ADS_KICK_SCALE, ads);
 
     let dip = weapon
-        .reload_progress(stats)
+        .reload_progress()
         .map_or(0.0, |progress| (progress * PI).sin());
     let bolt = weapon.bolt_phase().map_or(0.0, |phase| (phase * PI).sin());
     for (handle, mut handle_transform) in &mut bolt_handle {

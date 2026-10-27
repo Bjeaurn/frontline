@@ -170,7 +170,10 @@ pub struct WeaponStats {
     /// Maximum hitscan distance.
     pub range: f32,
     pub magazine: u32,
+    /// Reload time with rounds left in the magazine (a tactical reload).
     pub reload_secs: f32,
+    /// Reload time from an empty magazine (the bolt or slide has to be worked): longer.
+    pub empty_reload_secs: f32,
     pub hip_spread_deg: f32,
     pub ads_spread_deg: f32,
     pub ads_secs: f32,
@@ -243,6 +246,15 @@ pub struct WeaponStats {
 }
 
 impl WeaponStats {
+    /// How long a reload takes with `rounds` left in the magazine.
+    pub fn reload_secs_for(&self, rounds: u32) -> f32 {
+        if rounds == 0 {
+            self.empty_reload_secs
+        } else {
+            self.reload_secs
+        }
+    }
+
     /// Time between rounds at an aim-down-sights blend `ads` (0 hip, 1 fully aimed).
     pub fn seconds_per_shot(&self, ads: f32) -> f32 {
         60.0 / self.rpm.lerp(self.ads_rpm, ads)
@@ -281,6 +293,7 @@ impl WeaponStats {
             range: 200.0,
             magazine: 30,
             reload_secs: 1.0,
+            empty_reload_secs: 1.0,
             hip_spread_deg: 2.0,
             ads_spread_deg: 0.5,
             ads_secs: 0.2,
@@ -324,11 +337,43 @@ pub struct MatchRules {
     pub max_health: f32,
     pub regen_delay_secs: f32,
     pub regen_per_sec: f32,
+    /// How long a dead player waits before respawning on their own: the longest wait.
     pub respawn_delay_secs: f32,
+    /// How soon after dying a player may ask to respawn early (never later than
+    /// `respawn_delay_secs`; see `early_respawn_secs`).
+    pub min_respawn_secs: f32,
     pub damage_scale: f32,
     /// Whether bullets hurt teammates (and Killstreaks follow the same rule).
     pub friendly_fire: bool,
+    pub fall_damage: FallDamageRules,
     pub hud: HudRules,
+}
+
+impl MatchRules {
+    /// Seconds after dying before an early respawn is honoured.
+    pub fn early_respawn_secs(&self) -> f32 {
+        self.min_respawn_secs.min(self.respawn_delay_secs)
+    }
+}
+
+/// How hard falls hurt (CoD style): nothing up to `min_height`, then linearly more until a fall
+/// of `max_height` is lethal. Heights are in metres, counted from the peak of the fall.
+#[derive(Clone, Copy, Debug, Deserialize)]
+pub struct FallDamageRules {
+    pub min_height: f32,
+    pub max_height: f32,
+}
+
+impl FallDamageRules {
+    /// Health lost to a fall of `height` metres for a player of `max_health`: none up to
+    /// `min_height`, the whole of `max_health` from `max_height` on, linear in between.
+    pub fn damage(&self, height: f32, max_health: f32) -> f32 {
+        if height.is_nan() || height <= self.min_height {
+            return 0.0;
+        }
+        let span = (self.max_height - self.min_height).max(f32::EPSILON);
+        max_health * ((height - self.min_height) / span).min(1.0)
+    }
 }
 
 /// Which HUD elements a Match shows (IDEA.md: HUD in Match Rules).
@@ -747,5 +792,80 @@ pub(crate) fn load<T: for<'de> Deserialize<'de>>(file: &str, builtin: &str) -> T
             ron::from_str(&text).unwrap_or_else(|err| panic!("{}: {err}", path.display()))
         }
         Err(_) => ron::from_str(builtin).unwrap_or_else(|err| panic!("built-in {file}: {err}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FALL: FallDamageRules = FallDamageRules {
+        min_height: 4.0,
+        max_height: 12.0,
+    };
+
+    #[test]
+    fn falls_hurt_nothing_then_linearly_then_kill() {
+        assert_eq!(FALL.damage(0.0, 100.0), 0.0);
+        assert_eq!(FALL.damage(4.0, 100.0), 0.0, "the minimum itself is free");
+        assert!((FALL.damage(8.0, 100.0) - 50.0).abs() < 1e-4);
+        assert!((FALL.damage(11.0, 100.0) - 87.5).abs() < 1e-4);
+        assert_eq!(FALL.damage(12.0, 100.0), 100.0);
+        assert_eq!(
+            FALL.damage(40.0, 100.0),
+            100.0,
+            "never more than max health"
+        );
+        // The same fall takes the same share of a smaller health pool.
+        assert!((FALL.damage(8.0, 30.0) - 15.0).abs() < 1e-4);
+        assert_eq!(FALL.damage(f32::NAN, 100.0), 0.0);
+    }
+
+    #[test]
+    fn a_collapsed_fall_range_is_lethal_past_the_minimum() {
+        let flat = FallDamageRules {
+            min_height: 5.0,
+            max_height: 5.0,
+        };
+        assert_eq!(flat.damage(5.0, 100.0), 0.0);
+        assert_eq!(flat.damage(5.1, 100.0), 100.0);
+    }
+
+    #[test]
+    fn early_respawn_never_waits_longer_than_the_auto_respawn() {
+        let rules = GameData::load().rules("default").clone();
+        assert!(rules.early_respawn_secs() <= rules.respawn_delay_secs);
+        let slow = MatchRules {
+            min_respawn_secs: 9.0,
+            ..rules
+        };
+        assert_eq!(slow.early_respawn_secs(), slow.respawn_delay_secs);
+    }
+
+    #[test]
+    fn a_reload_from_empty_takes_the_empty_time() {
+        let data = GameData::load();
+        for id in WeaponId::ALL {
+            let stats = data.weapon(id);
+            assert_eq!(stats.reload_secs_for(1), stats.reload_secs);
+            assert_eq!(stats.reload_secs_for(0), stats.empty_reload_secs);
+            assert!(
+                stats.empty_reload_secs > stats.reload_secs,
+                "{id:?}: an empty reload takes longer"
+            );
+        }
+    }
+
+    #[test]
+    fn shipped_match_rules_have_sane_fall_and_respawn_values() {
+        let data = GameData::load();
+        for (name, rules) in &data.match_rules {
+            assert!(
+                0.0 < rules.fall_damage.min_height
+                    && rules.fall_damage.min_height < rules.fall_damage.max_height,
+                "{name}: fall damage needs 0 < min_height < max_height"
+            );
+            assert!(rules.min_respawn_secs >= 0.0, "{name}: min_respawn_secs");
+        }
     }
 }

@@ -15,10 +15,12 @@ use super::packs::drop_ammo_pack;
 use super::shots::PlayerHit;
 use super::spawn::{bias_toward, choose_spawn};
 use super::xp::{DamageLedger, KillChain, XpOut};
-use crate::data::{GameData, GameModeId};
+use crate::data::{GameData, GameModeId, MatchRules};
 use crate::gear::EquippedPerks;
 use crate::maps::{MapSpawn, MapSpawns};
-use crate::net::protocol::{Damaged, EventChannel, HitConfirm, KillFeed, PlayerOwner, Respawn};
+use crate::net::protocol::{
+    Damaged, DeathCause, EventChannel, HitConfirm, KillFeed, PlayerOwner, Respawn,
+};
 use crate::progression::XpReason;
 use crate::shared::{
     GameLayer, Health, MatchState, PlayerName, PlayerPose, PlayerStats, PlayerTeam, Stance, Team,
@@ -32,17 +34,66 @@ const SPAWN_CLEARANCE: f32 = 1.5;
 
 /// When the player last took damage (elapsed time); regen waits `regen_delay_secs` after it.
 #[derive(Component, Debug)]
-pub(super) struct LastDamaged(Duration);
+pub(super) struct LastDamaged(pub(super) Duration);
 
-/// The player is out of play (dead, or just picked a Team) and respawns at `at` (elapsed time).
+/// The player is out of play (dead, or just picked a Team) and respawns at `at` (elapsed time),
+/// or sooner if they ask once `earliest` has passed.
 #[derive(Component, Debug)]
 pub(super) struct PendingRespawn {
     at: Duration,
+    earliest: Duration,
 }
 
 impl PendingRespawn {
+    /// Respawns at `at`, no sooner: a first spawn, a new round or a new Match.
     pub(super) fn at(at: Duration) -> Self {
-        Self { at }
+        Self { at, earliest: at }
+    }
+
+    /// The wait after a death at `now`: the Match Rules' respawn delay, which the player can cut
+    /// short after `min_respawn_secs`.
+    pub(super) fn after_death(now: Duration, rules: &MatchRules) -> Self {
+        Self {
+            at: now + Duration::from_secs_f32(rules.respawn_delay_secs),
+            earliest: now + Duration::from_secs_f32(rules.early_respawn_secs()),
+        }
+    }
+
+    /// The player asked to respawn at `now`: honoured once the minimum wait has passed.
+    pub(super) fn request(&mut self, now: Duration) -> bool {
+        let honoured = now >= self.earliest;
+        if honoured {
+            self.at = self.at.min(now);
+        }
+        honoured
+    }
+}
+
+/// Ends the life of `entity`, whoever or whatever caused it: its ammo pack drops, the death is
+/// counted, its hitboxes go off and it waits to respawn (Search & Destroy has no respawns: the
+/// dead wait for the next round, which sends everyone back). The caller zeroes `Health` and
+/// announces the death.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn end_life(
+    commands: &mut Commands,
+    data: &GameData,
+    time: &Time,
+    state: &MatchState,
+    entity: Entity,
+    hitboxes: &Hitboxes,
+    stats: &mut PlayerStats,
+    position: Option<Vec3>,
+) {
+    if let Some(position) = position {
+        drop_ammo_pack(commands, data, time, position);
+    }
+    stats.deaths += 1;
+    set_hitboxes_enabled(commands, hitboxes, false);
+    if state.mode != GameModeId::SearchAndDestroy {
+        commands.entity(entity).insert(PendingRespawn::after_death(
+            time.elapsed(),
+            data.rules(&state.rules),
+        ));
     }
 }
 
@@ -178,23 +229,23 @@ pub(super) fn apply_hits(
             continue;
         }
 
-        if let Ok(pose) = poses.get(hit.victim) {
-            drop_ammo_pack(&mut commands, &data, &time, pose.position);
-        }
-        stats.deaths += 1;
-        set_hitboxes_enabled(&mut commands, hitboxes, false);
-        // Search & Destroy has no respawns: the dead wait for the next round, which sends
-        // everyone back.
-        if state.mode != GameModeId::SearchAndDestroy {
-            commands.entity(hit.victim).insert(PendingRespawn::at(
-                time.elapsed() + Duration::from_secs_f32(rules.respawn_delay_secs),
-            ));
-        }
+        end_life(
+            &mut commands,
+            &data,
+            &time,
+            &state,
+            hit.victim,
+            hitboxes,
+            &mut stats,
+            poses.get(hit.victim).ok().map(|pose| pose.position),
+        );
         let feed = KillFeed {
-            killer: shooter_name,
             victim: victim_name.0.clone(),
-            weapon: hit.weapon,
-            headshot,
+            cause: DeathCause::Shot {
+                killer: shooter_name.clone(),
+                weapon: hit.weapon,
+                headshot,
+            },
         };
         // The life is over: its damage ledger pays out (to enemies only) and the victim's own
         // Multikill chain ends.
@@ -244,8 +295,7 @@ pub(super) fn apply_hits(
             }
         }
         info!(
-            "{} killed {}{}",
-            feed.killer,
+            "{shooter_name} killed {}{}",
             feed.victim,
             if headshot { " (headshot)" } else { "" }
         );
