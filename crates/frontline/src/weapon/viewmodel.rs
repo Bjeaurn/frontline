@@ -9,17 +9,21 @@ use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 use bevy::camera::CameraOutputMode;
 use bevy::camera::visibility::RenderLayers;
+use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::light::NotShadowCaster;
+use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 use bevy::render::render_resource::BlendState;
+use std::collections::HashMap;
 
 use super::effects::MuzzleFlash;
-use super::{HeldWeapon, ShotFired, WeaponSystems, ease};
+use super::{HeldWeapon, Kit, ShotFired, WeaponSystems, ease};
+use crate::assets::EMBEDDED_ROOT;
 use crate::atmosphere;
-use crate::data::{GunModel, SightKind, WeaponId, WeaponStats};
+use crate::data::{GameData, GunModel, SightKind, WeaponId, WeaponStats};
 use crate::flow::AppState;
-use crate::gear::Attachments;
+use crate::gear::{Attachments, NO_CAMO};
 use crate::player::{ControllerSystems, EyeCamera, LocalLife, Motor, MouseCaptured};
 use crate::shared::LocalPlayer;
 
@@ -76,6 +80,9 @@ const MANTLE_RATE: f32 = 14.0;
 const SWITCH_DROP: f32 = 0.28;
 const SWITCH_TILT: f32 = 0.9;
 
+/// How much gun one tile of a camo texture covers, in metres.
+const CAMO_TILE_METRES: f32 = 0.12;
+
 /// Light for the viewmodel layer; world lights only reach the world layer.
 const VIEWMODEL_LIGHT_LUX: f32 = 9_000.0;
 const MUZZLE_LIGHT_LUMENS: f32 = 400_000.0;
@@ -109,8 +116,9 @@ pub struct ViewmodelCamera;
 /// The gun root under the viewmodel camera, with its procedural animation state.
 #[derive(Component, Debug, Default)]
 pub(super) struct ViewmodelGun {
-    /// The Weapon (and Attachments) whose model is currently built under it.
-    weapon: Option<(WeaponId, Attachments)>,
+    /// The Weapon, Attachments and camo (an id from `data/progression.ron`, `none` for bare
+    /// metal) whose model is currently built under it.
+    weapon: Option<(WeaponId, Attachments, String)>,
     bob_phase: f32,
     bob_amount: f32,
     sway: Vec2,
@@ -427,10 +435,84 @@ impl Furniture {
 #[derive(Resource)]
 struct GunMaterials([Handle<StandardMaterial>; 5]);
 
-fn create_gun_materials(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>) {
+fn create_gun_materials(
+    mut commands: Commands,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    assets: Res<AssetServer>,
+    data: Res<GameData>,
+) {
     commands.insert_resource(GunMaterials(
         Furniture::ALL.map(|furniture| materials.add(furniture.material())),
     ));
+    let camos = data
+        .progression
+        .camos
+        .iter()
+        .map(|camo| {
+            let texture = assets
+                .load_builder()
+                .with_settings(|settings: &mut ImageLoaderSettings| {
+                    settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+                        label: Some("camo".into()),
+                        address_mode_u: ImageAddressMode::Repeat,
+                        address_mode_v: ImageAddressMode::Repeat,
+                        ..ImageSamplerDescriptor::linear()
+                    });
+                })
+                .load(format!("{EMBEDDED_ROOT}camos/{}", camo.texture));
+            let material = materials.add(StandardMaterial {
+                base_color_texture: Some(texture),
+                metallic: camo.metallic,
+                perceptual_roughness: camo.roughness,
+                ..default()
+            });
+            (camo.id.clone(), material)
+        })
+        .collect();
+    commands.insert_resource(CamoMaterials(camos));
+}
+
+/// One material per camo of `data/progression.ron`, by id.
+#[derive(Resource)]
+struct CamoMaterials(HashMap<String, Handle<StandardMaterial>>);
+
+/// A box mesh whose texture coordinates run along the gun's own axes (one tile per
+/// `CAMO_TILE_METRES`), so a camo pattern is the same size on every part and carries on across
+/// the joins between them. `centre` is where the box sits in gun space.
+fn camo_box(size: Vec3, centre: Vec3) -> Mesh {
+    let mut mesh = Mesh::from(Cuboid::from_size(size));
+    let uvs: Option<Vec<[f32; 2]>> = match (
+        mesh.attribute(Mesh::ATTRIBUTE_POSITION),
+        mesh.attribute(Mesh::ATTRIBUTE_NORMAL),
+    ) {
+        (
+            Some(VertexAttributeValues::Float32x3(positions)),
+            Some(VertexAttributeValues::Float32x3(normals)),
+        ) => Some(
+            positions
+                .iter()
+                .zip(normals)
+                .map(|(position, normal)| {
+                    let p = Vec3::from(*position) + centre;
+                    let n = Vec3::from(*normal).abs();
+                    // Project along the axis the face looks down.
+                    let flat = if n.x > n.y && n.x > n.z {
+                        Vec2::new(p.z, p.y)
+                    } else if n.y > n.z {
+                        Vec2::new(p.x, p.z)
+                    } else {
+                        Vec2::new(p.x, p.y)
+                    };
+                    (flat / CAMO_TILE_METRES).to_array()
+                })
+                .collect(),
+        ),
+        _ => None,
+    };
+    if let Some(uvs) = uvs {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    }
+    mesh
 }
 
 /// A rectangular optic around `sight`: four frame bars of thickness `frame` and length `depth`
@@ -635,17 +717,26 @@ fn attach_viewmodel(
 fn build_gun(
     mut commands: Commands,
     materials: Res<GunMaterials>,
+    camos: Res<CamoMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
-    player: Query<&HeldWeapon, With<LocalPlayer>>,
+    player: Query<(&HeldWeapon, &Kit), With<LocalPlayer>>,
     mut gun: Query<(Entity, &mut ViewmodelGun, &Children)>,
     parts: Query<(), With<GunPart>>,
     mut flash: Query<&mut Transform, With<MuzzleFlash>>,
 ) {
-    let (Ok(weapon), Ok((gun, mut anim, children))) = (player.single(), gun.single_mut()) else {
+    let (Ok((weapon, kit)), Ok((gun, mut anim, children))) = (player.single(), gun.single_mut())
+    else {
         return;
     };
-    let built = (weapon.id, weapon.attachments);
-    if anim.weapon == Some(built) {
+    // The Loadout's camo goes on its Primary only.
+    let wanted = &kit.loadout().camo;
+    let camo = if weapon.id == kit.loadout().primary && camos.0.contains_key(wanted.as_str()) {
+        wanted.clone()
+    } else {
+        NO_CAMO.to_owned()
+    };
+    let built = (weapon.id, weapon.attachments, camo.clone());
+    if anim.weapon.as_ref() == Some(&built) {
         return;
     }
     anim.weapon = Some(built);
@@ -658,12 +749,16 @@ fn build_gun(
     let muzzle = Vec3::from(stats.muzzle_offset);
     // Where the barrel itself ends: a Silencer carries on from there to the muzzle.
     let barrel_end = muzzle.z + stats.muzzle_length;
-    let mut part = |mesh: Mesh, furniture: Furniture, transform: Transform| {
+    // `skin` replaces the finish's own material (camo).
+    let mut part = |mesh: Mesh,
+                    furniture: Furniture,
+                    transform: Transform,
+                    skin: Option<&Handle<StandardMaterial>>| {
         commands
             .spawn((
                 GunPart,
                 Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(materials.0[furniture as usize].clone()),
+                MeshMaterial3d(skin.unwrap_or(&materials.0[furniture as usize]).clone()),
                 transform,
                 viewmodel_layer(),
                 NotShadowCaster,
@@ -671,11 +766,18 @@ fn build_gun(
             ))
             .id()
     };
+    // Camo covers the gun's body parts; the barrel, sights and bolt stay bare.
+    let camo_material = camos.0.get(&camo);
     for &(size, centre, furniture) in shape.boxes {
         part(
-            Cuboid::from_size(size).into(),
+            if camo_material.is_some() {
+                camo_box(size, centre)
+            } else {
+                Cuboid::from_size(size).into()
+            },
             furniture,
             Transform::from_translation(centre),
+            camo_material,
         );
     }
     part(
@@ -683,6 +785,7 @@ fn build_gun(
         Furniture::Metal,
         Transform::from_xyz(muzzle.x, muzzle.y, (shape.barrel_start + barrel_end) / 2.0)
             .with_rotation(Quat::from_rotation_x(FRAC_PI_2)),
+        None,
     );
     if stats.muzzle_length > 0.0 {
         part(
@@ -694,16 +797,18 @@ fn build_gun(
             Furniture::Sight,
             Transform::from_xyz(muzzle.x, muzzle.y, (barrel_end + muzzle.z) / 2.0)
                 .with_rotation(Quat::from_rotation_x(FRAC_PI_2)),
+            None,
         );
     }
     for (mesh, furniture, transform) in sight_parts(shape, stats) {
-        part(mesh, furniture, transform);
+        part(mesh, furniture, transform, None);
     }
     if let Some((size, centre)) = shape.bolt {
         let handle = part(
             Cuboid::from_size(size).into(),
             Furniture::Metal,
             Transform::from_translation(centre),
+            None,
         );
         commands.entity(handle).insert(BoltHandle(centre));
     }

@@ -1,0 +1,66 @@
+// Progression: XP awards, the Level curve, what each Level unlocks and the weapon camos with
+// their challenges. Read at startup from ./data/ (falls back to the copy built into the binary).
+// The server awards XP (a client's Profile stores it, docs/adr/0002), so a Host's numbers apply
+// to everyone on it. All amounts are whole XP.
+(
+    xp: (
+        kill: 100,
+        // On top of `kill` when the killing shot hit the head.
+        headshot: 50,
+        // An Assist (damage on an enemy someone else killed, this life) pays `damage * assist_per_damage`.
+        assist_per_damage: 1.0,
+        // Damage below this earns no Assist.
+        assist_min_damage: 10.0,
+        // A kill within this many seconds of your previous one continues a Multikill.
+        multikill_window_secs: 4.0,
+        // Bonus for the 2nd, 3rd, ... kill in a row (double, triple, ...); the last entry
+        // repeats for longer chains.
+        multikill_bonuses: [50, 100, 150, 200],
+        flag_capture: 150,
+        // Killing an enemy standing in a Flag zone your team holds.
+        flag_defend_kill: 50,
+        hq_capture: 150,
+        hq_destroy: 150,
+        bomb_plant: 200,
+        bomb_defuse: 200,
+        match_win: 500,
+        match_played: 200,
+    ),
+    // Reaching Level n+1 takes n * xp_per_level XP in all (Level 2 at 1500, Level 3 at 3000, ...);
+    // Level `max_level` is the last.
+    levels: (
+        xp_per_level: 1500,
+        max_level: 30,
+    ),
+    // The Level each item unlocks at. An item that isn't listed is available from Level 1.
+    // Default Loadouts ignore this: they are always usable.
+    unlocks: [
+        (level: 1, item: Weapon(AssaultRifle)),
+        (level: 1, item: Weapon(Smg)),
+        (level: 1, item: Weapon(SniperRifle)),
+        (level: 1, item: Weapon(Pistol)),
+        (level: 1, item: Attachment(RedDot)),
+        (level: 1, item: Perk(SleightOfHand)),
+        (level: 1, item: Perk(StoppingPower)),
+        (level: 1, item: Perk(Marathon)),
+        (level: 2, item: CustomLoadouts),
+        (level: 3, item: Attachment(Acog)),
+        (level: 4, item: Attachment(Silencer)),
+        (level: 5, item: Perk(Scavenger)),
+        (level: 6, item: Perk(Lightweight)),
+        (level: 8, item: Perk(Ninja)),
+    ],
+    // Weapon camos. A camo is unlocked per Weapon by its `challenge`, counted on that Weapon:
+    //   Kills(n) / Headshots(n)   n kills / headshot kills with it
+    //   AllOthers                 every other camo unlocked on it
+    // `texture` is under assets/camos/ (made by tools/camos/camos.py); `swatch` is the colour the
+    // editor shows; `metallic` and `roughness` shape the material.
+    camos: [
+        (id: "woodland", name: "Woodland", texture: "woodland.png", swatch: (0.33, 0.38, 0.20), challenge: Kills(25)),
+        (id: "desert", name: "Desert", texture: "desert.png", swatch: (0.77, 0.66, 0.46), challenge: Kills(50)),
+        (id: "urban", name: "Urban", texture: "urban.png", swatch: (0.50, 0.51, 0.52), challenge: Headshots(25)),
+        (id: "tiger", name: "Tiger", texture: "tiger.png", swatch: (0.69, 0.45, 0.19), challenge: Kills(100)),
+        (id: "arctic", name: "Arctic", texture: "arctic.png", swatch: (0.89, 0.91, 0.93), challenge: Headshots(50)),
+        (id: "gold", name: "Gold", texture: "gold.png", swatch: (0.84, 0.66, 0.20), metallic: 0.6, roughness: 0.35, challenge: AllOthers),
+    ],
+)

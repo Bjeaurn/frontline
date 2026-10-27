@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::data::WeaponId;
 use crate::gear::{AmmoPack, Attachments, EquippedPerks, PerkSet};
 use crate::modes::ModeView;
+use crate::progression::XpReason;
 use crate::shared::{
     Health, MatchState, PlayerName, PlayerPose, PlayerStats, PlayerTeam, TELEPORT_DISTANCE, Team,
 };
@@ -120,6 +121,14 @@ pub struct KillFeed {
     pub headshot: bool,
 }
 
+/// Server -> the player who earned it (`EventChannel`): XP for `reason`. The client adds it to
+/// its Profile (docs/adr/0002).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct XpAward {
+    pub amount: u32,
+    pub reason: XpReason,
+}
+
 /// Server -> the respawning player: move the local player here and resume control.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Respawn {
@@ -198,6 +207,8 @@ pub(super) fn register(app: &mut App) {
     app.register_message::<AmmoRefill>()
         .add_direction(NetworkDirection::ServerToClient);
     app.register_message::<BombExploded>()
+        .add_direction(NetworkDirection::ServerToClient);
+    app.register_message::<XpAward>()
         .add_direction(NetworkDirection::ServerToClient);
 }
 

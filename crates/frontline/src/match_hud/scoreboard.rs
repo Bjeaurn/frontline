@@ -1,6 +1,7 @@
 //! The Scoreboard: held open with the scoreboard key, forced open at Match end (under the result
-//! banner) with the next Rotation entry and the countdown to the next Match. Our Team's section comes first; players are sorted by
-//! kills and the local player is highlighted.
+//! banner) with the next Rotation entry, the countdown to the next Match and the local player's
+//! XP summary (XP gained, Level and progress bar). Our Team's section comes first; players are
+//! sorted by kills and the local player is highlighted.
 
 use std::cmp::Reverse;
 
@@ -13,6 +14,8 @@ use crate::maps::MapRegistry;
 use crate::net::protocol::PlayerOwner;
 use crate::player::LocalLife;
 use crate::player::input::Bindings;
+use crate::profile::Profile;
+use crate::progression::{LevelProgress, MatchXp};
 use crate::shared::{LocalPlayerReplica, MatchPhase, PlayerName, PlayerStats, PlayerTeam};
 use crate::ui::{self, UiFonts};
 
@@ -23,6 +26,8 @@ const SECTION_EMBLEM_SIZE: f32 = 30.0;
 const ROW_SIZE: f32 = 18.0;
 const STAT_WIDTH: f32 = 48.0;
 const SELF_BG: Color = Color::srgba(1.0, 1.0, 1.0, 0.12);
+const XP_BAR_HEIGHT: f32 = 10.0;
+const XP_BAR_BACK: Color = Color::srgba(0.0, 0.0, 0.0, 0.55);
 
 #[derive(Component)]
 pub(super) struct ScoreboardRoot;
@@ -45,6 +50,30 @@ struct MatchResult {
     next_in: u32,
     /// "Map - Game Mode" of the Rotation's next Match.
     next_up: String,
+    xp: XpSummary,
+}
+
+/// What the Match paid the local player and where that leaves their Level.
+#[derive(PartialEq)]
+struct XpSummary {
+    gained: u32,
+    /// The Level at the start of the Match.
+    from_level: u32,
+    /// The Level now and the progress through it.
+    progress: LevelProgress,
+}
+
+/// `1234` as `1,234`.
+fn thousands(n: u32) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
 }
 
 #[derive(PartialEq)]
@@ -228,6 +257,71 @@ fn build(panel: &mut ChildSpawnerCommands, fonts: &UiFonts, assets: &AssetServer
             ),
         ));
     }
+    if let Some(result) = &board.result {
+        build_xp_summary(panel, fonts, &result.xp);
+    }
+}
+
+/// XP gained, the Level reached and a bar of the progress through it.
+fn build_xp_summary(panel: &mut ChildSpawnerCommands, fonts: &UiFonts, xp: &XpSummary) {
+    let progress = xp.progress;
+    let level = if progress.level > xp.from_level {
+        format!("LEVEL {} > {}  LEVEL UP", xp.from_level, progress.level)
+    } else {
+        format!("LEVEL {}", progress.level)
+    };
+    let remaining = if progress.maxed() {
+        "MAX LEVEL".to_owned()
+    } else {
+        format!(
+            "{} / {} XP",
+            thousands(progress.into_level),
+            thousands(progress.span)
+        )
+    };
+    panel
+        .spawn(Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: px(4.0),
+            margin: UiRect::top(px(14.0)),
+            padding: UiRect::top(px(8.0)),
+            border: UiRect::top(px(1.0)),
+            ..default()
+        })
+        .insert(BorderColor::all(ui::PANEL_BORDER))
+        .with_children(|summary| {
+            summary
+                .spawn(Node {
+                    justify_content: JustifyContent::SpaceBetween,
+                    ..default()
+                })
+                .with_children(|line| {
+                    line.spawn(ui::label(
+                        fonts,
+                        &format!("XP EARNED  +{}", thousands(xp.gained)),
+                        SECTION_SIZE - 4.0,
+                        ui::ACCENT,
+                    ));
+                    line.spawn(ui::label(fonts, &level, SECTION_SIZE - 4.0, ui::TEXT));
+                });
+            summary
+                .spawn((
+                    Node {
+                        height: px(XP_BAR_HEIGHT),
+                        ..default()
+                    },
+                    BackgroundColor(XP_BAR_BACK),
+                ))
+                .with_child((
+                    Node {
+                        width: percent(progress.fraction() * 100.0),
+                        height: percent(100.0),
+                        ..default()
+                    },
+                    BackgroundColor(ui::ACCENT),
+                ));
+            summary.spawn(ui::label(fonts, &remaining, ROW_SIZE, ui::TEXT_DIM));
+        });
 }
 
 /// Shows the Scoreboard while the key is held or the Match has ended, rebuilding its rows
@@ -241,6 +335,8 @@ pub(super) fn update_scoreboard(
     fonts: Res<UiFonts>,
     assets: Res<AssetServer>,
     state: MatchQuery,
+    profile: Res<Profile>,
+    match_xp: Res<MatchXp>,
     players: Query<
         (
             &PlayerName,
@@ -277,16 +373,19 @@ pub(super) fn update_scoreboard(
     }
 
     let ours = own_side(life.team());
-    let result = ended.map(|(_, next_in)| {
-        MatchResult {
-            next_in,
-            next_up: format!(
-                "{} - {}",
-                maps.get(&state.next.0)
-                    .map_or_else(|| state.next.0.to_string(), |info| info.name.clone()),
-                state.next.1.name()
-            ),
-        }
+    let result = ended.map(|(_, next_in)| MatchResult {
+        xp: XpSummary {
+            gained: match_xp.gained,
+            from_level: data.progression.levels.level_for(match_xp.start_xp),
+            progress: profile.level_progress(&data),
+        },
+        next_in,
+        next_up: format!(
+            "{} - {}",
+            maps.get(&state.next.0)
+                .map_or_else(|| state.next.0.to_string(), |info| info.name.clone()),
+            state.next.1.name()
+        ),
     });
     let display_name = |name: &PlayerName| {
         if name.0.is_empty() {

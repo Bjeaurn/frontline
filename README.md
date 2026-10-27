@@ -78,15 +78,15 @@ On joining, pick a Team (and then a Loadout). The mouse is grabbed while you pla
 | Primary / Secondary (lowers one and raises the other, about 0.4 s) | 1 / 2, or the mouse wheel |
 | Pause menu (Resume, Change Team, Change Loadout, Settings, Leave Game) | Esc; Esc again steps back |
 
-Tuning lives in `data/`: `weapons.ron` (including per-Weapon Hit Zone damage multipliers), `attachments.ron` (Optics and Muzzles as stat modifiers), `perks.ron` (the six Perks and the ammo pack), `loadouts.ron` (Default Loadouts, the instant-swap window and the Weapon switch time), `movement.ron`, `match_rules.ron` (presets, each with its HUD block), `game_modes.ron` (score and time limits, capture, HQ and bomb tuning of every Game Mode), `factions.ron`, `maps.ron` (every built-in Map: file, look, Game Modes, and the two Factions its theater plays), `looks.ron` (per-Map look presets: grade, fog, sun, ambient, sky) and `presentation.ron` (how long bodies stay and how many at once). The game reads them at startup from `./data/` (relative to where you launch it), so edit and restart to retune. Without that folder it uses the copies built into the binary. Both machines should use the same files: damage and score are decided on the server, but movement, recoil, spread and fire rate come from each client's own copy.
+Tuning lives in `data/`: `weapons.ron` (including per-Weapon Hit Zone damage multipliers), `attachments.ron` (Optics and Muzzles as stat modifiers), `perks.ron` (the six Perks and the ammo pack), `loadouts.ron` (Default Loadouts, the instant-swap window and the Weapon switch time), `movement.ron`, `match_rules.ron` (presets, each with its HUD block), `game_modes.ron` (score and time limits, capture, HQ and bomb tuning of every Game Mode), `factions.ron`, `maps.ron` (every built-in Map: file, look, Game Modes, and the two Factions its theater plays), `looks.ron` (per-Map look presets: grade, fog, sun, ambient, sky), `presentation.ron` (how long bodies stay and how many at once) and `progression.ron` (XP awards, the Level curve, unlocks and camo Challenges). The game reads them at startup from `./data/` (relative to where you launch it), so edit and restart to retune. Without that folder it uses the copies built into the binary. Both machines should use the same files: damage and score are decided on the server, but movement, recoil, spread and fire rate come from each client's own copy.
 
 ## Loadouts
 
-A Loadout is a Primary (AR, SMG or Sniper) with an Optic and a Muzzle Attachment, a Secondary (the M9 pistol), one Perk per Perk Slot and a reserved camo field (`none`). It applies on your next spawn, or at once within 5 s of spawning. The Loadout screen (B, or Change Loadout in the pause menu) lists three read-only Default Loadouts and the three custom ones in your Profile; CHOOSE picks one.
+A Loadout is a Primary (AR, SMG or Sniper) with an Optic and a Muzzle Attachment, a Secondary (the M9 pistol), one Perk per Perk Slot and a camo for the Primary (`none`, or one of the camos under Progression). It applies on your next spawn, or at once within 5 s of spawning. The Loadout screen (B, or Change Loadout in the pause menu) lists three read-only Default Loadouts and the three custom ones in your Profile; CHOOSE picks one.
 
-**Create a Class** (button on the Loadout screen) edits one of the three custom slots: pick the slot, type a name, then cycle the Primary, Optic, Muzzle, Secondary and Perks 1 to 3 with the arrows. The stat bars follow the Attachments (an Optic or Muzzle the Primary can't take, like an Optic on the Sniper's built-in scope, shows as unavailable). SAVE writes the class into the Profile and returns to the Loadout screen on it; BACK or Esc discards.
+**Create a Class** (button on the Loadout screen) edits one of the three custom slots: pick the slot, type a name, then cycle the Primary, its camo, Optic, Muzzle, Secondary and Perks 1 to 3 with the arrows. Everything is listed, but what your Level or a camo Challenge hasn't unlocked is greyed with what it takes (`Unlocks at Level 4`, `Locked: 34/50 kills`), and SAVE refuses a class that holds any of it. The stat bars follow the Attachments (an Optic or Muzzle the Primary can't take, like an Optic on the Sniper's built-in scope, shows as unavailable). SAVE writes the class into the Profile and returns to the Loadout screen on it; BACK or Esc discards.
 
-The Profile is a client-local file, `<config dir>/frontline/profile.ron`, next to `settings.ron`: the custom classes, the chosen Loadout and room for XP and Levels later. The first run starts with the Default Loadout your old Settings had chosen. It follows you to any server you join.
+The Profile is a client-local file, `<config dir>/frontline/profile.ron`, next to `settings.ron`: the custom classes, the chosen Loadout, your XP (the Level follows from it) and kills and headshot kills per Weapon for the camo Challenges. The first run starts with the Default Loadout your old Settings had chosen. It follows you to any server you join.
 
 | Slot | Choices |
 |---|---|
@@ -97,6 +97,44 @@ The Profile is a client-local file, `<config dir>/frontline/profile.ron`, next t
 | Perk 3 | Marathon (sprint 2.5x as long), Ninja (your footsteps make no sound) |
 
 Other players' footsteps are heard as a quiet thud while they walk or run; crouched and prone players, and Ninja, are silent. The server applies the Attachments' falloff and the Perks' damage; clients tell it their Attachments with every shot and their Perks when they spawn (clients are trusted on a LAN, docs/adr/0002). Fire Pings and the Minimap don't exist yet, so the Silencer only changes the flash, the sound and the damage range.
+
+## Progression
+
+The server awards XP for what you do and sends it to you as an `XpAward` (amount and reason); your client adds it to your Profile and saves it (clients are trusted, docs/adr/0002), so your Level follows you to any server. Every number is in `data/progression.ron`; a Host's numbers apply to everyone on it.
+
+| Event | XP |
+|---|---|
+| Kill | 100 |
+| Headshot (on top of the kill) | +50 |
+| Assist (damage you dealt to an enemy someone else killed, this life; under 10 HP earns none) | 1 per HP of damage |
+| Multikill (kills within 4 s of your previous one) | double +50, triple +100, quad +150, then +200 |
+| Flag capture (everyone on the Flag, Domination) | 150 |
+| Flag-defend kill (killing an enemy in a Flag zone your team holds) | +50 |
+| HQ capture or destroy (everyone on it, Headquarters) | 150 |
+| Bomb plant or defuse (Search & Destroy) | 200 |
+| Match played / Match won | 200 / +500 |
+
+Level n+1 needs `n * 1500` XP in all (Level 2 at 1,500, Level 3 at 3,000, ...), up to Level 30 for now. The HUD shows a `+100 KILL` popup stack under the crosshair for each award (it fades after about two seconds), a small LEVEL UP toast (the result banner at half size, naming what the Level unlocked) and a CAMO UNLOCKED toast. The end-of-Match Scoreboard ends with your XP summary: XP earned, your Level (`LEVEL 2 > 3  LEVEL UP` when it rose) and a progress bar. The Loadout screen shows your Level and XP.
+
+**Unlocks** are a table in `progression.ron` (anything not listed is there from Level 1, and the Default Loadouts are always usable):
+
+| Level | Unlocks |
+|---|---|
+| 1 | AR, SMG, Sniper, Pistol, Red Dot, Sleight of Hand, Stopping Power, Marathon |
+| 2 | Custom classes (editing and choosing the three custom slots) |
+| 3 | ACOG |
+| 4 | Silencer |
+| 5 / 6 / 8 | Scavenger / Lightweight / Ninja (the second Perks) |
+
+**Camos** are material variants of the Primary's body parts in the first-person viewmodel (barrel, sights and bolt stay bare; the third-person gun comes later with remote players' guns). Six ship: Woodland, Desert, Urban (grey digital), Tiger (stripes), Arctic and a metallic Gold. Each Weapon unlocks them separately by a **Challenge** counted in your Profile on that Weapon: Woodland 25 kills, Desert 50 kills, Urban 25 headshot kills, Tiger 100 kills, Arctic 50 headshot kills, and Gold once the other five are unlocked on it. The editor's Camo picker shows the progress of a locked one (`34/50 kills`). The textures are 128 px tiling PNGs under `crates/frontline/assets/camos/` (embedded in the binary), made by `tools/camos/camos.py`:
+
+```sh
+python3 -m venv /tmp/camo && /tmp/camo/bin/pip install Pillow
+/tmp/camo/bin/python tools/camos/camos.py                    # all six, into assets/camos/
+/tmp/camo/bin/python tools/camos/camos.py --sheet /tmp/camos.png   # plus a contact sheet
+```
+
+A camo is a `progression.ron` entry (id, name, texture file, editor swatch, optional `metallic` and `roughness`, and its challenge: `Kills(n)`, `Headshots(n)` or `AllOthers`); a new texture also goes into the list in `src/assets.rs`.
 
 ## Maps
 
@@ -161,14 +199,17 @@ The kit has no vehicles, barriers or lamp posts, so the generators build those a
 - `crates/frontline/src/player/`: first-person controller, input bindings, damage/kill-feed/death HUD, remote player visuals and their bodies
 - `crates/frontline/src/weapon/`: local Weapon (firing, ammo, aiming, recoil, bolt cycle), per-weapon viewmodels, shot effects, crosshair/hitmarker/ammo/scope HUD
 - `crates/frontline/src/gear.rs`: Attachments, Perks and the Loadout, and the pure rules that turn them into effective Weapon stats and Perk effects (unit-tested)
-- `crates/frontline/src/profile.rs`: the Profile file (`profile.ron`): custom Loadouts and the chosen one
+- `crates/frontline/src/profile.rs`: the Profile file (`profile.ron`): custom Loadouts, the chosen one, XP and per-Weapon kill counters, and applying an award to them
+- `crates/frontline/src/progression/`: XP values, the Level curve, the unlock table and camo Challenges (pure, unit-tested); client-side award handling, and the XP popups and toasts
+- `crates/frontline/src/combat/xp.rs`: server XP awarding, the per-life damage ledger (Assists) and the Multikill chain
 - `crates/frontline/src/loadout/`: the Loadout screen, the Create a Class editor, stat bars, the CoD swap rule
 - `crates/frontline/src/maps/`: Map registry (`data/maps.ron`, private Maps), TrenchBroom loading (units, textures, colliders, entity classes), loading the Match's Map and swapping it (`ChangeMap`), spawn points
 - `crates/frontline/src/world.rs`: physics
 - `crates/frontline/src/materials.rs`: material library (one tinted material per `SurfaceKind` texture set)
 - `crates/frontline/src/atmosphere.rs`: camera look (tonemapping, bloom, SSAO) and per-Map look presets (`data/looks.ron`)
-- `crates/frontline/src/assets.rs`: files embedded in the binary (faction emblems, surface textures; CC0 credits in `assets/textures/CREDITS.md`)
+- `crates/frontline/src/assets.rs`: files embedded in the binary (faction emblems, camo textures, surface textures; CC0 credits in `assets/textures/CREDITS.md`)
 - `tools/mapgen/`: Python generator for `.map` files (the arena, Crossroads) and its building kit
+- `tools/camos/`: generates the weapon camo textures (`camos.py`, Pillow only)
 - `tools/assets/`: imports prop models from raw asset packs (`import_props.py`)
 - `crates/frontline/src/shared.rs`: pose and stance types shared by netcode and gameplay
 

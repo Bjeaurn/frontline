@@ -1,5 +1,5 @@
 //! Tunable game data (Weapons, Attachments, Perks, Match Rules, movement, presentation, Game
-//! Modes, Factions, Loadouts), loaded once at startup.
+//! Modes, Factions, Loadouts, progression), loaded once at startup.
 //!
 //! Each file is read from `./data/<file>` relative to the working directory, so it can be
 //! edited and picked up on restart without recompiling. When the file isn't there (e.g. the
@@ -13,6 +13,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::gear::{AmmoPackTuning, Attachment, AttachmentId, Loadout, PERK_SLOTS, Perk, PerkId};
+use crate::progression::Progression;
 use crate::shared::MatchState;
 
 const WEAPONS_FILE: &str = "weapons.ron";
@@ -24,6 +25,7 @@ const FACTIONS_FILE: &str = "factions.ron";
 const LOADOUTS_FILE: &str = "loadouts.ron";
 const ATTACHMENTS_FILE: &str = "attachments.ron";
 const PERKS_FILE: &str = "perks.ron";
+const PROGRESSION_FILE: &str = "progression.ron";
 const BUILTIN_WEAPONS: &str = include_str!("../../../data/weapons.ron");
 const BUILTIN_MATCH_RULES: &str = include_str!("../../../data/match_rules.ron");
 const BUILTIN_MOVEMENT: &str = include_str!("../../../data/movement.ron");
@@ -33,6 +35,7 @@ const BUILTIN_FACTIONS: &str = include_str!("../../../data/factions.ron");
 const BUILTIN_LOADOUTS: &str = include_str!("../../../data/loadouts.ron");
 const BUILTIN_ATTACHMENTS: &str = include_str!("../../../data/attachments.ron");
 const BUILTIN_PERKS: &str = include_str!("../../../data/perks.ron");
+const BUILTIN_PROGRESSION: &str = include_str!("../../../data/progression.ron");
 
 /// The Match Rules preset a server runs when `--rules` isn't given, and the one clients fall back
 /// to for a preset their own data lacks.
@@ -546,6 +549,8 @@ pub struct GameData {
     pub loadout_swap_secs: f32,
     /// Seconds to lower one Weapon and raise the other.
     pub weapon_switch_secs: f32,
+    /// XP awards, the Level curve, unlocks and camos.
+    pub progression: Progression,
 }
 
 impl GameData {
@@ -651,7 +656,9 @@ impl GameData {
             default_loadouts: loadouts.defaults,
             loadout_swap_secs: loadouts.swap_window_secs,
             weapon_switch_secs: loadouts.weapon_switch_secs,
+            progression: load(PROGRESSION_FILE, BUILTIN_PROGRESSION),
         };
+        data.progression.check(PROGRESSION_FILE);
         assert!(
             data.match_rules.contains_key(DEFAULT_MATCH_RULES),
             "{MATCH_RULES_FILE} must define the \"{DEFAULT_MATCH_RULES}\" preset"

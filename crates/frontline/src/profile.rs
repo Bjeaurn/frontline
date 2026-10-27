@@ -2,16 +2,21 @@
 //! `<config dir>/frontline/profile.ron` next to `settings.ron`. It travels with the player, not
 //! with any Host, so it is a client-local file the server never sees.
 //!
-//! For now it holds the three custom Loadouts and which Loadout is chosen. XP, Level and unlocks
-//! are meant to live here later: new fields need `#[serde(default)]` so existing files keep
-//! loading. Client and Host only.
+//! It holds the three custom Loadouts, which Loadout is chosen, the XP the server awarded (the
+//! Level is derived from it, `data/progression.ron`) and the per-Weapon kill counters the camo
+//! Challenges read. New fields need `#[serde(default)]` so existing files keep loading. Client
+//! and Host only.
+
+use std::collections::HashMap;
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::data::GameData;
+use crate::data::{GameData, WeaponId};
 use crate::flow::{Settings, load_config, save_config};
 use crate::gear::Loadout;
+use crate::net::protocol::XpAward;
+use crate::progression::{LevelProgress, UnlockItem, WeaponRecord, XpReason};
 
 const PROFILE_FILE: &str = "profile.ron";
 
@@ -50,9 +55,21 @@ pub struct Profile {
     /// The custom Loadouts, always `CUSTOM_SLOTS` of them.
     pub custom: Vec<Loadout>,
     pub chosen: LoadoutChoice,
-    /// Reserved for progression (XP and Level are derived from it later); nothing earns it yet.
+    /// Total XP earned; the Level is derived from it.
     #[serde(default)]
     pub xp: u32,
+    /// Kills and headshot kills per Weapon, for the camo Challenges.
+    #[serde(default)]
+    pub weapons: HashMap<WeaponId, WeaponRecord>,
+}
+
+/// What an XP award changed, for the HUD to announce.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AwardOutcome {
+    pub level_before: u32,
+    pub level_after: u32,
+    /// Camos (by id) the award's kill unlocked, with the Weapon they are unlocked on.
+    pub camos: Vec<(WeaponId, String)>,
 }
 
 impl Profile {
@@ -64,13 +81,15 @@ impl Profile {
             custom: Vec::new(),
             chosen: LoadoutChoice::Default(default_choice),
             xp: 0,
+            weapons: HashMap::new(),
         }
         .validated(data)
     }
 
     /// The Profile with everything the data doesn't allow repaired (a hand-edited file or one
     /// written against other data): a Loadout is validated, slots are padded or trimmed to
-    /// `CUSTOM_SLOTS`, and an out-of-range choice means the first Default Loadout.
+    /// `CUSTOM_SLOTS`, and an out-of-range choice (or a custom one the Level hasn't unlocked)
+    /// means the first Default Loadout.
     pub fn validated(mut self, data: &GameData) -> Profile {
         self.custom.truncate(CUSTOM_SLOTS);
         let mut slot = self.custom.len();
@@ -86,13 +105,81 @@ impl Profile {
             .map(|loadout| loadout.validated(data))
             .collect();
         self.chosen = match self.chosen {
-            LoadoutChoice::Custom(slot) if slot < CUSTOM_SLOTS => LoadoutChoice::Custom(slot),
+            LoadoutChoice::Custom(slot) if slot < CUSTOM_SLOTS && self.custom_unlocked(data) => {
+                LoadoutChoice::Custom(slot)
+            }
             LoadoutChoice::Default(index) if index < data.default_loadouts.len() => {
                 LoadoutChoice::Default(index)
             }
             _ => LoadoutChoice::Default(0),
         };
         self
+    }
+
+    pub fn level(&self, data: &GameData) -> u32 {
+        data.progression.levels.level_for(self.xp)
+    }
+
+    pub fn level_progress(&self, data: &GameData) -> LevelProgress {
+        data.progression.levels.progress(self.xp)
+    }
+
+    /// What `weapon` has done so far, for its camo Challenges.
+    pub fn record(&self, weapon: WeaponId) -> WeaponRecord {
+        self.weapons.get(&weapon).copied().unwrap_or_default()
+    }
+
+    /// Whether the Level has unlocked editing and choosing the custom Loadouts.
+    pub fn custom_unlocked(&self, data: &GameData) -> bool {
+        data.progression
+            .is_unlocked(UnlockItem::CustomLoadouts, self.level(data))
+    }
+
+    /// Why `choice` can't be used yet, one text each; empty when it can. Default Loadouts are
+    /// always usable.
+    pub fn locks(&self, choice: LoadoutChoice, data: &GameData) -> Vec<String> {
+        let LoadoutChoice::Custom(slot) = choice else {
+            return Vec::new();
+        };
+        if !self.custom_unlocked(data) {
+            return vec![format!(
+                "Custom classes unlock at Level {}",
+                data.progression.unlock_level(UnlockItem::CustomLoadouts)
+            )];
+        }
+        let loadout = &self.custom[slot];
+        data.loadout_locks(loadout, self.level(data), &self.record(loadout.primary))
+    }
+
+    /// Adds a server award: the XP, and for a kill the Weapon's counters. Reports the Levels
+    /// and camos it unlocked.
+    pub fn apply_award(&mut self, award: XpAward, data: &GameData) -> AwardOutcome {
+        let level_before = self.level(data);
+        self.xp = self.xp.saturating_add(award.amount);
+        let mut camos = Vec::new();
+        let counted = match award.reason {
+            XpReason::Kill(weapon) => Some((weapon, 1, 0)),
+            XpReason::Headshot(weapon) => Some((weapon, 0, 1)),
+            _ => None,
+        };
+        if let Some((weapon, kills, headshots)) = counted {
+            let before = self.record(weapon);
+            let record = self.weapons.entry(weapon).or_default();
+            record.kills += kills;
+            record.headshots += headshots;
+            let after = *record;
+            camos.extend(
+                data.progression
+                    .newly_unlocked(&before, &after)
+                    .into_iter()
+                    .map(|camo| (weapon, camo.id.clone())),
+            );
+        }
+        AwardOutcome {
+            level_before,
+            level_after: self.level(data),
+            camos,
+        }
     }
 
     /// The Loadout the player spawns with.
@@ -174,5 +261,74 @@ mod tests {
         let back: Profile = ron::from_str(&text).unwrap();
         assert_eq!(back, profile);
         assert_eq!(back.loadout(&data).name, "Silent");
+    }
+
+    fn award(amount: u32, reason: XpReason) -> XpAward {
+        XpAward { amount, reason }
+    }
+
+    #[test]
+    fn awards_add_xp_and_report_level_ups() {
+        let data = GameData::load();
+        let mut profile = Profile::fresh(&data, 0);
+        let per_level = data.progression.levels.xp_per_level;
+        let small = profile.apply_award(award(100, XpReason::Assist), &data);
+        assert_eq!((small.level_before, small.level_after), (1, 1));
+        assert_eq!(profile.xp, 100);
+        let big = profile.apply_award(award(per_level, XpReason::MatchWin), &data);
+        assert_eq!((big.level_before, big.level_after), (1, 2));
+        assert_eq!(profile.level(&data), 2);
+        // Non-kill awards touch no Weapon counter.
+        assert!(profile.weapons.is_empty());
+    }
+
+    #[test]
+    fn kills_and_headshots_count_per_weapon_and_unlock_camos() {
+        let data = GameData::load();
+        let mut profile = Profile::fresh(&data, 0);
+        let needed = match data.progression.camo("woodland").unwrap().challenge {
+            crate::progression::Challenge::Kills(n) => n,
+            other => panic!("expected a kill challenge, got {other:?}"),
+        };
+        let mut unlocked = Vec::new();
+        for _ in 0..needed {
+            let outcome = profile.apply_award(award(0, XpReason::Kill(WeaponId::Smg)), &data);
+            unlocked.extend(outcome.camos);
+        }
+        profile.apply_award(award(0, XpReason::Headshot(WeaponId::Smg)), &data);
+        assert_eq!(unlocked, [(WeaponId::Smg, "woodland".to_owned())]);
+        assert_eq!(
+            profile.record(WeaponId::Smg),
+            WeaponRecord {
+                kills: needed,
+                headshots: 1
+            }
+        );
+        // Other Weapons are untouched.
+        assert_eq!(
+            profile.record(WeaponId::AssaultRifle),
+            WeaponRecord::default()
+        );
+    }
+
+    #[test]
+    fn custom_classes_wait_for_their_level() {
+        let data = GameData::load();
+        let mut profile = Profile::fresh(&data, 0);
+        let locks = profile.locks(LoadoutChoice::Custom(0), &data);
+        assert_eq!(locks.len(), 1);
+        assert!(locks[0].contains("Level 2"));
+        assert!(profile.locks(LoadoutChoice::Default(1), &data).is_empty());
+
+        profile.chosen = LoadoutChoice::Custom(0);
+        assert_eq!(
+            profile.clone().validated(&data).chosen,
+            LoadoutChoice::Default(0)
+        );
+        profile.xp = data.progression.levels.xp_to_reach(2);
+        assert_eq!(
+            profile.clone().validated(&data).chosen,
+            LoadoutChoice::Custom(0)
+        );
     }
 }

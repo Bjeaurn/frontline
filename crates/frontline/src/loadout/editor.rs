@@ -1,7 +1,9 @@
 //! Create a Class (`Overlay::ClassEditor`), opened from the Loadout screen: pick one of the
-//! Profile's custom slots, then its Primary with an Optic and a Muzzle Attachment, its Secondary,
-//! one Perk per Perk Slot and a name. The stat bars follow the Attachments. SAVE writes the class
-//! into the Profile; the Default Loadouts are never editable.
+//! Profile's custom slots, then its Primary with a camo, an Optic and a Muzzle Attachment, its
+//! Secondary, one Perk per Perk Slot and a name. The stat bars follow the Attachments. Everything
+//! is listed, but what the Level or a camo Challenge hasn't unlocked is greyed with what it takes
+//! (`Unlocks at Level N`, `34/50 kills`) and SAVE refuses a class holding any of it. SAVE writes
+//! the class into the Profile; the Default Loadouts are never editable.
 
 use bevy::ecs::observer::IntoEntityObserver;
 use bevy::prelude::*;
@@ -13,10 +15,14 @@ use super::stats::{self, StatFill};
 use crate::data::{GameData, WeaponClass};
 use crate::flow::Overlay;
 use crate::gear::{
-    AttachmentId, AttachmentSlot, Loadout, MAX_LOADOUT_NAME_CHARS, PERK_SLOTS, PerkEffects,
+    AttachmentId, AttachmentSlot, Loadout, MAX_LOADOUT_NAME_CHARS, NO_CAMO, PERK_SLOTS, PerkEffects,
 };
 use crate::profile::{CUSTOM_SLOTS, LoadoutChoice, Profile};
+use crate::progression::UnlockItem;
 use crate::ui::{self, UiFonts};
+
+/// Colour of a locked value and its note.
+const LOCKED: Color = Color::srgb(0.85, 0.42, 0.34);
 
 pub(super) struct ClassEditorPlugin;
 
@@ -62,6 +68,8 @@ impl Draft {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Field {
     Primary,
+    /// The Primary's camo.
+    Camo,
     Optic,
     Muzzle,
     Secondary,
@@ -70,8 +78,9 @@ enum Field {
 }
 
 impl Field {
-    const ALL: [Field; 4 + PERK_SLOTS] = [
+    const ALL: [Field; 5 + PERK_SLOTS] = [
         Field::Primary,
+        Field::Camo,
         Field::Optic,
         Field::Muzzle,
         Field::Secondary,
@@ -83,6 +92,7 @@ impl Field {
     fn label(self) -> String {
         match self {
             Field::Primary => "PRIMARY".into(),
+            Field::Camo => "CAMO".into(),
             Field::Optic => "OPTIC".into(),
             Field::Muzzle => "MUZZLE".into(),
             Field::Secondary => "SECONDARY".into(),
@@ -91,21 +101,25 @@ impl Field {
     }
 }
 
-/// The text shown for what `field` currently holds.
-#[derive(Component)]
-struct PickerValue(Field);
-
-#[derive(Component)]
-struct SlotValue;
+/// The texts `refresh` keeps up to date.
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+enum EditorText {
+    /// Which custom slot is edited.
+    Slot,
+    /// What `field` currently holds.
+    Value(Field),
+    /// Under a value: what it takes to unlock it, empty when it is unlocked.
+    Note(Field),
+    /// The Primary's name and trigger mode above the stat bars.
+    Heading,
+    /// What the fitted Attachments and Perks do.
+    Details,
+    /// Why the class can't be saved yet.
+    Status,
+}
 
 #[derive(Component)]
 struct NameField;
-
-#[derive(Component)]
-struct FireModeText;
-
-#[derive(Component)]
-struct Details;
 
 /// The option after (`step` 1) or before (`step` -1) `current` in `options`, wrapping around.
 fn pick<T: Copy + PartialEq>(options: &[T], current: T, step: isize) -> T {
@@ -145,6 +159,12 @@ fn cycle(loadout: &mut Loadout, field: Field, step: isize, data: &GameData) {
                 .collect();
             loadout.secondary = pick(&secondaries, loadout.secondary, step);
         }
+        Field::Camo => {
+            let options: Vec<&str> = std::iter::once(NO_CAMO)
+                .chain(data.progression.camos.iter().map(|camo| camo.id.as_str()))
+                .collect();
+            loadout.camo = pick(&options, loadout.camo.as_str(), step).to_owned();
+        }
         Field::Optic if data.weapon(loadout.primary).accepts(AttachmentSlot::Optic) => {
             let options = attachment_options(data, AttachmentSlot::Optic);
             loadout.attachments.optic = pick(&options, loadout.attachments.optic, step);
@@ -171,6 +191,11 @@ fn value_text(loadout: &Loadout, field: Field, data: &GameData) -> String {
     match field {
         Field::Primary => data.weapon(loadout.primary).name.clone(),
         Field::Secondary => data.weapon(loadout.secondary).name.clone(),
+        Field::Camo => data
+            .progression
+            .camo(&loadout.camo)
+            .map_or("None", |camo| camo.name.as_str())
+            .to_owned(),
         Field::Optic if data.weapon(loadout.primary).accepts(AttachmentSlot::Optic) => {
             attachment(loadout.attachments.optic)
         }
@@ -197,6 +222,41 @@ fn effects_text(loadout: &Loadout, data: &GameData) -> String {
     attachments.chain(perks).collect::<Vec<_>>().join("\n")
 }
 
+/// What `field` of `loadout` still needs before it can be used, if it isn't unlocked: the Level
+/// for a Weapon, Attachment or Perk, the Challenge progress for a camo.
+fn lock_note(
+    loadout: &Loadout,
+    field: Field,
+    profile: &Profile,
+    data: &GameData,
+) -> Option<String> {
+    let progression = &data.progression;
+    let level = profile.level(data);
+    let by_level = |item: UnlockItem| {
+        (!progression.is_unlocked(item, level))
+            .then(|| format!("Unlocks at Level {}", progression.unlock_level(item)))
+    };
+    match field {
+        Field::Primary => by_level(UnlockItem::Weapon(loadout.primary)),
+        Field::Secondary => by_level(UnlockItem::Weapon(loadout.secondary)),
+        Field::Optic if data.weapon(loadout.primary).accepts(AttachmentSlot::Optic) => loadout
+            .attachments
+            .optic
+            .and_then(|id| by_level(UnlockItem::Attachment(id))),
+        Field::Muzzle if data.weapon(loadout.primary).accepts(AttachmentSlot::Muzzle) => loadout
+            .attachments
+            .muzzle
+            .and_then(|id| by_level(UnlockItem::Attachment(id))),
+        Field::Optic | Field::Muzzle => None,
+        Field::Perk(slot) => by_level(UnlockItem::Perk(loadout.perks[slot])),
+        Field::Camo => {
+            let camo = progression.camo(&loadout.camo)?;
+            let progress = progression.camo_progress(camo, &profile.record(loadout.primary));
+            (!progress.done()).then(|| format!("Locked: {}", progress.text()))
+        }
+    }
+}
+
 fn back_on_esc(keys: Res<ButtonInput<KeyCode>>, mut overlay: ResMut<NextState<Overlay>>) {
     if keys.just_pressed(KeyCode::Escape) {
         overlay.set(Overlay::Loadout);
@@ -210,7 +270,7 @@ fn picker_row<M1, M2>(
     fonts: &UiFonts,
     parent: Entity,
     label: &str,
-    value: impl Bundle,
+    value: EditorText,
     previous: impl IntoEntityObserver<M1>,
     next: impl IntoEntityObserver<M2>,
 ) {
@@ -235,16 +295,30 @@ fn picker_row<M1, M2>(
     commands
         .spawn((ChildOf(row), ui::compact_button(fonts, "<", 36.0, 22.0)))
         .observe(previous);
-    commands.spawn((
-        value,
-        ui::label(fonts, "", 20.0, ui::ACCENT),
-        Node {
-            width: px(250.0),
-            justify_content: JustifyContent::Center,
-            ..default()
-        },
-        ChildOf(row),
-    ));
+    let cell = commands
+        .spawn((
+            Node {
+                width: px(250.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            ChildOf(row),
+        ))
+        .id();
+    commands.spawn((value, ui::label(fonts, "", 20.0, ui::ACCENT), ChildOf(cell)));
+    // Only a Field's value can be locked, and so only it has a note.
+    if let EditorText::Value(field) = value {
+        commands.spawn((
+            EditorText::Note(field),
+            ui::label(fonts, "", 15.0, LOCKED),
+            Node {
+                display: Display::None,
+                ..default()
+            },
+            ChildOf(cell),
+        ));
+    }
     commands
         .spawn((ChildOf(row), ui::compact_button(fonts, ">", 36.0, 22.0)))
         .observe(next);
@@ -289,7 +363,7 @@ fn spawn_editor(mut commands: Commands, fonts: Res<UiFonts>, draft: Res<Draft>) 
         &fonts,
         form,
         "CLASS",
-        SlotValue,
+        EditorText::Slot,
         |_: On<Activate>,
          mut draft: ResMut<Draft>,
          profile: Res<Profile>,
@@ -338,7 +412,7 @@ fn spawn_editor(mut commands: Commands, fonts: Res<UiFonts>, draft: Res<Draft>) 
             &fonts,
             form,
             &field.label(),
-            PickerValue(field),
+            EditorText::Value(field),
             move |_: On<Activate>, mut draft: ResMut<Draft>, data: Res<GameData>| {
                 cycle(&mut draft.loadout, field, -1, &data);
             },
@@ -360,16 +434,26 @@ fn spawn_editor(mut commands: Commands, fonts: Res<UiFonts>, draft: Res<Draft>) 
             ..default()
         })
         .id();
-    commands.spawn((FireModeText, ui::title(&fonts, "", 30.0), ChildOf(preview)));
+    commands.spawn((
+        EditorText::Heading,
+        ui::title(&fonts, "", 30.0),
+        ChildOf(preview),
+    ));
     stats::spawn_bars(&mut commands, &fonts, preview);
     commands.spawn((
-        Details,
+        EditorText::Details,
         ui::label(&fonts, "", 18.0, ui::TEXT_DIM),
         Node {
             margin: UiRect::top(px(8.0)),
             ..default()
         },
         ChildOf(preview),
+    ));
+
+    commands.spawn((
+        EditorText::Status,
+        ui::label(&fonts, "", 20.0, LOCKED),
+        ChildOf(root),
     ));
 
     let actions = commands
@@ -411,6 +495,11 @@ fn save(
         typed
     };
     let loadout = loadout.validated(&data);
+    let locks = class_locks(&loadout, &profile, &data);
+    if !locks.is_empty() {
+        info!("Can't save class {}: {}", draft.slot + 1, locks.join("; "));
+        return;
+    }
     info!(
         "Saved custom class {}: \"{}\"\n{}",
         draft.slot + 1,
@@ -424,65 +513,89 @@ fn save(
     overlay.set(Overlay::Loadout);
 }
 
-/// Shows the draft: each picker's choice, the primary's stat bars with its Attachments, and what
-/// the Attachments and Perks do.
+/// Everything in `loadout` the Profile hasn't unlocked, one text each.
+fn class_locks(loadout: &Loadout, profile: &Profile, data: &GameData) -> Vec<String> {
+    data.loadout_locks(
+        loadout,
+        profile.level(data),
+        &profile.record(loadout.primary),
+    )
+}
+
+/// Shows the draft: each picker's choice (greyed, with what it takes, while locked), the
+/// primary's stat bars with its Attachments, what the Attachments and Perks do, and why the
+/// class can't be saved yet.
 #[allow(clippy::too_many_arguments)]
 fn refresh(
     data: Res<GameData>,
     draft: Res<Draft>,
-    mut values: Query<(&PickerValue, &mut Text), Without<SlotValue>>,
-    mut slot: Single<
-        &mut Text,
-        (
-            With<SlotValue>,
-            Without<PickerValue>,
-            Without<Details>,
-            Without<FireModeText>,
-        ),
-    >,
-    mut details: Single<
-        &mut Text,
-        (
-            With<Details>,
-            Without<PickerValue>,
-            Without<SlotValue>,
-            Without<FireModeText>,
-        ),
-    >,
-    mut heading: Single<
-        &mut Text,
-        (
-            With<FireModeText>,
-            Without<PickerValue>,
-            Without<SlotValue>,
-            Without<Details>,
-        ),
-    >,
+    profile: Res<Profile>,
+    added: Query<(), Added<EditorText>>,
+    mut texts: Query<(&EditorText, &mut Text, &mut TextColor)>,
+    mut notes: Query<(&EditorText, &mut Node), Without<StatFill>>,
     mut fills: Query<(&StatFill, &mut Node)>,
 ) {
-    if !draft.is_changed() && !slot.is_added() {
+    if added.is_empty() && !draft.is_changed() && !profile.is_changed() {
         return;
     }
     let loadout = &draft.loadout;
-    for (value, mut text) in &mut values {
-        let shown = value_text(loadout, value.0, &data);
-        if text.0 != shown {
-            text.0 = shown;
-        }
-    }
-    slot.0 = format!("CUSTOM {}", draft.slot + 1);
-    details.0 = effects_text(loadout, &data);
-
+    let locks = class_locks(loadout, &profile, &data);
     let stats = data.effective_weapon(
         loadout.primary,
         loadout.attachments,
         &PerkEffects::default(),
     );
-    heading.0 = format!(
-        "{}  -  {}",
-        stats.name.to_uppercase(),
-        stats::fire_mode_text(&stats)
-    );
+    for (kind, mut text, mut color) in &mut texts {
+        let (shown, tint) = match *kind {
+            EditorText::Slot => (format!("CUSTOM {}", draft.slot + 1), ui::ACCENT),
+            EditorText::Value(field) => {
+                let locked = lock_note(loadout, field, &profile, &data).is_some();
+                (
+                    value_text(loadout, field, &data),
+                    if locked { ui::TEXT_DIM } else { ui::ACCENT },
+                )
+            }
+            EditorText::Note(field) => (
+                lock_note(loadout, field, &profile, &data).unwrap_or_default(),
+                LOCKED,
+            ),
+            EditorText::Heading => (
+                format!(
+                    "{}  -  {}",
+                    stats.name.to_uppercase(),
+                    stats::fire_mode_text(&stats)
+                ),
+                ui::TEXT,
+            ),
+            EditorText::Details => (effects_text(loadout, &data), ui::TEXT_DIM),
+            EditorText::Status => (
+                if locks.is_empty() {
+                    String::new()
+                } else {
+                    format!("Can't save yet: {}", locks.join("; "))
+                },
+                LOCKED,
+            ),
+        };
+        if text.0 != shown {
+            text.0 = shown;
+        }
+        color.set_if_neq(TextColor(tint));
+    }
+    // A note only takes room while it says something.
+    for (kind, mut node) in &mut notes {
+        if let EditorText::Note(field) = *kind {
+            let display = if lock_note(loadout, field, &profile, &data).is_some() {
+                Display::Flex
+            } else {
+                Display::None
+            };
+            node.set_if_neq(Node {
+                display,
+                ..node.clone()
+            });
+        }
+    }
     stats::update_bars(&mut fills, &data, &stats);
 }
 
@@ -528,6 +641,21 @@ mod tests {
         assert_eq!(data.perk(loadout.perks[0]).slot, 1);
         cycle(&mut loadout, Field::Perk(0), 1, &data);
         assert_eq!(loadout.perks[0], first);
+    }
+
+    #[test]
+    fn the_camo_picker_walks_none_then_every_camo_and_wraps() {
+        let data = GameData::load();
+        let mut loadout = data.default_loadouts[0].clone();
+        assert_eq!(loadout.camo, NO_CAMO);
+        for camo in &data.progression.camos {
+            cycle(&mut loadout, Field::Camo, 1, &data);
+            assert_eq!(loadout.camo, camo.id);
+        }
+        cycle(&mut loadout, Field::Camo, 1, &data);
+        assert_eq!(loadout.camo, NO_CAMO);
+        cycle(&mut loadout, Field::Camo, -1, &data);
+        assert_eq!(loadout.camo, data.progression.camos.last().unwrap().id);
     }
 
     #[test]

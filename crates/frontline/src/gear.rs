@@ -12,7 +12,7 @@ use crate::data::{GameData, SightKind, WeaponClass, WeaponId, WeaponStats};
 /// Longest Loadout name the editor accepts.
 pub const MAX_LOADOUT_NAME_CHARS: usize = 16;
 
-/// The camo/skin of a Loadout that has none (reserved for a later feature).
+/// The camo of a Loadout that has none.
 pub const NO_CAMO: &str = "none";
 
 fn one() -> f32 {
@@ -245,7 +245,7 @@ pub struct Loadout {
     pub attachments: Attachments,
     pub secondary: WeaponId,
     pub perks: PerkSet,
-    /// Reserved for a later camo/skin feature.
+    /// The Primary's camo: an id from `data/progression.ron`, or `none`.
     #[serde(default = "no_camo")]
     pub camo: String,
 }

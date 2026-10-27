@@ -15,6 +15,7 @@ mod packs;
 mod shots;
 mod spawn;
 mod teams;
+mod xp;
 
 use bevy::prelude::*;
 

@@ -155,7 +155,7 @@ _Avoid_: Hit location, body part (for the damage category)
 ### Loadouts & progression
 
 **Loadout**:
-A player's chosen **Primary**, **Secondary**, **Attachments** and **Perks**, applied at spawn.
+A player's chosen **Primary**, **Secondary**, **Attachments**, **Perks** and **Camo**, applied at spawn.
 _Avoid_: Class, kit, build
 
 **Perk**:
@@ -194,16 +194,32 @@ _Avoid_: Radar
 A brief mark on enemies' **Minimap** where a player fired a **Weapon** without a Silencer.
 _Avoid_: Red dot, shot reveal
 
+**XP**:
+The experience points the server awards a player for kills, **Assists**, **Multikills**, objectives and finishing **Matches**. Each award names its reason; the player's **Profile** stores the total.
+_Avoid_: Score (that is the **Team** points), points, exp
+
 **Level**:
-A player's progression rank, raised by earning XP in **Matches**, which unlocks **Weapons**, **Attachments** and **Perks**.
+A player's progression rank, derived from their XP (level n+1 needs n×1500 XP in all), up to a maximum of 30; reaching it unlocks **Weapons**, **Attachments**, **Perks** and custom **Loadouts**.
 _Avoid_: Rank, prestige
 
+**Unlock**:
+An item (a **Weapon**, **Attachment**, **Perk** or the custom **Loadouts**) that becomes usable at a given **Level**; anything not in the unlock table is there from Level 1, and Default **Loadouts** are always usable. The **Create a Class** editor shows what is locked and at which Level.
+_Avoid_: Reward, perk (for a Level reward)
+
+**Camo**:
+A skin on a **Primary**'s body in the viewmodel, chosen per **Loadout** and unlocked per **Weapon** by a **Challenge**; Woodland, Desert, Urban, Tiger, Arctic and Gold ship.
+_Avoid_: Skin, paint, finish
+
+**Challenge**:
+What a **Weapon** must do to unlock a **Camo**: a number of kills or headshot kills with it, or (Gold) every other **Camo** unlocked on it. The **Profile** counts kills and headshot kills per **Weapon**.
+_Avoid_: Mastery, achievement
+
 **Profile**:
-A player's name and **Level** progress, owned by the player and carried to whichever server they join.
+A player's name, **Loadouts**, **XP** and per-**Weapon** kill counts, owned by the player and carried to whichever server they join; the server awards **XP** and the client stores it.
 _Avoid_: Account, save, user
 
 **Assist**:
-Credit to a player who damaged an enemy that someone else killed, worth more the more damage they dealt.
+Credit to a player who damaged an enemy that someone else killed during that enemy's life, paid **XP** in proportion to the damage dealt.
 _Avoid_: Helper kill
 
 **Multikill**:
@@ -224,6 +240,8 @@ _Avoid_: Combo, double/triple (as the general term)
 - A **Primary** has an Optic and a Muzzle **Attachment Slot**, each optionally filled; a scoped Primary (the sniper rifle) has no Optic slot, and a **Secondary** has no Attachment Slots
 - A **Profile** belongs to one player and is independent of any **Host**
 - A **Profile** holds three custom and three default **Loadouts**; the default ones are read-only and the custom ones are edited through **Create a Class**
+- A player's **Level** follows from the **XP** in their **Profile**; custom **Loadouts** and each **Unlock** wait for their **Level**
+- A **Camo** is unlocked on one **Weapon** at a time by its **Challenge**, and a **Loadout**'s Camo goes on its **Primary**
 - A dead player drops an **Ammo Pack** that a player with the Scavenger **Perk** picks up by walking over it
 
 ## Flagged ambiguities

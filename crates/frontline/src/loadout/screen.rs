@@ -1,6 +1,8 @@
 //! The Loadout screen (`Overlay::Loadout`): the Default Loadouts (read-only) and the Profile's
 //! custom ones on the left, the selected one's Weapons, Perks and stat bars on the right.
-//! CHOOSE confirms, CREATE A CLASS opens the editor, Esc goes back. B opens it in game.
+//! CHOOSE confirms, CREATE A CLASS opens the editor, Esc goes back. B opens it in game. The
+//! player's Level and XP show on top; a custom class the Level or a camo Challenge hasn't
+//! unlocked is greyed, says why, and can't be chosen. Default Loadouts are always usable.
 
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
@@ -10,7 +12,7 @@ use super::editor::Draft;
 use super::stats::{self, StatFill};
 use crate::data::GameData;
 use crate::flow::Overlay;
-use crate::gear::{Loadout, PerkEffects};
+use crate::gear::{Loadout, NO_CAMO, PerkEffects};
 use crate::player::LocalLife;
 use crate::profile::{LoadoutChoice, Profile};
 use crate::shared::LocalPlayer;
@@ -74,6 +76,17 @@ struct FireModeText;
 #[derive(Component)]
 struct NextSpawnNote;
 
+/// The player's Level and XP.
+#[derive(Component)]
+struct LevelLine;
+
+/// Why the previewed Loadout can't be chosen yet.
+#[derive(Component)]
+struct LockNote;
+
+/// Colour of what is locked.
+const LOCKED: Color = Color::srgb(0.85, 0.42, 0.34);
+
 /// What a Loadout holds, one line each, for the details panel and tooltips.
 pub(super) fn describe(loadout: &Loadout, data: &GameData) -> String {
     let primary = &data.weapon(loadout.primary).name;
@@ -93,8 +106,13 @@ pub(super) fn describe(loadout: &Loadout, data: &GameData) -> String {
         .enumerate()
         .map(|(slot, perk)| format!("PERK {}  {}", slot + 1, data.perk(*perk).name))
         .collect();
+    let camo = data
+        .progression
+        .camo(&loadout.camo)
+        .filter(|_| loadout.camo != NO_CAMO)
+        .map_or(String::new(), |camo| format!("\nCAMO  {}", camo.name));
     format!(
-        "PRIMARY  {primary}{fitted}\nSECONDARY  {}\n{}",
+        "PRIMARY  {primary}{fitted}{camo}\nSECONDARY  {}\n{}",
         data.weapon(loadout.secondary).name,
         perks.join("\n")
     )
@@ -180,6 +198,11 @@ fn spawn_screen(
         ))
         .id();
     commands.spawn((ui::title(&fonts, "Choose Loadout", 48.0), ChildOf(root)));
+    commands.spawn((
+        LevelLine,
+        ui::label(&fonts, "", 22.0, ui::ACCENT),
+        ChildOf(root),
+    ));
 
     let columns = commands
         .spawn((
@@ -251,6 +274,7 @@ fn spawn_screen(
     ));
     stats::spawn_bars(&mut commands, &fonts, details);
 
+    commands.spawn((LockNote, ui::label(&fonts, "", 22.0, LOCKED), ChildOf(root)));
     commands.spawn((
         NextSpawnNote,
         ui::label(&fonts, "Applies on next spawn", 22.0, ui::ACCENT),
@@ -281,8 +305,13 @@ fn spawn_screen(
             |_: On<Activate>,
              preview: Res<Preview>,
              profile: Res<Profile>,
+             data: Res<GameData>,
              mut commands: Commands,
              mut overlay: ResMut<NextState<Overlay>>| {
+                if !profile.custom_unlocked(&data) {
+                    info!("Create a Class is locked until the Level unlocks custom classes");
+                    return;
+                }
                 commands.insert_resource(Draft::opening(&preview, &profile));
                 overlay.set(Overlay::ClassEditor);
             },
@@ -300,6 +329,11 @@ fn choose(
     mut profile: ResMut<Profile>,
     mut overlay: ResMut<NextState<Overlay>>,
 ) {
+    let locks = profile.locks(preview.0, &data);
+    if !locks.is_empty() {
+        info!("Can't choose that class: {}", locks.join("; "));
+        return;
+    }
     if profile.chosen != preview.0 {
         profile.chosen = preview.0;
     }
@@ -325,17 +359,38 @@ fn refresh(
     mut fire_mode: Single<&mut Text, (With<FireModeText>, Without<ClassName>, Without<ClassLines>)>,
     mut fills: Query<(&StatFill, &mut Node)>,
     mut note: Single<&mut Visibility, With<NextSpawnNote>>,
+    mut level_line: Single<
+        &mut Text,
+        (
+            With<LevelLine>,
+            Without<LockNote>,
+            Without<ClassName>,
+            Without<ClassLines>,
+            Without<FireModeText>,
+        ),
+    >,
+    mut lock_note: Single<
+        &mut Text,
+        (
+            With<LockNote>,
+            Without<LevelLine>,
+            Without<ClassName>,
+            Without<ClassLines>,
+            Without<FireModeText>,
+        ),
+    >,
 ) {
     let loadout = profile.get(preview.0, &data);
 
     for (button, children) in &buttons {
         let selected = button.0 == preview.0;
+        let locked = !profile.locks(button.0, &data).is_empty();
         for child in children {
             if let Ok((mut color, weapon_name)) = texts.get_mut(*child) {
-                let wanted = match (selected, weapon_name) {
-                    (true, _) => ui::ACCENT,
-                    (false, true) => ui::TEXT_DIM,
-                    (false, false) => ui::TEXT,
+                let wanted = match (selected, locked, weapon_name) {
+                    (true, _, _) => ui::ACCENT,
+                    (false, true, _) | (false, false, true) => ui::TEXT_DIM,
+                    (false, false, false) => ui::TEXT,
                 };
                 color.set_if_neq(TextColor(wanted));
             }
@@ -352,6 +407,32 @@ fn refresh(
         lines.0 = describe(loadout, &data);
         fire_mode.0 = stats::fire_mode_text(&stats).to_owned();
         stats::update_bars(&mut fills, &data, &stats);
+    }
+
+    let progress = profile.level_progress(&data);
+    let level_text = if progress.maxed() {
+        format!("LEVEL {}  -  MAX", progress.level)
+    } else {
+        format!(
+            "LEVEL {}  -  {} / {} XP",
+            progress.level, progress.into_level, progress.span
+        )
+    };
+    let level_text = if profile.custom_unlocked(&data) {
+        level_text
+    } else {
+        format!(
+            "{level_text}  -  custom classes unlock at Level {}",
+            data.progression
+                .unlock_level(crate::progression::UnlockItem::CustomLoadouts)
+        )
+    };
+    if level_line.0 != level_text {
+        level_line.0 = level_text;
+    }
+    let locks = profile.locks(preview.0, &data).join("; ");
+    if lock_note.0 != locks {
+        lock_note.0 = locks;
     }
 
     let equipped = kit.single().is_ok_and(|kit| kit.loadout() == loadout);

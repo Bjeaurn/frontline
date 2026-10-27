@@ -12,7 +12,8 @@ use lightyear::prelude::*;
 use super::health::PendingRespawn;
 use super::hitbox::{Hitboxes, set_hitboxes_enabled};
 use super::match_flow::is_live;
-use crate::data::{GameData, GameModeId};
+use super::xp::XpOut;
+use crate::data::{CaptureTuning, GameData, GameModeId};
 use crate::maps::{BombSite, DomFlag, HqSite, MapReady, MapRoot};
 use crate::modes::{
     ActionView, Bomb, BombView, Capture, CaptureEvent, DomState, FlagView, HqEvent, HqPhase,
@@ -21,6 +22,7 @@ use crate::modes::{
 };
 use crate::net::LinkPlayer;
 use crate::net::protocol::{BombExploded, EventChannel, ObjectiveHold, PlayerOwner};
+use crate::progression::XpReason;
 use crate::rotation::ServerConfig;
 use crate::shared::{Health, MatchState, PlayerPose, PlayerStats, PlayerTeam, Team};
 
@@ -68,6 +70,17 @@ impl ModeRuntime {
         match self {
             ModeRuntime::Dom(dom) => dom.held_positions(team),
             _ => Vec::new(),
+        }
+    }
+
+    /// Whether `team` holds a Domination Flag whose zone `feet` is in: a kill there is a
+    /// Flag-defend kill.
+    pub(super) fn flag_held_at(&self, team: Team, feet: Vec3, tuning: &CaptureTuning) -> bool {
+        match self {
+            ModeRuntime::Dom(dom) => dom.flags.iter().any(|flag| {
+                flag.capture.owner == Some(team) && in_zone(feet, flag.position, tuning)
+            }),
+            _ => false,
         }
     }
 
@@ -154,15 +167,43 @@ pub(super) fn is_pending(runtime: Option<Res<ModeRuntime>>) -> bool {
     runtime.is_some_and(|runtime| matches!(*runtime, ModeRuntime::Pending))
 }
 
-type Players<'w, 's> =
-    Query<'w, 's, (&'static PlayerPose, &'static Health, &'static PlayerTeam), With<ControlledBy>>;
+type Players<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static PlayerPose,
+        &'static Health,
+        &'static PlayerTeam,
+    ),
+    With<ControlledBy>,
+>;
 
 /// Position and Team of every living player on a Team.
 fn living(players: &Players) -> Vec<(Vec3, Team)> {
     players
         .iter()
-        .filter(|(_, health, _)| !health.is_dead())
-        .filter_map(|(pose, _, team)| team.0.map(|team| (pose.position, team)))
+        .filter(|(_, _, health, _)| !health.is_dead())
+        .filter_map(|(_, pose, _, team)| team.0.map(|team| (pose.position, team)))
+        .collect()
+}
+
+/// Living players of `team` standing in the zone around `center`: who an objective event on
+/// it pays.
+fn zone_members(
+    players: &Players,
+    team: Team,
+    center: Vec3,
+    tuning: &CaptureTuning,
+) -> Vec<Entity> {
+    players
+        .iter()
+        .filter(|(_, pose, health, player_team)| {
+            !health.is_dead()
+                && player_team.0 == Some(team)
+                && in_zone(pose.position, center, tuning)
+        })
+        .map(|(entity, ..)| entity)
         .collect()
 }
 
@@ -268,6 +309,7 @@ pub(super) fn tick_dom(
     mut runtime: ResMut<ModeRuntime>,
     mut state: Single<&mut MatchState>,
     players: Players,
+    mut xp: XpOut,
     data: Res<GameData>,
     time: Res<Time>,
 ) {
@@ -296,7 +338,17 @@ pub(super) fn tick_dom(
     for (index, event) in tick.events {
         let label = dom.flags[index].label;
         match event {
-            CaptureEvent::Captured(team) => info!("Flag {label} captured by {team:?}"),
+            CaptureEvent::Captured(team) => {
+                info!("Flag {label} captured by {team:?}");
+                let center = dom.flags[index].position;
+                for member in zone_members(&players, team, center, &tuning.capture) {
+                    xp.give(
+                        member,
+                        data.progression.xp.flag_capture,
+                        XpReason::FlagCapture,
+                    );
+                }
+            }
             CaptureEvent::Neutralized(owner) => {
                 info!("Flag {label} neutralised (was {owner:?}'s)");
             }
@@ -320,6 +372,7 @@ pub(super) fn tick_hq(
     mut runtime: ResMut<ModeRuntime>,
     mut state: Single<&mut MatchState>,
     players: Players,
+    mut xp: XpOut,
     data: Res<GameData>,
     time: Res<Time>,
 ) {
@@ -331,7 +384,8 @@ pub(super) fn tick_hq(
     }
     let tuning = data.headquarters();
     let mut presence = [0; 2];
-    if let Some(position) = hq.position() {
+    let site = hq.position();
+    if let Some(position) = site {
         for (feet, team) in living(&players) {
             if in_zone(feet, position, &tuning.capture) {
                 presence[team.index()] += 1;
@@ -339,10 +393,26 @@ pub(super) fn tick_hq(
         }
     }
     let tick = hq.tick(presence, time.delta_secs(), tuning);
+    // Who was on the HQ when it changed hands is paid.
+    let mut pay = |team: Team, amount: u32, reason: XpReason| {
+        if let Some(position) = site {
+            for member in zone_members(&players, team, position, &tuning.capture) {
+                xp.give(member, amount, reason);
+            }
+        }
+    };
     match tick.event {
-        Some(HqEvent::Captured(team)) => info!("HQ captured by {team:?}: they stop respawning"),
+        Some(HqEvent::Captured(team)) => {
+            info!("HQ captured by {team:?}: they stop respawning");
+            pay(team, data.progression.xp.hq_capture, XpReason::HqCapture);
+        }
         Some(HqEvent::Destroyed(owner)) => {
             info!("HQ destroyed (was {owner:?}'s): everyone respawns, it relocates");
+            pay(
+                owner.other(),
+                data.progression.xp.hq_destroy,
+                XpReason::HqDestroy,
+            );
         }
         Some(HqEvent::Expired) => info!("HQ expired: everyone respawns, it relocates"),
         Some(HqEvent::Appeared(site)) => info!("HQ appeared at site {}", site + 1),
@@ -378,6 +448,7 @@ pub(super) fn tick_sd(
     >,
     waiting: Query<&PlayerTeam, With<PendingRespawn>>,
     mut notices: Query<&mut MessageSender<BombExploded>, (With<ClientOf>, With<Connected>)>,
+    mut xp: XpOut,
     data: Res<GameData>,
     time: Res<Time>,
     mut commands: Commands,
@@ -452,12 +523,12 @@ pub(super) fn tick_sd(
                         .position(|&site| near(pose.position, site, tuning.site_radius))
                 {
                     input.planting_at = Some(site);
-                    actor = Some((peer, true));
+                    actor = Some((entity, peer, true));
                 }
             }
             Bomb::Planted { .. } => {
                 if let Some(bomb) = sd.state.planted_at()
-                    && let Some((_, _, _, _, _, owner, ..)) =
+                    && let Some((entity, _, _, _, _, owner, ..)) =
                         players
                             .iter()
                             .find(|(_, pose, health, _, team, _, held, _)| {
@@ -468,7 +539,7 @@ pub(super) fn tick_sd(
                             })
                 {
                     input.defusing = true;
-                    actor = Some((owner.0, false));
+                    actor = Some((entity, owner.0, false));
                 }
             }
             Bomb::Dropped(_) | Bomb::Gone => {}
@@ -479,7 +550,7 @@ pub(super) fn tick_sd(
         .state
         .tick(&input, time.delta_secs(), sd.round_secs, &tuning);
     sd.alive = input.alive;
-    sd.action = actor.and_then(|(peer, planting)| {
+    sd.action = actor.and_then(|(_, peer, planting)| {
         let (done, secs) = if planting {
             (sd.state.plant, tuning.plant_secs)
         } else {
@@ -544,8 +615,20 @@ pub(super) fn tick_sd(
             }
             SdEvent::Planted { site } => {
                 info!("Bomb planted at site {}", site_letter(site));
+                if let Some((planter, _, true)) = actor {
+                    xp.give(planter, data.progression.xp.bomb_plant, XpReason::BombPlant);
+                }
             }
-            SdEvent::Defused => info!("Bomb defused"),
+            SdEvent::Defused => {
+                info!("Bomb defused");
+                if let Some((defuser, _, false)) = actor {
+                    xp.give(
+                        defuser,
+                        data.progression.xp.bomb_defuse,
+                        XpReason::BombDefuse,
+                    );
+                }
+            }
             SdEvent::Exploded { position } => {
                 let mut killed = 0;
                 for (_, pose, mut health, mut stats, _, _, _, hitboxes) in &mut players {

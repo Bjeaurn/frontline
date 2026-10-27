@@ -17,6 +17,7 @@ mod modes;
 mod net;
 mod player;
 mod profile;
+mod progression;
 mod rotation;
 mod shared;
 mod ui;
@@ -128,6 +129,7 @@ fn main() -> AppExit {
             modes::ModeVisualsPlugin,
             loadout::LoadoutPlugin,
             profile::ProfilePlugin,
+            progression::ProgressionPlugin,
         ));
     }
     app.add_plugins((combat::CombatServerPlugin, net::NetPlugin));

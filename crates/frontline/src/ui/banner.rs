@@ -27,6 +27,8 @@ pub struct BannerSpec<'a> {
     pub subline: &'a str,
     /// Distance of the banner's top edge from the top of the screen, in percent.
     pub top_percent: f32,
+    /// Size relative to a full banner (1.0): the bar, headline and subline scale with it.
+    pub scale: f32,
     /// Seconds fully shown, after the grow and before the fade-out.
     pub hold_secs: f32,
     pub z_index: i32,
@@ -35,6 +37,7 @@ pub struct BannerSpec<'a> {
 #[derive(Component)]
 pub struct ResultBanner {
     age: f32,
+    scale: f32,
     hold_secs: f32,
     color: Color,
     bar: Entity,
@@ -72,14 +75,16 @@ pub fn spawn_result_banner(commands: &mut Commands, fonts: &UiFonts, spec: &Bann
             ))
             .id()
     };
+    // The subline shrinks half as fast as the rest, so it stays readable on a small banner.
+    let subline_size = SUBLINE_SIZE * (0.5 + 0.5 * spec.scale);
     let headline = text(
         commands,
         &spec.headline.to_uppercase(),
-        HEADLINE_SIZE,
+        HEADLINE_SIZE * spec.scale,
         spec.color,
         true,
     );
-    let subline = text(commands, spec.subline, SUBLINE_SIZE, SUBLINE_COLOR, false);
+    let subline = text(commands, spec.subline, subline_size, SUBLINE_COLOR, false);
     let words = commands
         .spawn(Node {
             position_type: PositionType::Absolute,
@@ -97,6 +102,7 @@ pub fn spawn_result_banner(commands: &mut Commands, fonts: &UiFonts, spec: &Bann
             Name::new("Result banner"),
             ResultBanner {
                 age: 0.0,
+                scale: spec.scale,
                 hold_secs: spec.hold_secs,
                 color: spec.color,
                 bar,
@@ -106,7 +112,7 @@ pub fn spawn_result_banner(commands: &mut Commands, fonts: &UiFonts, spec: &Bann
                 position_type: PositionType::Absolute,
                 top: percent(spec.top_percent),
                 width: percent(100.0),
-                height: px(BAR_HEIGHT),
+                height: px(BAR_HEIGHT * spec.scale),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 ..default()
@@ -141,7 +147,8 @@ pub(super) fn animate_banners(
         let grown = ease_out(age / GROW_SECS);
         if let Ok(mut node) = nodes.get_mut(banner.bar) {
             node.width = percent(grown * 100.0);
-            node.height = px(SLIVER_HEIGHT + (BAR_HEIGHT - SLIVER_HEIGHT) * grown);
+            let full = BAR_HEIGHT * banner.scale;
+            node.height = px(SLIVER_HEIGHT + (full - SLIVER_HEIGHT) * grown);
         }
         if let Ok(mut background) = backgrounds.get_mut(banner.bar) {
             background.0 = Color::srgba(0.0, 0.0, 0.0, BAR_ALPHA * out);

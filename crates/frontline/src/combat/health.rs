@@ -14,10 +14,12 @@ use super::mode_systems::{ModeRuntime, UseHeld};
 use super::packs::drop_ammo_pack;
 use super::shots::PlayerHit;
 use super::spawn::{bias_toward, choose_spawn};
+use super::xp::{DamageLedger, KillChain, XpOut};
 use crate::data::{GameData, GameModeId};
 use crate::gear::EquippedPerks;
 use crate::maps::{MapSpawn, MapSpawns};
 use crate::net::protocol::{Damaged, EventChannel, HitConfirm, KillFeed, PlayerOwner, Respawn};
+use crate::progression::XpReason;
 use crate::shared::{
     GameLayer, Health, MatchState, PlayerName, PlayerPose, PlayerStats, PlayerTeam, Stance, Team,
 };
@@ -69,14 +71,17 @@ pub(super) fn init_player(
         return;
     }
     spawn_hitboxes(&mut commands, add.entity);
-    commands
-        .entity(add.entity)
-        .insert((LastDamaged(Duration::ZERO), UseHeld::default()));
+    commands.entity(add.entity).insert((
+        LastDamaged(Duration::ZERO),
+        UseHeld::default(),
+        DamageLedger::default(),
+        KillChain::default(),
+    ));
 }
 
 /// Applies each `PlayerHit` while the Match is live: damage, hit/damage feedback and, on a
-/// kill, stats, team score and kill feed. Teammates are immune unless the Match Rules allow
-/// friendly fire.
+/// kill, stats, team score, kill feed and XP (the kill, headshot, Multikill, Flag-defend and
+/// Assist awards, `xp`). Teammates are immune unless the Match Rules allow friendly fire.
 pub(super) fn apply_hits(
     mut hits: MessageReader<PlayerHit>,
     mut players: Query<(
@@ -95,6 +100,10 @@ pub(super) fn apply_hits(
     data: Res<GameData>,
     perks: Query<&EquippedPerks>,
     poses: Query<&PlayerPose>,
+    mut ledgers: Query<&mut DamageLedger>,
+    mut chains: Query<&mut KillChain>,
+    mut xp: XpOut,
+    runtime: Option<Res<ModeRuntime>>,
     time: Res<Time>,
     mut commands: Commands,
 ) {
@@ -145,8 +154,12 @@ pub(super) fn apply_hits(
             hit.zone,
             rules,
         );
+        let applied = amount.min(health.0);
         health.0 = (health.0 - amount).max(0.0);
         last_damaged.0 = time.elapsed();
+        if enemy && let Ok(mut ledger) = ledgers.get_mut(hit.victim) {
+            ledger.record(hit.shooter, applied);
+        }
         let kill = health.is_dead();
         info!(
             "{shooter_name} hit {} in the {} for {amount:.1} ({:?}, {:.1} m, Perks x{:.2} damage), health {:.1}",
@@ -183,6 +196,39 @@ pub(super) fn apply_hits(
             weapon: hit.weapon,
             headshot,
         };
+        // The life is over: its damage ledger pays out (to enemies only) and the victim's own
+        // Multikill chain ends.
+        let assisters = ledgers
+            .get_mut(hit.victim)
+            .map(|mut ledger| ledger.take_assisters(hit.shooter))
+            .unwrap_or_default();
+        if let Ok(mut chain) = chains.get_mut(hit.victim) {
+            chain.reset();
+        }
+        if enemy {
+            let tuning = &data.progression.xp;
+            xp.give(hit.shooter, tuning.kill, XpReason::Kill(hit.weapon));
+            if headshot {
+                xp.give(hit.shooter, tuning.headshot, XpReason::Headshot(hit.weapon));
+            }
+            if let Ok(mut chain) = chains.get_mut(hit.shooter) {
+                let count = chain.record(time.elapsed(), tuning.multikill_window_secs);
+                if let Some(bonus) = tuning.multikill_bonus(count) {
+                    xp.give(hit.shooter, bonus, XpReason::Multikill(count));
+                }
+            }
+            if let (Some(team), Ok(pose), Some(runtime)) =
+                (shooter_team, poses.get(hit.victim), runtime.as_deref())
+                && runtime.flag_held_at(team, pose.position, &data.domination().capture)
+            {
+                xp.give(hit.shooter, tuning.flag_defend_kill, XpReason::FlagDefend);
+            }
+            for (assister, damage) in assisters {
+                if let Some(amount) = tuning.assist(damage) {
+                    xp.give(assister, amount, XpReason::Assist);
+                }
+            }
+        }
         if enemy && let Ok((_, _, mut killer_stats, ..)) = players.get_mut(hit.shooter) {
             killer_stats.kills += 1;
             // Only Team Deathmatch scores for kills; the other modes score their objective.
@@ -250,6 +296,7 @@ pub(super) fn respawn_players(
         &Hitboxes,
     )>,
     mut senders: Query<&mut MessageSender<Respawn>>,
+    mut ledgers: Query<&mut DamageLedger>,
     spawns: Res<MapSpawns>,
     runtime: Res<ModeRuntime>,
     spatial: SpatialQuery,
@@ -318,6 +365,10 @@ pub(super) fn respawn_players(
             continue;
         };
         health.0 = data.rules(&state.rules).max_health;
+        // A new life: damage dealt to the old one no longer pays Assists.
+        if let Ok(mut ledger) = ledgers.get_mut(entity) {
+            ledger.clear();
+        }
         *pose = PlayerPose {
             position,
             yaw,

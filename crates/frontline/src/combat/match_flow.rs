@@ -9,9 +9,11 @@ use lightyear::prelude::*;
 
 use super::health::PendingRespawn;
 use super::mode_systems::ModeRuntime;
+use super::xp::XpOut;
 use crate::data::{GameData, GameModeId};
 use crate::maps::{ChangeMap, MapRegistry};
 use crate::modes::ModeView;
+use crate::progression::XpReason;
 use crate::rotation::ServerConfig;
 use crate::shared::{MatchPhase, MatchState, PlayerStats, PlayerTeam, Team};
 
@@ -116,6 +118,7 @@ pub(super) fn tick_match(
     mut clock: ResMut<MatchClock>,
     mut config: ResMut<ServerConfig>,
     mut players: Query<(Entity, &PlayerTeam, &mut PlayerStats)>,
+    mut xp: XpOut,
     data: Res<GameData>,
     time: Res<Time>,
     mut commands: Commands,
@@ -139,6 +142,20 @@ pub(super) fn tick_match(
                     next_in_secs: settings.end_screen_secs,
                 };
                 clock.left = settings.end_screen_secs as f32;
+                // Everyone on a Team played; the winners also won.
+                for (entity, team, _) in &players {
+                    let Some(team) = team.0 else {
+                        continue;
+                    };
+                    xp.give(
+                        entity,
+                        data.progression.xp.match_played,
+                        XpReason::MatchPlayed,
+                    );
+                    if winner == Some(team) {
+                        xp.give(entity, data.progression.xp.match_win, XpReason::MatchWin);
+                    }
+                }
                 info!(
                     "Match over ({}): {}, Alpha {} - Bravo {}",
                     if decided { "score limit" } else { "time limit" },

@@ -14,7 +14,7 @@ use lightyear::prelude::*;
 use super::protocol::{
     AmmoRefill, BombExploded, CONNECTION_TIMEOUT_SECS, ChooseTeam, ControlChannel, Damaged,
     EquipPerks, FireShot, Hello, HitConfirm, KillFeed, ObjectiveHold, PRIVATE_KEY, PROTOCOL_ID,
-    PlayerOwner, PoseChannel, PoseUpdate, Respawn, ShotChannel, ShotTracer,
+    PlayerOwner, PoseChannel, PoseUpdate, Respawn, ShotChannel, ShotTracer, XpAward,
 };
 use crate::flow::Settings;
 use crate::gear::PerkSet;
@@ -34,6 +34,7 @@ impl Plugin for ClientNetPlugin {
             .add_message::<FromServer<ShotTracer>>()
             .add_message::<FromServer<BombExploded>>()
             .add_message::<FromServer<AmmoRefill>>()
+            .add_message::<FromServer<XpAward>>()
             .add_message::<ToServer<FireShot>>()
             .add_message::<ToServer<ChooseTeam>>()
             .add_message::<ToServer<ObjectiveHold>>()
@@ -50,6 +51,7 @@ impl Plugin for ClientNetPlugin {
                     forward_from_server::<ShotTracer>,
                     forward_from_server::<BombExploded>,
                     forward_from_server::<AmmoRefill>,
+                    forward_from_server::<XpAward>,
                 )
                     .after(MessageSystems::Receive),
             )
