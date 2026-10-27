@@ -8,7 +8,7 @@ A CoD4/MW2-inspired multiplayer FPS made for LAN parties. It's written in Rust o
 
 ## Run
 
-One binary does everything. Launched without flags it opens the main menu: HOST GAME starts a server and drops you in, JOIN GAME opens the Server Browser, which lists the servers on your LAN (click one) and also joins by IP (`192.168.1.20` or `192.168.1.20:5000`). If a Join fails you land back in the browser with the reason.
+One binary does everything. Launched without flags it opens the main menu: HOST GAME opens the Host setup screen (below) and then drops you in, JOIN GAME opens the Server Browser, which lists the servers on your LAN (click one) and also joins by IP (`192.168.1.20` or `192.168.1.20:5000`). If a Join fails you land back in the browser with the reason.
 
 ```sh
 cargo run                                                # main menu
@@ -16,6 +16,8 @@ cargo run -- --host --name Alice                         # skip the menu and Hos
 cargo run -- --connect 192.168.1.20:5000 --name Bob      # skip the menu and join a server
 cargo run -- --dedicated --name "Bob's server"           # headless Dedicated Server
 cargo run -- --dedicated --rules hardcore                # Dedicated Server running the Hardcore preset
+cargo run -- --dedicated --map arena --mode sd           # Dedicated Server playing Search & Destroy on the arena
+cargo run -- --dedicated --rotation rotation.ron         # Dedicated Server cycling through a Rotation file
 cargo run -- --host --map arena                          # Host on a given Map (id from data/maps.ron)
 cargo run -- --host --look night_ops                     # Host with another look preset (dev/test)
 ```
@@ -24,11 +26,35 @@ Servers listen on UDP 5000 (`--port <n>` changes it; it's also the port HOST GAM
 
 Settings (name, mouse sensitivity, field of view, master volume) are saved to `<config dir>/frontline/settings.ron`: `~/Library/Application Support/` on macOS, `~/.config/` on Linux, `%APPDATA%` on Windows.
 
+`--mode <key>` picks the Game Mode of a single-entry game: `tdm` (Team Deathmatch, the default), `dom` (Domination), `hq` (Headquarters) or `sd` (Search & Destroy). The Map must support it (`modes` in `data/maps.ron`; an unsupported pair stops at startup with the list). `--rotation <file.ron>` replaces `--map`, `--mode` and `--rules` with a Rotation: a RON list of entries that the server plays in order, one per Match, then repeats, e.g.
+
+```ron
+[
+    (map: "arena", mode: tdm),
+    (map: "crossroads", mode: dom, rules: "hardcore"),   // rules default to "default"
+]
+```
+
 `--map <id>` picks the Map a server (Dedicated, or Host) starts on: `arena` unless given. It's also the Map behind the main menu. An unknown id stops it at startup with the list of Maps. Clients load whatever Map the server names, so they need the same Map files (a client without a Homage Map leaves with an explanation).
 
 `--look <preset>` (dev/test) replaces the Map's own look with a preset from `data/looks.ron` for that run: `overcast_urban`, `desert_dust`, `dawn_cold`, `jungle_humid` or `night_ops`. It applies to the window of a Host; a Dedicated Server accepts it but has nothing to render, and it can't be combined with `--connect`. An unknown preset stops a windowed run at startup with the list.
 
 A shipped build needs its `assets/` folder (maps, models, fonts) next to the executable; only the surface textures and faction emblems are compiled in. Under `cargo run` the assets come from `crates/frontline/assets/`.
+
+## Game Modes
+
+Every Match runs one Game Mode (`data/game_modes.ron`; every number below is data). After a Match the server moves on to the next Rotation entry (changing Map and mode if the entry says so) and the end screen shows `Next: <Map> - <Mode>`.
+
+| Mode | Key | Rules |
+|---|---|---|
+| Team Deathmatch | `tdm` | Each kill scores a point. 50 points or 10 min. |
+| Domination | `dom` | Three Flags (A, B, C). Stand in a Flag's zone to capture it: ~10 s alone, up to 3x faster with teammates; both teams on it freezes it, and an enemy Flag is neutralised first. Each held Flag scores a point every 5 s. 200 points or 10 min. Spawns lean toward your Flags. The HUD shows A/B/C icons under the score, a progress bar while you capture, and markers over the Flags. |
+| Headquarters | `hq` | One HQ is active at a time (rotating through the Map's HQ sites, ~60 s each). Capture it by standing in it (~10 s); the holders score a point per second and **don't respawn** while they hold it, so the other team must destroy it (stand in it ~10 s) before they are all dead. 250 points or 10 min. |
+| Search & Destroy | `sd` | Rounds without respawns, attackers against defenders; sides swap after round 3, first to 4 rounds wins. A random attacker starts with the bomb (dropped on death, picked up by walking over it). The carrier plants it at site A or B by **holding F** for ~5 s (frozen in place), defenders defuse by holding F ~7 s, the fuse is ~45 s and the explosion kills everyone within 20 m. Defenders are never told which site holds the planted bomb (both site markers look the same all round): they find it by its positional beep, which speeds up as the fuse runs down. A round ends on elimination, detonation, defusal or the 2:30 clock (defenders win on time unless it is planted). Dead players spectate a teammate (click to switch). |
+
+### Host setup
+
+HOST GAME opens a setup screen: server name, max players, the Rotation (pick a Map, a Game Mode the Map supports and a Match Rules preset, ADD; reorder or remove entries), per-mode score and time limits (in Search & Destroy: rounds to win and minutes per round), then START. Your choices are saved with Settings. `--host` skips the screen and plays the `--map`/`--mode`/`--rules` entry.
 
 ## Controls
 
@@ -46,11 +72,12 @@ On joining, pick a Team (and then a Loadout). The mouse is grabbed while you pla
 | Aim down sights | Right mouse (hold) |
 | Reload | R (sprinting cancels it) |
 | Scoreboard | Tab (hold) |
+| Plant / defuse the bomb (Search & Destroy; hold) | F |
 | Switch Team | T (dying counts as a switch, no credit to anyone) |
 | Change Loadout (applies on next spawn, or at once within 5 s of spawning) | B |
 | Pause menu (Resume, Change Team, Change Loadout, Settings, Leave Game) | Esc; Esc again steps back |
 
-Tuning lives in `data/`: `weapons.ron` (including per-Weapon Hit Zone damage multipliers), `loadouts.ron` (Default Loadouts and the instant-swap window), `movement.ron`, `match_rules.ron` (presets, each with its HUD block), `game_modes.ron` (Team Deathmatch: 50 kills or 10 min), `factions.ron`, `maps.ron` (every built-in Map: file, look, Game Modes, and the two Factions its theater plays), `looks.ron` (per-Map look presets: grade, fog, sun, ambient, sky) and `presentation.ron` (how long bodies stay and how many at once). The game reads them at startup from `./data/` (relative to where you launch it), so edit and restart to retune. Without that folder it uses the copies built into the binary. Both machines should use the same files: damage and score are decided on the server, but movement, recoil, spread and fire rate come from each client's own copy.
+Tuning lives in `data/`: `weapons.ron` (including per-Weapon Hit Zone damage multipliers), `loadouts.ron` (Default Loadouts and the instant-swap window), `movement.ron`, `match_rules.ron` (presets, each with its HUD block), `game_modes.ron` (score and time limits, capture, HQ and bomb tuning of every Game Mode), `factions.ron`, `maps.ron` (every built-in Map: file, look, Game Modes, and the two Factions its theater plays), `looks.ron` (per-Map look presets: grade, fog, sun, ambient, sky) and `presentation.ron` (how long bodies stay and how many at once). The game reads them at startup from `./data/` (relative to where you launch it), so edit and restart to retune. Without that folder it uses the copies built into the binary. Both machines should use the same files: damage and score are decided on the server, but movement, recoil, spread and fire rate come from each client's own copy.
 
 ## Maps
 
@@ -104,10 +131,12 @@ The kit has no vehicles, barriers or lamp posts, so the generators build those a
 ## Layout
 
 - `crates/frontline/src/flow.rs`: screen states (main menu, in game, overlays), flow commands, Settings file
-- `crates/frontline/src/menus/`: title, Server Browser, Connecting, Pause and Settings screens
+- `crates/frontline/src/menus/`: title, Host setup, Server Browser, Connecting, Pause and Settings screens
 - `crates/frontline/src/ui/`: shared menu look: fonts, palette, buttons, panels, sliders, text fields
-- `crates/frontline/src/match_hud/`: team select (Faction cards), top-centre score with Faction emblems, Tab Scoreboard and end screen, friendly name tags
-- `crates/frontline/src/combat/`: server-side shots, per-Hit-Zone hitboxes, damage, health/regen, death and respawn, spawn selection
+- `crates/frontline/src/match_hud/`: team select (Faction cards), top-centre score with Faction emblems, the objective HUD, Tab Scoreboard and end screen, friendly name tags
+- `crates/frontline/src/combat/`: server-side shots, per-Hit-Zone hitboxes, damage, health/regen, death and respawn, spawn selection, the Match flow (Rotation, scores, end) and the Bevy systems of the objective modes (`mode_systems.rs`)
+- `crates/frontline/src/modes/`: pure, unit-tested rules of Domination, Headquarters and Search & Destroy (capture, scoring, rounds), the replicated `ModeView`, and the client visuals (zone rings, markers, explosion, spectating)
+- `crates/frontline/src/rotation.rs`: Rotation entries, the server's `ServerConfig` and the Host setup that Settings remembers
 - `crates/frontline/src/data.rs`: loads the `data/*.ron` tuning files
 - `crates/frontline/src/net/`: lightyear protocol, server, client, Host/Join/Leave sessions, LAN discovery
 - `crates/frontline/src/player/`: first-person controller, input bindings, damage/kill-feed/death HUD, remote player visuals and their bodies

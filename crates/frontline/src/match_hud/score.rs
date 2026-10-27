@@ -12,7 +12,12 @@ use crate::shared::Team;
 use crate::ui::{self, UiFonts};
 
 const FONT_SIZE: f32 = 24.0;
-const BOX_WIDTH: f32 = 56.0;
+/// Fixed widths, so the bar never shifts when a number changes: three digits of a score
+/// (250 in Headquarters), `m:ss` of the clock, and the longest Faction short name.
+const SCORE_WIDTH: f32 = 72.0;
+const CLOCK_WIDTH: f32 = 92.0;
+/// Approximate width of one uppercase character at `SHORT_NAME_SIZE`.
+const SHORT_NAME_CHAR_WIDTH: f32 = 11.0;
 const EMBLEM_SIZE: f32 = 30.0;
 const SHORT_NAME_SIZE: f32 = 18.0;
 const BOX_BG: Color = Color::srgba(0.0, 0.0, 0.0, 0.55);
@@ -34,12 +39,27 @@ pub(super) struct ScoreFaction {
     enemy: bool,
 }
 
-pub(super) fn spawn_score(mut commands: Commands, fonts: Res<UiFonts>) {
+pub(super) fn spawn_score(mut commands: Commands, fonts: Res<UiFonts>, data: Res<GameData>) {
+    let longest_name = data
+        .factions
+        .iter()
+        .map(|faction| faction.short_name.chars().count())
+        .max()
+        .unwrap_or(0);
+    let name_width = longest_name as f32 * SHORT_NAME_CHAR_WIDTH + 16.0;
     let part = |part: ScorePart, color: Color| {
+        let width = if matches!(part, ScorePart::Clock) {
+            CLOCK_WIDTH
+        } else {
+            SCORE_WIDTH
+        };
         (
             part,
             Node {
-                min_width: px(BOX_WIDTH),
+                width: px(width),
+                min_width: px(width),
+                max_width: px(width),
+                flex_shrink: 0.0,
                 padding: UiRect::axes(px(8.0), px(0.0)),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
@@ -71,10 +91,16 @@ pub(super) fn spawn_score(mut commands: Commands, fonts: Res<UiFonts>) {
         (
             ScoreFaction { enemy },
             Node {
+                width: px(name_width),
+                min_width: px(name_width),
+                max_width: px(name_width),
+                flex_shrink: 0.0,
                 padding: UiRect::axes(px(8.0), px(2.0)),
+                justify_content: JustifyContent::Center,
                 ..default()
             },
             BackgroundColor(BOX_BG),
+            TextLayout::justify(Justify::Center),
             ui::label(&fonts, "", SHORT_NAME_SIZE, color),
         )
     };

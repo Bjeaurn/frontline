@@ -47,6 +47,8 @@ pub struct Bindings {
     pub team_menu: Binding,
     /// Hold to show the Scoreboard.
     pub scoreboard: Binding,
+    /// Hold to plant or defuse the bomb.
+    pub use_objective: Binding,
 }
 
 impl Default for Bindings {
@@ -67,6 +69,7 @@ impl Default for Bindings {
             reload: Binding::keys(&[KeyCode::KeyR]),
             team_menu: Binding::keys(&[KeyCode::KeyT]),
             scoreboard: Binding::keys(&[KeyCode::Tab]),
+            use_objective: Binding::keys(&[KeyCode::KeyF]),
         }
     }
 }

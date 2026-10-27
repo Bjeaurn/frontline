@@ -11,6 +11,7 @@ use super::life::LocalLife;
 use crate::data::{ActiveRules, GameData};
 use crate::flow::AppState;
 use crate::match_hud::{FRIENDLY_COLOR, relation_color};
+use crate::modes::{ModeView, SdPhaseView};
 use crate::net::protocol::{Damaged, KillFeed};
 use crate::shared::{
     FromServer, Health, LocalPlayer, LocalPlayerReplica, PlayerName, PlayerPose, PlayerTeam,
@@ -407,6 +408,7 @@ pub(super) fn update_death_screen(
     time: Res<Time>,
     rules: ActiveRules,
     life: Res<LocalLife>,
+    modes: Query<&ModeView>,
     mut screen: Single<&mut Visibility, With<DeathScreen>>,
     mut title: Single<&mut Text, (With<DeathTitle>, Without<DeathCountdown>)>,
     mut countdown: Single<&mut Text, (With<DeathCountdown>, Without<DeathTitle>)>,
@@ -426,10 +428,15 @@ pub(super) fn update_death_screen(
         None => "You were killed".to_owned(),
     };
     let left = f64::from(rules.get().respawn_delay_secs) - life.secs_dead(time.elapsed_secs_f64());
-    let status = if left > 0.0 {
-        format!("Respawning in {left:.1}")
-    } else {
-        "Respawning...".to_owned()
+    let status = match modes.single() {
+        Ok(ModeView::Headquarters(hq)) if hq.position.is_some() && hq.zone.owner == life.team() => {
+            "Your team holds the HQ: waiting for it to fall".to_owned()
+        }
+        Ok(ModeView::SearchAndDestroy(sd)) if sd.phase != SdPhaseView::Waiting => {
+            "Waiting for the next round".to_owned()
+        }
+        _ if left > 0.0 => format!("Respawning in {left:.1}"),
+        _ => "Respawning...".to_owned(),
     };
     if title.0 != heading {
         title.0 = heading;

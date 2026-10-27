@@ -81,6 +81,16 @@ pub enum FlagLabel {
     C,
 }
 
+impl FlagLabel {
+    pub fn letter(self) -> char {
+        match self {
+            FlagLabel::A => 'A',
+            FlagLabel::B => 'B',
+            FlagLabel::C => 'C',
+        }
+    }
+}
+
 /// A Domination Flag; the origin is the centre of its capture area on the ground.
 #[point_class(size(-32 -32 0, 32 32 96), color(250 210 40))]
 #[derive(Clone, Debug, Default)]
@@ -99,6 +109,15 @@ pub enum BombSiteLabel {
     #[default]
     A,
     B,
+}
+
+impl BombSiteLabel {
+    pub fn letter(self) -> char {
+        match self {
+            BombSiteLabel::A => 'A',
+            BombSiteLabel::B => 'B',
+        }
+    }
 }
 
 /// A Search & Destroy bomb site; the origin is where the bomb is planted.

@@ -1,6 +1,7 @@
 //! Server-side combat (Dedicated and Host): Teams, hitboxes, hitscan shots, damage, health
-//! regen, death and respawn, and the Team Deathmatch Match flow. The server is the only writer
-//! of `Health`, `PlayerStats`, `PlayerTeam` and `MatchState` (docs/adr/0002).
+//! regen, death and respawn, the Match flow (Rotation, scores, end) and the objective Game Modes.
+//! The server is the only writer of `Health`, `PlayerStats`, `PlayerTeam`, `MatchState` and
+//! `ModeView` (docs/adr/0002).
 //!
 //! Added to every build, but it only acts while this process runs a server
 //! (`net::server_running`); the Match starts and ends with the server.
@@ -9,6 +10,7 @@ mod damage;
 mod health;
 mod hitbox;
 mod match_flow;
+mod mode_systems;
 mod shots;
 mod spawn;
 mod teams;
@@ -16,9 +18,8 @@ mod teams;
 use bevy::prelude::*;
 
 pub use health::PoseGate;
-pub use match_flow::{ServerMap, ServerRules};
 
-use crate::maps::map_ready;
+use crate::maps::match_map_ready;
 use crate::net::server_running;
 
 pub struct CombatServerPlugin;
@@ -36,7 +37,14 @@ impl Plugin for CombatServerPlugin {
                 (
                     health::regenerate,
                     match_flow::tick_match,
-                    health::respawn_players.run_if(map_ready),
+                    mode_systems::init_mode.run_if(mode_systems::is_pending),
+                    (
+                        mode_systems::tick_dom,
+                        mode_systems::tick_hq,
+                        mode_systems::tick_sd,
+                    ),
+                    mode_systems::publish_view,
+                    health::respawn_players.run_if(match_map_ready),
                     hitbox::sync_hitboxes,
                 )
                     .chain()
@@ -48,6 +56,7 @@ impl Plugin for CombatServerPlugin {
                 Update,
                 (
                     match_flow::change_map,
+                    mode_systems::receive_use,
                     teams::choose_teams,
                     shots::resolve_shots,
                     health::apply_hits,

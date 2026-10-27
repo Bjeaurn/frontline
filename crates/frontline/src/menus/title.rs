@@ -76,8 +76,8 @@ pub(super) fn spawn_title(mut commands: Commands, fonts: Res<UiFonts>) {
                 },
             ));
             root.spawn(button(&fonts, "Host Game")).observe(
-                |_: On<Activate>, mut flow: MessageWriter<FlowCommand>| {
-                    flow.write(FlowCommand::Host);
+                |_: On<Activate>, mut next: ResMut<NextState<MenuScreen>>| {
+                    next.set(MenuScreen::HostSetup);
                 },
             );
             root.spawn(button(&fonts, "Join Game")).observe(

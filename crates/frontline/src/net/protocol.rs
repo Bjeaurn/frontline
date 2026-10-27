@@ -7,6 +7,7 @@ use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::data::WeaponId;
+use crate::modes::ModeView;
 use crate::shared::{
     Health, MatchState, PlayerName, PlayerPose, PlayerStats, PlayerTeam, TELEPORT_DISTANCE, Team,
 };
@@ -41,6 +42,17 @@ pub struct Hello {
 /// player who switches is killed without anyone getting credit, like a suicide.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChooseTeam(pub Team);
+
+/// Client -> server (`ControlChannel`): the use key (F: plant or defuse the bomb) is held or
+/// released. Sent on every change.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ObjectiveHold(pub bool);
+
+/// Server -> all clients: the Search & Destroy bomb went off at `position`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BombExploded {
+    pub position: Vec3,
+}
 
 /// Unreliable channel where only the newest pose is kept.
 pub struct PoseChannel;
@@ -115,6 +127,7 @@ pub(super) fn register(app: &mut App) {
     app.component::<PlayerStats>().replicate();
     app.component::<PlayerTeam>().replicate();
     app.component::<MatchState>().replicate();
+    app.component::<ModeView>().replicate();
 
     app.add_channel::<PoseChannel>(ChannelSettings {
         mode: ChannelMode::SequencedUnreliable,
@@ -132,6 +145,8 @@ pub(super) fn register(app: &mut App) {
     app.register_message::<Hello>()
         .add_direction(NetworkDirection::ClientToServer);
     app.register_message::<ChooseTeam>()
+        .add_direction(NetworkDirection::ClientToServer);
+    app.register_message::<ObjectiveHold>()
         .add_direction(NetworkDirection::ClientToServer);
 
     app.add_channel::<ShotChannel>(ChannelSettings {
@@ -161,6 +176,8 @@ pub(super) fn register(app: &mut App) {
     app.register_message::<KillFeed>()
         .add_direction(NetworkDirection::ServerToClient);
     app.register_message::<Respawn>()
+        .add_direction(NetworkDirection::ServerToClient);
+    app.register_message::<BombExploded>()
         .add_direction(NetworkDirection::ServerToClient);
 }
 

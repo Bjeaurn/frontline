@@ -1,11 +1,13 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use bevy::prelude::Resource;
 use clap::Parser;
 
-use crate::data::DEFAULT_MATCH_RULES;
+use crate::data::{DEFAULT_MATCH_RULES, GameModeId};
 use crate::flow::FlowCommand;
 use crate::maps::{DEFAULT_MAP, MapId};
+use crate::rotation::{RotationEntry, ServerConfig, load_rotation_file};
 
 /// Environment variable that turns on `--write-trenchbroom-config`.
 const WRITE_TRENCHBROOM_CONFIG_ENV: &str = "FRONTLINE_WRITE_TRENCHBROOM_CONFIG";
@@ -43,6 +45,16 @@ pub struct Cli {
     /// e.g. `hardcore`.
     #[arg(long, default_value = DEFAULT_MATCH_RULES, conflicts_with = "connect")]
     rules: String,
+
+    /// Game Mode a server plays (when hosting or dedicated): `tdm`, `dom`, `hq` or `sd`. The Map
+    /// must support it.
+    #[arg(long, default_value = "tdm", conflicts_with_all = ["connect", "rotation"])]
+    mode: String,
+
+    /// A Rotation file (RON list of `(map: "arena", mode: tdm, rules: "default")` entries) the
+    /// server cycles through; replaces `--map`, `--mode` and `--rules`.
+    #[arg(long, conflicts_with_all = ["connect", "map", "mode", "rules"])]
+    rotation: Option<PathBuf>,
 
     /// Map a server plays (when hosting or dedicated), by id from `data/maps.ron` or the private
     /// content folder; also the main menu's backdrop.
@@ -97,9 +109,28 @@ impl Cli {
         }
     }
 
-    /// The Match Rules preset this process's server runs.
-    pub fn rules(&self) -> &str {
-        &self.rules
+    /// The Rotation this process's server plays: the `--rotation` file, else the single entry
+    /// from `--map`, `--mode` and `--rules` (a one-entry Rotation repeats).
+    pub fn server_config(&self) -> Result<ServerConfig, String> {
+        if let Some(path) = &self.rotation {
+            return Ok(ServerConfig::new(
+                load_rotation_file(path)?,
+                Default::default(),
+                crate::rotation::MAX_PLAYERS,
+            ));
+        }
+        let mode = GameModeId::from_key(&self.mode).ok_or_else(|| {
+            format!(
+                "Unknown Game Mode \"{}\" (--mode); known: {}",
+                self.mode,
+                GameModeId::known_keys()
+            )
+        })?;
+        Ok(ServerConfig::single(RotationEntry {
+            map: self.map(),
+            mode,
+            rules: self.rules.clone(),
+        }))
     }
 
     /// The Map this process's server starts on.

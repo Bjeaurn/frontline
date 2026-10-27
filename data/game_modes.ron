@@ -1,9 +1,67 @@
-// Game Mode win conditions. Read at startup from ./data/ (falls back to the copy built into the
-// binary). Times in seconds.
+// Game Mode win conditions and objective tuning. Read at startup from ./data/ (falls back to the
+// copy built into the binary). Times in seconds, distances in metres.
+//
+// - score_limit / time_limit_secs: the Match ends at the score limit, or at the time limit with
+//   the leader winning. Host setup can override both per mode. In Search & Destroy score_limit is
+//   the rounds a team needs to win and time_limit_secs is one round's clock (no Match clock).
+// - Capture zones (Flags, the HQ): `max_speedup` caps how much extra teammates speed a capture up;
+//   an enemy zone is neutralised first; both teams on it freezes the progress.
 {
     TeamDeathmatch: (
         score_limit: 50,
         time_limit_secs: 600,
         end_screen_secs: 10,
+    ),
+    Domination: (
+        score_limit: 200,
+        time_limit_secs: 600,
+        end_screen_secs: 10,
+        domination: Some((
+            capture: (
+                capture_secs: 10.0,
+                neutralize_secs: 5.0,
+                max_speedup: 3.0,
+                zone_radius: 3.5,
+                zone_height: 3.0,
+            ),
+            score_interval_secs: 5.0,
+            points_per_flag: 1,
+        )),
+    ),
+    Headquarters: (
+        score_limit: 250,
+        time_limit_secs: 600,
+        end_screen_secs: 10,
+        headquarters: Some((
+            capture: (
+                capture_secs: 10.0,
+                neutralize_secs: 10.0,
+                max_speedup: 3.0,
+                zone_radius: 3.5,
+                zone_height: 3.0,
+            ),
+            score_interval_secs: 1.0,
+            points_per_tick: 1,
+            life_secs: 60.0,
+            relocate_secs: 5.0,
+        )),
+    ),
+    SearchAndDestroy: (
+        score_limit: 4,
+        time_limit_secs: 150,
+        end_screen_secs: 10,
+        search_and_destroy: Some((
+            swap_after_round: 3,
+            round_end_secs: 5.0,
+            plant_secs: 5.0,
+            defuse_secs: 7.0,
+            fuse_secs: 45.0,
+            site_radius: 2.5,
+            pickup_radius: 1.5,
+            blast_radius: 20.0,
+            beep_secs: 1.0,
+            beep_fast_secs: 0.15,
+            beep_ramp_secs: 10.0,
+        )),
     ),
 }

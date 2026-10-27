@@ -175,6 +175,8 @@ pub struct ControllerModifiers {
     pub fov_scale: f32,
     /// Sprinting is not allowed (and an ongoing sprint stops).
     pub sprint_blocked: bool,
+    /// Movement is locked (planting or defusing the bomb).
+    pub frozen: bool,
 }
 
 impl Default for ControllerModifiers {
@@ -183,6 +185,7 @@ impl Default for ControllerModifiers {
             move_scale: 1.0,
             fov_scale: 1.0,
             sprint_blocked: false,
+            frozen: false,
         }
     }
 }
@@ -572,7 +575,7 @@ pub(super) fn move_player(
     }
     let tuning = &data.movement;
 
-    let active = captured.0 && !life.is_dead() && !motor.mantling();
+    let active = captured.0 && !life.is_dead() && !motor.mantling() && !modifiers.frozen;
     let pressed = |binding: &Binding| active && binding.pressed(&keys);
     let (forward, back) = (pressed(&bindings.forward), pressed(&bindings.back));
     let input = Vec2::new(

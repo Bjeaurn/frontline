@@ -12,8 +12,10 @@ mod maps;
 mod match_hud;
 mod materials;
 mod menus;
+mod modes;
 mod net;
 mod player;
+mod rotation;
 mod shared;
 mod ui;
 mod weapon;
@@ -75,28 +77,32 @@ fn main() -> AppExit {
         idle: cli.map(),
         write_trenchbroom_config: cli.write_trenchbroom_config(),
     });
-    let presets = &app.world().resource::<data::GameData>().match_rules;
-    if !presets.contains_key(cli.rules()) {
-        let mut known: Vec<&str> = presets.keys().map(String::as_str).collect();
-        known.sort_unstable();
-        error!(
-            "Unknown Match Rules preset \"{}\" (--rules); known: {}",
-            cli.rules(),
-            known.join(", ")
-        );
+    let config = match cli.server_config() {
+        Ok(config) => config,
+        Err(err) => {
+            error!("{err}");
+            return AppExit::error();
+        }
+    };
+    let checked = config.validate(
+        app.world().resource::<data::GameData>(),
+        app.world().resource::<maps::MapRegistry>(),
+    );
+    if let Err(err) = checked {
+        error!("{err}");
         return AppExit::error();
     }
-    let maps = app.world().resource::<maps::MapRegistry>();
-    if maps.get(&cli.map()).is_none() {
+    // The idle Map (the main menu's backdrop) must exist too.
+    let registry = app.world().resource::<maps::MapRegistry>();
+    if registry.get(&cli.map()).is_none() {
         error!(
             "Unknown Map \"{}\" (--map); known: {}",
             cli.map(),
-            maps.known_ids()
+            registry.known_ids()
         );
         return AppExit::error();
     }
-    app.insert_resource(combat::ServerRules(cli.rules().to_owned()))
-        .insert_resource(combat::ServerMap(cli.map()));
+    app.insert_resource(config);
     if windowed {
         app.add_plugins(atmosphere::AtmospherePlugin {
             look_override: cli.look().map(str::to_owned),
@@ -117,6 +123,7 @@ fn main() -> AppExit {
             player::RemotePlayerVisualsPlugin,
             weapon::WeaponClientPlugin,
             match_hud::MatchHudPlugin,
+            modes::ModeVisualsPlugin,
             loadout::LoadoutPlugin,
         ));
     }

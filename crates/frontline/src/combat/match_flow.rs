@@ -8,25 +8,16 @@ use lightyear::prelude::server::Started;
 use lightyear::prelude::*;
 
 use super::health::PendingRespawn;
+use super::mode_systems::ModeRuntime;
 use crate::data::{GameData, GameModeId};
-use crate::maps::{ChangeMap, MapId, MapRegistry};
+use crate::maps::{ChangeMap, MapRegistry};
+use crate::modes::ModeView;
+use crate::rotation::ServerConfig;
 use crate::shared::{MatchPhase, MatchState, PlayerStats, PlayerTeam, Team};
 
-/// The only Game Mode until Rotations exist.
-const MODE: GameModeId = GameModeId::TeamDeathmatch;
-
-/// The Match Rules preset this process's server runs (`--rules`), validated against
-/// `GameData` at startup.
-#[derive(Resource, Clone, Debug)]
-pub struct ServerRules(pub String);
-
-/// The Map this process's server starts its first Match on (`--map`), validated against the
-/// `MapRegistry` at startup.
-#[derive(Resource, Clone, Debug)]
-pub struct ServerMap(pub MapId);
-
 /// Exact seconds left in the current phase (playing or end screen); `MatchState` only carries
-/// whole seconds, so it is written once per second.
+/// whole seconds, so it is written once per second. Search & Destroy keeps its round clock in its
+/// rules instead and has no Match clock.
 #[derive(Resource, Debug)]
 pub(super) struct MatchClock {
     left: f32,
@@ -50,39 +41,54 @@ fn whole_secs(left: f32) -> u32 {
     left.max(0.0).ceil() as u32
 }
 
+/// The state of a fresh Match of the Rotation's current entry.
+fn fresh_match(config: &ServerConfig, data: &GameData) -> MatchState {
+    let entry = config.current();
+    let (score_limit, time_limit_secs) = config.limits(data, entry.mode);
+    let upcoming = config.upcoming();
+    MatchState {
+        mode: entry.mode,
+        map: entry.map.clone(),
+        rules: entry.rules.clone(),
+        scores: [0; 2],
+        score_limit,
+        seconds_left: time_limit_secs,
+        phase: MatchPhase::Playing,
+        next: (upcoming.map.clone(), upcoming.mode),
+    }
+}
+
 /// Spawns the replicated `MatchState` entity of the first Match when a server starts.
 pub(super) fn start_match(
     trigger: On<Add<Started>>,
     servers: Query<(), With<Server>>,
     data: Res<GameData>,
-    rules: Res<ServerRules>,
-    map: Res<ServerMap>,
+    mut config: ResMut<ServerConfig>,
     mut commands: Commands,
 ) {
     if !servers.contains(trigger.entity) {
         return;
     }
-    let settings = data.game_mode(MODE);
+    config.restart();
+    let state = fresh_match(&config, &data);
     commands.insert_resource(MatchClock {
-        left: settings.time_limit_secs as f32,
+        left: state.seconds_left as f32,
     });
+    commands.insert_resource(ModeRuntime::Pending);
+    info!(
+        "Match started ({:?} on \"{}\", \"{}\" Match Rules; next: {} - {})",
+        state.mode,
+        state.map,
+        state.rules,
+        state.next.0,
+        state.next.1.name()
+    );
     commands.spawn((
         Name::new("Match"),
-        MatchState {
-            mode: MODE,
-            map: map.0.clone(),
-            rules: rules.0.clone(),
-            scores: [0; 2],
-            score_limit: settings.score_limit,
-            seconds_left: settings.time_limit_secs,
-            phase: MatchPhase::Playing,
-        },
+        state,
+        ModeView::None,
         Replicate::to_clients(NetworkTarget::All),
     ));
-    info!(
-        "Match started ({MODE:?} on \"{}\", \"{}\" Match Rules)",
-        map.0, rules.0
-    );
 }
 
 /// Drops the Match when its server stops (Host leaving).
@@ -99,26 +105,35 @@ pub(super) fn end_match(
         commands.entity(entity).try_despawn();
     }
     commands.remove_resource::<MatchClock>();
+    commands.remove_resource::<ModeRuntime>();
     info!("Match ended: server stopped");
 }
 
-/// Advances the Match: ends it at the score or time limit, and restarts it after the end screen.
+/// Advances the Match: ends it at the score or time limit, and after the end screen starts the
+/// Rotation's next one (changing Map and Game Mode when its entry says so).
 pub(super) fn tick_match(
     mut state: Single<&mut MatchState>,
     mut clock: ResMut<MatchClock>,
+    mut config: ResMut<ServerConfig>,
     mut players: Query<(Entity, &PlayerTeam, &mut PlayerStats)>,
     data: Res<GameData>,
     time: Res<Time>,
     mut commands: Commands,
 ) {
     let settings = data.game_mode(state.mode);
-    clock.left -= time.delta_secs();
+    // Search & Destroy runs on rounds: it has no Match clock.
+    let timed = state.mode != GameModeId::SearchAndDestroy;
+    if timed || state.phase != MatchPhase::Playing {
+        clock.left -= time.delta_secs();
+    }
     match state.phase {
         MatchPhase::Playing => {
             let decided = !is_live(&state);
-            if decided || clock.left <= 0.0 {
+            if decided || (timed && clock.left <= 0.0) {
                 let winner = leader(state.scores);
-                state.seconds_left = whole_secs(clock.left);
+                if timed {
+                    state.seconds_left = whole_secs(clock.left);
+                }
                 state.phase = MatchPhase::Ended {
                     winner,
                     next_in_secs: settings.end_screen_secs,
@@ -131,7 +146,7 @@ pub(super) fn tick_match(
                     state.scores[Team::Alpha.index()],
                     state.scores[Team::Bravo.index()],
                 );
-            } else if state.seconds_left != whole_secs(clock.left) {
+            } else if timed && state.seconds_left != whole_secs(clock.left) {
                 state.seconds_left = whole_secs(clock.left);
             }
         }
@@ -150,16 +165,26 @@ pub(super) fn tick_match(
             }
         }
         MatchPhase::Ended { .. } => {
-            clock.left = settings.time_limit_secs as f32;
-            **state = MatchState {
-                mode: state.mode,
-                map: state.map.clone(),
-                rules: state.rules.clone(),
-                scores: [0; 2],
-                score_limit: settings.score_limit,
-                seconds_left: settings.time_limit_secs,
-                phase: MatchPhase::Playing,
-            };
+            config.advance();
+            let next = fresh_match(&config, &data);
+            clock.left = next.seconds_left as f32;
+            if next.map != state.map {
+                info!(
+                    "Rotation: changing Map from \"{}\" to \"{}\"",
+                    state.map, next.map
+                );
+            }
+            info!(
+                "New Match started ({:?} on \"{}\", \"{}\" Match Rules; next: {} - {})",
+                next.mode,
+                next.map,
+                next.rules,
+                next.next.0,
+                next.next.1.name()
+            );
+            **state = next;
+            // The new Match's objective is built once its Map is loaded.
+            commands.insert_resource(ModeRuntime::Pending);
             for (entity, team, mut stats) in &mut players {
                 *stats = PlayerStats::default();
                 if team.0.is_some() {
@@ -168,7 +193,6 @@ pub(super) fn tick_match(
                         .insert(PendingRespawn::at(Duration::ZERO));
                 }
             }
-            info!("New Match started");
         }
     }
 }

@@ -1,5 +1,5 @@
-//! The Scoreboard: held open with the scoreboard key, forced open at Match end with the result
-//! and the countdown to the next Match. Our Team's section comes first; players are sorted by
+//! The Scoreboard: held open with the scoreboard key, forced open at Match end (under the result
+//! banner) with the next Rotation entry and the countdown to the next Match. Our Team's section comes first; players are sorted by
 //! kills and the local player is highlighted.
 
 use std::cmp::Reverse;
@@ -17,15 +17,12 @@ use crate::shared::{LocalPlayerReplica, MatchPhase, PlayerName, PlayerStats, Pla
 use crate::ui::{self, UiFonts};
 
 const WIDTH: f32 = 560.0;
-const BANNER_SIZE: f32 = 56.0;
-const WINNER_SIZE: f32 = 24.0;
 const SUBTITLE_SIZE: f32 = 18.0;
 const SECTION_SIZE: f32 = 24.0;
 const SECTION_EMBLEM_SIZE: f32 = 30.0;
 const ROW_SIZE: f32 = 18.0;
 const STAT_WIDTH: f32 = 48.0;
 const SELF_BG: Color = Color::srgba(1.0, 1.0, 1.0, 0.12);
-const DRAW_COLOR: Color = Color::srgb(0.9, 0.9, 0.9);
 
 #[derive(Component)]
 pub(super) struct ScoreboardRoot;
@@ -45,11 +42,9 @@ pub(super) struct Board {
 /// What the Scoreboard announces at Match end.
 #[derive(PartialEq)]
 struct MatchResult {
-    banner: &'static str,
-    color: Color,
-    /// Name of the winning Faction; `None` on a draw.
-    winner: Option<String>,
     next_in: u32,
+    /// "Map - Game Mode" of the Rotation's next Match.
+    next_up: String,
 }
 
 #[derive(PartialEq)]
@@ -149,12 +144,12 @@ fn build(panel: &mut ChildSpawnerCommands, fonts: &UiFonts, assets: &AssetServer
                 ..default()
             })
             .with_children(|header| {
-                header
-                    .spawn(ui::title(fonts, result.banner, BANNER_SIZE))
-                    .insert(TextColor(result.color));
-                if let Some(winner) = &result.winner {
-                    header.spawn(ui::title(fonts, &format!("{winner} wins"), WINNER_SIZE));
-                }
+                header.spawn(ui::label(
+                    fonts,
+                    &format!("Next: {}", result.next_up),
+                    SUBTITLE_SIZE + 2.0,
+                    ui::TEXT,
+                ));
                 header.spawn(ui::label(
                     fonts,
                     &format!("Next match in {}", result.next_in),
@@ -282,17 +277,15 @@ pub(super) fn update_scoreboard(
     }
 
     let ours = own_side(life.team());
-    let result = ended.map(|(winner, next_in)| {
-        let (banner, color) = match winner {
-            None => ("DRAW", DRAW_COLOR),
-            Some(team) if team == ours => ("VICTORY", FRIENDLY_COLOR),
-            Some(_) => ("DEFEAT", ENEMY_COLOR),
-        };
+    let result = ended.map(|(_, next_in)| {
         MatchResult {
-            banner,
-            color,
-            winner: winner.map(|team| data.faction(&maps, &state.map, team).name.clone()),
             next_in,
+            next_up: format!(
+                "{} - {}",
+                maps.get(&state.next.0)
+                    .map_or_else(|| state.next.0.to_string(), |info| info.name.clone()),
+                state.next.1.name()
+            ),
         }
     });
     let display_name = |name: &PlayerName| {

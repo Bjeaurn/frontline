@@ -203,8 +203,8 @@ where
     Arc::new(hook)
 }
 
-/// Ask the server to play another Map from now on (server only; e.g. by the Rotation between
-/// Matches). Every process unloads the current Map and loads the new one; players on a Team
+/// Ask the server to play another Map from now on (server only; the Rotation changes
+/// `MatchState::map` itself at a Match boundary). Every process unloads the current Map and loads the new one; players on a Team
 /// respawn on it once it is ready. Unknown ids are refused with an error.
 #[derive(Message, Clone, Debug)]
 pub struct ChangeMap(pub MapId);
@@ -243,6 +243,18 @@ struct PendingPropBox;
 /// Run condition: the loaded Map is playable.
 pub fn map_ready(ready: Query<(), With<MapReady>>) -> bool {
     !ready.is_empty()
+}
+
+/// Run condition: the Map the Match names is the one loaded, and it is playable. (Right after
+/// the Rotation moves on, the previous Map is still loaded for a frame.)
+pub fn match_map_ready(
+    roots: Query<&MapRoot, With<MapReady>>,
+    matches: Query<&MatchState>,
+) -> bool {
+    matches
+        .iter()
+        .next()
+        .is_some_and(|state| roots.iter().any(|root| root.id == state.map))
 }
 
 /// One spawn point of the loaded Map.

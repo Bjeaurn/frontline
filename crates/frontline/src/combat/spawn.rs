@@ -27,6 +27,28 @@ pub fn choose_spawn(
         .map(|(index, _)| index)
 }
 
+/// Indices of the spawns closest to `anchors` (the nearer half, at least one), for biasing a
+/// team's respawns toward what it holds. With no anchors every index.
+pub fn bias_toward(spawns: &[Vec3], anchors: &[Vec3]) -> Vec<usize> {
+    if anchors.is_empty() || spawns.len() < 2 {
+        return (0..spawns.len()).collect();
+    }
+    let mut by_distance: Vec<(usize, f32)> = spawns
+        .iter()
+        .enumerate()
+        .map(|(index, &spawn)| {
+            let nearest = anchors
+                .iter()
+                .map(|&anchor| anchor.distance(spawn))
+                .fold(f32::INFINITY, f32::min);
+            (index, nearest)
+        })
+        .collect();
+    by_distance.sort_by(|a, b| a.1.total_cmp(&b.1));
+    by_distance.truncate(spawns.len().div_ceil(2));
+    by_distance.into_iter().map(|(index, _)| index).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -41,6 +63,15 @@ mod tests {
     fn unseen_spawn_beats_a_farther_seen_one() {
         let chosen = choose_spawn(&[A, B, C], &ENEMIES, |_, spawn| spawn != C);
         assert_eq!(chosen, Some(2));
+    }
+
+    #[test]
+    fn spawns_are_biased_to_the_nearer_half_around_anchors() {
+        let spawns = [A, B, C, Vec3::new(100.0, 0.0, 0.0)];
+        let mut kept = bias_toward(&spawns, &[Vec3::new(5.0, 0.0, 0.0)]);
+        kept.sort_unstable();
+        assert_eq!(kept, [0, 1]);
+        assert_eq!(bias_toward(&spawns, &[]).len(), 4);
     }
 
     #[test]

@@ -1,9 +1,10 @@
-//! The game's own screens, built from `ui`: title, Server Browser and Settings in the main
-//! menu; the 'Connecting' panel, Pause and Settings over the game. TeamSelect and Loadout live
+//! The game's own screens, built from `ui`: title, Host setup, Server Browser and Settings in the
+//! main menu; the 'Connecting' panel, Pause and Settings over the game. TeamSelect and Loadout live
 //! with their features (`match_hud`, `loadout`). Client/Host only.
 
 mod browser;
 mod connecting;
+mod host_setup;
 mod pause;
 mod settings;
 mod title;
@@ -19,6 +20,7 @@ impl Plugin for MenusPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(AppState::MainMenu), title::spawn_menu_camera)
             .add_systems(OnEnter(MenuScreen::Title), title::spawn_title)
+            .add_systems(OnEnter(MenuScreen::HostSetup), host_setup::spawn_host_setup)
             .add_systems(OnEnter(MenuScreen::ServerBrowser), browser::spawn_browser)
             .add_systems(OnEnter(MenuScreen::Settings), settings::spawn_menu_settings)
             .add_systems(OnEnter(Overlay::Pause), pause::spawn_pause)
@@ -29,6 +31,14 @@ impl Plugin for MenusPlugin {
                     (title::orbit_menu_camera, back_to_title).run_if(in_state(AppState::MainMenu)),
                     (browser::refresh_server_list, browser::show_connection_error)
                         .run_if(in_state(MenuScreen::ServerBrowser)),
+                    (
+                        host_setup::refresh,
+                        host_setup::read_sliders,
+                        host_setup::show_readouts,
+                    )
+                        .chain()
+                        .run_if(in_state(MenuScreen::HostSetup))
+                        .run_if(resource_exists::<host_setup::Draft>),
                     settings::show_readouts,
                     connecting::show_connecting.run_if(in_state(AppState::InGame)),
                 ),

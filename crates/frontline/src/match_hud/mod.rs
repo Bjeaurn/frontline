@@ -1,9 +1,11 @@
-//! Team Deathmatch HUD (Client and Host): the team select screen, the top-centre score, the
-//! Scoreboard (held with Tab, forced open at Match end) and friendly name tags.
+//! Match HUD (Client and Host): the team select screen, the top-centre score, the objective
+//! Game Modes' strip and progress bar (`modes`), the Scoreboard (held with Tab, forced open at
+//! Match end) and friendly name tags.
 //!
 //! Teams are always coloured relative to the local player (friendly blue, enemy red); their
 //! Faction (from data) gives them a name and an emblem.
 
+mod modes;
 mod name_tags;
 mod score;
 mod scoreboard;
@@ -86,7 +88,11 @@ impl Plugin for MatchHudPlugin {
             .init_resource::<team_select::TeamSelect>()
             .add_systems(
                 OnEnter(AppState::InGame),
-                (score::spawn_score, scoreboard::spawn_scoreboard),
+                (
+                    score::spawn_score,
+                    scoreboard::spawn_scoreboard,
+                    modes::spawn_mode_hud,
+                ),
             )
             .add_systems(OnExit(AppState::InGame), reset_session)
             .add_systems(
@@ -102,6 +108,11 @@ impl Plugin for MatchHudPlugin {
                         .run_if(in_state(Overlay::TeamSelect)),
                     (
                         score::update_score,
+                        modes::update_mode_strip,
+                        modes::update_action_bar,
+                        modes::update_spectate_text,
+                        modes::show_round_banner,
+                        modes::show_match_banner,
                         scoreboard::update_scoreboard,
                         name_tags::attach_name_tags,
                         name_tags::place_name_tags,

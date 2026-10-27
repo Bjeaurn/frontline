@@ -120,12 +120,6 @@ fn searching(fonts: &UiFonts) -> impl Bundle {
     )
 }
 
-fn mode_name(mode: GameModeId) -> &'static str {
-    match mode {
-        GameModeId::TeamDeathmatch => "Team Deathmatch",
-    }
-}
-
 /// Rebuilds the rows when the set of servers or what they report changes (not on mere ageing).
 pub(super) fn refresh_server_list(
     servers: Res<DiscoveredServers>,
@@ -169,7 +163,7 @@ pub(super) fn refresh_server_list(
                 [
                     &info.name,
                     &players,
-                    mode_name(info.mode),
+                    GameModeId::name(info.mode),
                     &addr.to_string(),
                 ],
                 TEXT,

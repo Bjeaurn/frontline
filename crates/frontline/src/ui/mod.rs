@@ -1,7 +1,8 @@
 //! Shared look of every menu screen (CoD4-ish): fonts, palette and widgets. Client/Host only.
 //!
-//! Build screens from [`title`], [`label`], [`button`], [`panel`], [`backdrop`], [`slider`]
-//! and [`text_field`]; buttons get hover/press styling automatically. React to a click with an
+//! Build screens from [`title`], [`label`], [`button`], [`compact_button`], [`panel`],
+//! [`backdrop`], [`slider`] and [`text_field`]; [`spawn_result_banner`] shows a result
+//! (ROUND WON, VICTORY) over the game; buttons get hover/press styling automatically. React to a click with an
 //! observer on the button entity:
 //! `commands.spawn(button(&fonts, "Host Game")).observe(|_: On<Activate>, ...| { ... })`
 //! (`bevy::ui_widgets::Activate`; also fires on Enter/Space when the button has focus).
@@ -13,6 +14,10 @@ use bevy::ui::Pressed;
 use bevy::ui_widgets::{
     Button, Slider, SliderRange, SliderThumb, SliderValue, TextInput, observe, slider_self_update,
 };
+
+mod banner;
+
+pub use banner::{BannerSpec, spawn_result_banner};
 
 pub const BACKDROP: Color = Color::srgba(0.02, 0.03, 0.02, 0.72);
 pub const PANEL: Color = Color::srgba(0.07, 0.08, 0.06, 0.88);
@@ -47,7 +52,10 @@ impl Plugin for UiPlugin {
             include_bytes!("../../assets/fonts/Rajdhani-Bold.ttf").to_vec(),
         ));
         app.insert_resource(UiFonts { regular, bold })
-            .add_systems(Update, (style_buttons, place_slider_thumbs));
+            .add_systems(
+                Update,
+                (style_buttons, place_slider_thumbs, banner::animate_banners),
+            );
     }
 }
 
@@ -102,6 +110,34 @@ pub fn button(fonts: &UiFonts, text: &str) -> impl Bundle {
             TextFont {
                 font: fonts.bold.clone().into(),
                 font_size: FontSize::Px(26.0),
+                ..default()
+            },
+            TextColor(TEXT),
+        )],
+    )
+}
+
+/// A small menu button for dense screens (list rows, cycling pickers). Styled like [`button`].
+pub fn compact_button(fonts: &UiFonts, text: &str, min_width: f32, size: f32) -> impl Bundle {
+    (
+        MenuButton,
+        Button,
+        Hovered::default(),
+        Node {
+            min_width: px(min_width),
+            padding: UiRect::axes(px(10.0), px(3.0)),
+            border: UiRect::left(px(3.0)),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BackgroundColor(BUTTON),
+        BorderColor::all(Color::NONE),
+        children![(
+            Text::new(text.to_uppercase()),
+            TextFont {
+                font: fonts.bold.clone().into(),
+                font_size: FontSize::Px(size),
                 ..default()
             },
             TextColor(TEXT),

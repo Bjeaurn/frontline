@@ -120,10 +120,13 @@ pub struct MatchState {
     pub rules: String,
     /// Team scores, indexed by `Team::index`.
     pub scores: [u32; 2],
+    /// Points to win; in Search & Destroy, rounds.
     pub score_limit: u32,
-    /// Whole seconds left on the clock while playing.
+    /// Whole seconds left on the clock while playing; in Search & Destroy, on the round clock.
     pub seconds_left: u32,
     pub phase: MatchPhase,
+    /// The Rotation's next Map and Game Mode, shown on the end screen.
+    pub next: (MapId, GameModeId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

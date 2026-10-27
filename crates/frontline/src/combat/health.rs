@@ -10,9 +10,10 @@ use lightyear::prelude::*;
 use super::damage::{HitZone, shot_damage};
 use super::hitbox::{Hitboxes, set_hitboxes_enabled, spawn_hitboxes};
 use super::match_flow::is_live;
+use super::mode_systems::{ModeRuntime, UseHeld};
 use super::shots::PlayerHit;
-use super::spawn::choose_spawn;
-use crate::data::GameData;
+use super::spawn::{bias_toward, choose_spawn};
+use crate::data::{GameData, GameModeId};
 use crate::maps::{MapSpawn, MapSpawns};
 use crate::net::protocol::{Damaged, EventChannel, HitConfirm, KillFeed, PlayerOwner, Respawn};
 use crate::shared::{
@@ -68,7 +69,7 @@ pub(super) fn init_player(
     spawn_hitboxes(&mut commands, add.entity);
     commands
         .entity(add.entity)
-        .insert(LastDamaged(Duration::ZERO));
+        .insert((LastDamaged(Duration::ZERO), UseHeld::default()));
 }
 
 /// Applies each `PlayerHit` while the Match is live: damage, hit/damage feedback and, on a
@@ -151,9 +152,13 @@ pub(super) fn apply_hits(
 
         stats.deaths += 1;
         set_hitboxes_enabled(&mut commands, hitboxes, false);
-        commands.entity(hit.victim).insert(PendingRespawn::at(
-            time.elapsed() + Duration::from_secs_f32(rules.respawn_delay_secs),
-        ));
+        // Search & Destroy has no respawns: the dead wait for the next round, which sends
+        // everyone back.
+        if state.mode != GameModeId::SearchAndDestroy {
+            commands.entity(hit.victim).insert(PendingRespawn::at(
+                time.elapsed() + Duration::from_secs_f32(rules.respawn_delay_secs),
+            ));
+        }
         let feed = KillFeed {
             killer: shooter_name,
             victim: victim_name.0.clone(),
@@ -162,7 +167,10 @@ pub(super) fn apply_hits(
         };
         if enemy && let Ok((_, _, mut killer_stats, ..)) = players.get_mut(hit.shooter) {
             killer_stats.kills += 1;
-            if let Some(team) = shooter_team {
+            // Only Team Deathmatch scores for kills; the other modes score their objective.
+            if state.mode == GameModeId::TeamDeathmatch
+                && let Some(team) = shooter_team
+            {
                 state.scores[team.index()] += 1;
                 info!(
                     "{team:?} scores: Alpha {} - Bravo {}",
@@ -225,6 +233,7 @@ pub(super) fn respawn_players(
     )>,
     mut senders: Query<&mut MessageSender<Respawn>>,
     spawns: Res<MapSpawns>,
+    runtime: Res<ModeRuntime>,
     spatial: SpatialQuery,
     state: Single<&MatchState>,
     data: Res<GameData>,
@@ -245,7 +254,7 @@ pub(super) fn respawn_players(
         let Some(team) = team.0 else {
             continue;
         };
-        if pending.at > now {
+        if pending.at > now || !runtime.respawn_open(team) {
             continue;
         }
         let enemy_eyes: Vec<Vec3> = living
@@ -263,7 +272,13 @@ pub(super) fn respawn_players(
                     .all(|(eye, _)| eye.xz().distance(spawn.position.xz()) > SPAWN_CLEARANCE)
             })
             .collect();
-        let candidates = if free.is_empty() { &usable } else { &free };
+        let pool = if free.is_empty() { &usable } else { &free };
+        // Domination: spawn near the Flags the team holds.
+        let positions: Vec<Vec3> = pool.iter().map(|spawn| spawn.position).collect();
+        let candidates: Vec<&MapSpawn> = bias_toward(&positions, &runtime.spawn_anchors(team))
+            .into_iter()
+            .map(|index| pool[index])
+            .collect();
         let candidate_eyes: Vec<Vec3> = candidates
             .iter()
             .map(|spawn| spawn.position + standing_eye)

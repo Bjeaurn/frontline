@@ -20,6 +20,7 @@ use lightyear::prelude::server::Started;
 pub use server::LinkPlayer;
 
 use crate::cli::Mode;
+use crate::rotation::ServerConfig;
 
 pub struct NetPlugin;
 
@@ -34,9 +35,12 @@ impl Plugin for NetPlugin {
         app.add_plugins((server::ServerNetPlugin, discovery::DiscoveryResponderPlugin));
         match mode {
             Mode::Dedicated { port, name } => {
-                app.add_systems(Startup, move |mut commands: Commands| {
-                    server::start_server(&mut commands, port, name.clone());
-                });
+                app.add_systems(
+                    Startup,
+                    move |config: Res<ServerConfig>, mut commands: Commands| {
+                        server::start_server(&mut commands, port, name.clone(), config.max_players);
+                    },
+                );
             }
             Mode::Windowed { .. } => {
                 app.add_plugins((

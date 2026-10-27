@@ -13,6 +13,7 @@ use super::protocol::PlayerOwner;
 use super::{client, server};
 use crate::cli::Mode;
 use crate::flow::{AppState, ConnectionError, FlowCommand, MenuScreen, Settings};
+use crate::rotation::ServerConfig;
 use crate::shared::MatchState;
 
 /// Longest a leaving client or server waits for its goodbye packets before it is despawned.
@@ -41,6 +42,7 @@ fn apply_flow_commands(
     mut flow: MessageReader<FlowCommand>,
     mode: Res<Mode>,
     settings: Res<Settings>,
+    config: Res<ServerConfig>,
     clients: LiveClients,
     servers: LiveServers,
     joining: Query<(), (With<Client>, With<Connecting>, With<PeerAddr>)>,
@@ -61,8 +63,16 @@ fn apply_flow_commands(
                     warn!("Ignoring Host: already in a game");
                     continue;
                 }
-                info!("Hosting on port {port} as \"{}\"", settings.name);
-                let server = server::start_server(&mut commands, port, settings.name.clone());
+                let server_name = match settings.host.server_name.trim() {
+                    "" => settings.name.clone(),
+                    name => name.to_owned(),
+                };
+                info!(
+                    "Hosting \"{server_name}\" on port {port} as \"{}\"",
+                    settings.name
+                );
+                let server =
+                    server::start_server(&mut commands, port, server_name, config.max_players);
                 client::connect_host_client(&mut commands, server);
                 error.0 = None;
                 next_app.set_if_different(AppState::InGame);

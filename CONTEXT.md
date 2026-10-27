@@ -25,12 +25,16 @@ The pre-game gathering on a server where players join before the first **Match**
 _Avoid_: Room, party, pre-game
 
 **Match**:
-One round of one **Game Mode** on one **Map**, ending at its score or time limit.
-_Avoid_: Game, round, session
+One play of one **Game Mode** on one **Map**, ending at its score or time limit.
+_Avoid_: Game, session
 
 **Rotation**:
-The ordered list of entries, each a **Map**, a **Game Mode** and a **Match Rules** preset, that the server cycles through after each **Match**.
+The ordered list of **Rotation entries** that the server cycles through after each **Match**; a single entry repeats.
 _Avoid_: Playlist, map cycle
+
+**Rotation entry**:
+One item of a **Rotation**: a **Map**, a **Game Mode** the Map supports and a **Match Rules** preset. The **Host** builds the Rotation on the Host setup screen.
+_Avoid_: Playlist item, map slot
 
 **Join In Progress**:
 Entering a **Match** after it has started, choosing a team with the smaller team pre-selected.
@@ -61,6 +65,30 @@ _Avoid_: Control, conquest
 **Flag**:
 A fixed capturable area in **Domination**, labelled A, B or C.
 _Avoid_: Zone, point, objective, capture point
+
+**Headquarters**:
+A **Game Mode** where one **HQ** at a time is captured and defended: the team holding it scores every second and its players don't respawn until the other team destroys it or it expires and relocates.
+_Avoid_: HQ mode, radio, hardpoint
+
+**HQ**:
+The capturable site of **Headquarters**, active at one of the **Map**'s HQ sites at a time for about a minute.
+_Avoid_: Radio, hill
+
+**Search & Destroy**:
+A round-based **Game Mode** without respawns: attackers plant the **Bomb** at a **Bomb Site** and defenders stop them, over several **Rounds**.
+_Avoid_: S&D (in docs), bomb mode
+
+**Round**:
+One short fight of **Search & Destroy**, won by elimination, detonation, defusal or the clock; a **Match** is several Rounds, and attackers and defenders swap sides at half.
+_Avoid_: Match, game
+
+**Bomb**:
+The single explosive of **Search & Destroy**, carried by one attacker, dropped on their death, planted at a **Bomb Site** and defused by a defender.
+_Avoid_: C4, explosive, charge
+
+**Bomb Site**:
+A fixed area, labelled A or B, where the **Bomb** can be planted.
+_Avoid_: Plant zone, target
 
 **Team**:
 One of the two sides in a team **Game Mode**; each player sees their own as friendly and the other as enemy.
@@ -178,6 +206,8 @@ _Avoid_: Combo, double/triple (as the general term)
 - The **Server Browser** shows only servers on the local network; joining by address is the fallback
 - A **Match** runs exactly one **Game Mode** on exactly one **Map** under one **Match Rules** preset
 - **Domination** has exactly three **Flags** (A, B, C) per **Map**
+- **Headquarters** needs at least one HQ site on the **Map**; **Search & Destroy** needs two **Bomb Sites** (A, B)
+- A **Rotation entry** only names a **Game Mode** its **Map** supports
 - A **Loadout** has one **Primary**, one **Secondary**, and one **Perk** per **Perk Slot**
 - A **Weapon** has an Optic and a Muzzle **Attachment Slot**, each optionally filled
 - A **Profile** belongs to one player and is independent of any **Host**
@@ -186,7 +216,8 @@ _Avoid_: Combo, double/triple (as the general term)
 ## Flagged ambiguities
 
 - "Online lobby management" (IDEA.md MVP) is deferred: the first playable target covers local network play only.
-- "Session" was used loosely for both a server's lifetime and a single round — resolved: use **Match** for a round; a server's lifetime needs no term.
+- "Session" was used loosely for both a server's lifetime and a single play — resolved: use **Match** for a play; a server's lifetime needs no term.
+- "Round" could mean a whole **Match** or one fight of **Search & Destroy** — resolved: **Round** is only the Search & Destroy fight; a **Match** is the whole play.
 - "New teams" meant new identities, not more than two sides — resolved: a **Match** always has two **Teams**; each plays as a **Faction**, and new Factions are added as data.
 - "Level" could mean a playable area or a progression rank — resolved: **Level** is the progression rank; playable areas are **Maps**.
 - "Hardcore mode" suggested a separate **Game Mode** — resolved: **Hardcore** is a **Match Rules** preset combinable with any **Game Mode**.

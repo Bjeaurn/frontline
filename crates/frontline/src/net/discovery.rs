@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use lightyear::prelude::server::{ClientOf, Started};
 use lightyear::prelude::*;
 
-use super::server::{MAX_PLAYERS, ServerName};
+use super::server::{ServerName, ServerSlots};
 use crate::flow::{DiscoveredServer, DiscoveredServers, MenuScreen, ServerInfo};
 use crate::shared::MatchState;
 
@@ -79,14 +79,15 @@ struct Responder {
     server: Entity,
     name: String,
     port: u16,
+    max_players: u32,
 }
 
 fn open_responder(
     trigger: On<Add<Started>>,
-    servers: Query<(&LocalAddr, &ServerName), With<Server>>,
+    servers: Query<(&LocalAddr, &ServerName, &ServerSlots), With<Server>>,
     mut commands: Commands,
 ) {
-    let Ok((addr, name)) = servers.get(trigger.entity) else {
+    let Ok((addr, name, slots)) = servers.get(trigger.entity) else {
         return;
     };
     match bind_non_blocking(DISCOVERY_PORT) {
@@ -100,6 +101,7 @@ fn open_responder(
                 server: trigger.entity,
                 name: name.0.clone(),
                 port: addr.0.port(),
+                max_players: slots.0 as u32,
             });
         }
         Err(err) => warn!(
@@ -136,7 +138,7 @@ fn answer_queries(
             port: responder.port,
             mode: state.mode,
             players: links.iter().count() as u32,
-            max_players: MAX_PLAYERS as u32,
+            max_players: responder.max_players,
         };
         let Ok(text) = ron::to_string(&info) else {
             return;

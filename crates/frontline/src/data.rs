@@ -29,8 +29,8 @@ const BUILTIN_GAME_MODES: &str = include_str!("../../../data/game_modes.ron");
 const BUILTIN_FACTIONS: &str = include_str!("../../../data/factions.ron");
 const BUILTIN_LOADOUTS: &str = include_str!("../../../data/loadouts.ron");
 
-/// The Match Rules preset a server runs when `--rules` isn't given (until Rotations exist), and
-/// the one clients fall back to for a preset their own data lacks.
+/// The Match Rules preset a server runs when `--rules` isn't given, and the one clients fall back
+/// to for a preset their own data lacks.
 pub const DEFAULT_MATCH_RULES: &str = "default";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]
@@ -58,17 +58,53 @@ pub enum GunModel {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]
 pub enum GameModeId {
+    /// Key `tdm`. (The long names also parse, so `data/game_modes.ron` reads naturally.)
+    #[serde(rename = "tdm", alias = "TeamDeathmatch")]
     TeamDeathmatch,
+    #[serde(rename = "dom", alias = "Domination")]
+    Domination,
+    #[serde(rename = "hq", alias = "Headquarters")]
+    Headquarters,
+    #[serde(rename = "sd", alias = "SearchAndDestroy")]
+    SearchAndDestroy,
 }
 
 impl GameModeId {
+    pub const ALL: [GameModeId; 4] = [
+        GameModeId::TeamDeathmatch,
+        GameModeId::Domination,
+        GameModeId::Headquarters,
+        GameModeId::SearchAndDestroy,
+    ];
+
     /// Short key Maps use to say which Game Modes they support (`data/maps.ron`) and which a
-    /// spawn point serves (its `modes` property). Reserved for the next modes: `dom`
-    /// (Domination), `hq` (Headquarters), `sd` (Search & Destroy).
+    /// spawn point serves (its `modes` property), and that `--mode` and Rotation files use.
     pub fn key(self) -> &'static str {
         match self {
             GameModeId::TeamDeathmatch => "tdm",
+            GameModeId::Domination => "dom",
+            GameModeId::Headquarters => "hq",
+            GameModeId::SearchAndDestroy => "sd",
         }
+    }
+
+    pub fn from_key(key: &str) -> Option<GameModeId> {
+        GameModeId::ALL.into_iter().find(|mode| mode.key() == key)
+    }
+
+    /// Player-facing name.
+    pub fn name(self) -> &'static str {
+        match self {
+            GameModeId::TeamDeathmatch => "Team Deathmatch",
+            GameModeId::Domination => "Domination",
+            GameModeId::Headquarters => "Headquarters",
+            GameModeId::SearchAndDestroy => "Search & Destroy",
+        }
+    }
+
+    /// Keys of every mode, comma-separated, for error messages.
+    pub fn known_keys() -> String {
+        GameModeId::ALL.map(GameModeId::key).join(", ")
     }
 }
 
@@ -298,13 +334,78 @@ impl MovementTuning {
     }
 }
 
-/// Win conditions of a Game Mode.
+/// Win conditions of a Game Mode, plus the tuning of its objective. In Search & Destroy
+/// `score_limit` is the rounds a team needs to win and `time_limit_secs` is one round's clock.
 #[derive(Clone, Debug, Deserialize)]
 pub struct GameModeSettings {
     pub score_limit: u32,
     pub time_limit_secs: u32,
     /// How long the end-of-Match scoreboard shows before the next Match starts.
     pub end_screen_secs: u32,
+    #[serde(default)]
+    pub domination: Option<DominationTuning>,
+    #[serde(default)]
+    pub headquarters: Option<HeadquartersTuning>,
+    #[serde(default)]
+    pub search_and_destroy: Option<SearchAndDestroyTuning>,
+}
+
+/// A capturable zone: a cylinder around its entity (Domination Flags, the Headquarters).
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+pub struct CaptureTuning {
+    /// Seconds one player needs to capture a neutral zone.
+    pub capture_secs: f32,
+    /// Seconds one player needs to neutralise a zone held by the enemy.
+    pub neutralize_secs: f32,
+    /// Capture speed multiplier cap: `n` players on a zone capture `min(n, max_speedup)` times
+    /// as fast as one.
+    pub max_speedup: f32,
+    /// Horizontal radius of the zone, metres.
+    pub zone_radius: f32,
+    /// Height of the zone above its origin, metres.
+    pub zone_height: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+pub struct DominationTuning {
+    pub capture: CaptureTuning,
+    /// Every this many seconds each team scores for the Flags it holds.
+    pub score_interval_secs: f32,
+    pub points_per_flag: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+pub struct HeadquartersTuning {
+    /// Capturing a neutral HQ and destroying an enemy one.
+    pub capture: CaptureTuning,
+    pub score_interval_secs: f32,
+    pub points_per_tick: u32,
+    /// An HQ stays at its site this long, then relocates.
+    pub life_secs: f32,
+    /// Seconds between an HQ falling (or expiring) and the next one appearing.
+    pub relocate_secs: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+pub struct SearchAndDestroyTuning {
+    /// Attackers and defenders swap after this many rounds.
+    pub swap_after_round: u32,
+    /// How long the round result shows before the next round.
+    pub round_end_secs: f32,
+    pub plant_secs: f32,
+    pub defuse_secs: f32,
+    pub fuse_secs: f32,
+    /// A carrier within this horizontal distance of a bomb site can plant, metres.
+    pub site_radius: f32,
+    /// Walking within this distance of the dropped bomb picks it up.
+    pub pickup_radius: f32,
+    /// The explosion kills everyone within this distance.
+    pub blast_radius: f32,
+    /// The planted bomb beeps (positional sound) this often, speeding up to `beep_fast_secs`
+    /// over the last `beep_ramp_secs` of the fuse.
+    pub beep_secs: f32,
+    pub beep_fast_secs: f32,
+    pub beep_ramp_secs: f32,
 }
 
 /// The identity a Team plays as: name, emblem and accent colour. Purely presentational.
@@ -357,6 +458,27 @@ impl GameData {
 
     pub fn game_mode(&self, id: GameModeId) -> &GameModeSettings {
         &self.game_modes[&id]
+    }
+
+    pub fn domination(&self) -> &DominationTuning {
+        self.game_mode(GameModeId::Domination)
+            .domination
+            .as_ref()
+            .expect("checked at startup")
+    }
+
+    pub fn headquarters(&self) -> &HeadquartersTuning {
+        self.game_mode(GameModeId::Headquarters)
+            .headquarters
+            .as_ref()
+            .expect("checked at startup")
+    }
+
+    pub fn search_and_destroy(&self) -> &SearchAndDestroyTuning {
+        self.game_mode(GameModeId::SearchAndDestroy)
+            .search_and_destroy
+            .as_ref()
+            .expect("checked at startup")
     }
 
     /// The Faction a Team plays as on `map`: Factions belong to the Map's theater
@@ -429,6 +551,22 @@ impl Plugin for DataPlugin {
             data.factions.len() >= 2,
             "{FACTIONS_FILE} must define at least two Factions"
         );
+        for mode in GameModeId::ALL {
+            let settings = data
+                .game_modes
+                .get(&mode)
+                .unwrap_or_else(|| panic!("{GAME_MODES_FILE} must define {mode:?}"));
+            let tuned = match mode {
+                GameModeId::TeamDeathmatch => true,
+                GameModeId::Domination => settings.domination.is_some(),
+                GameModeId::Headquarters => settings.headquarters.is_some(),
+                GameModeId::SearchAndDestroy => settings.search_and_destroy.is_some(),
+            };
+            assert!(
+                tuned,
+                "{GAME_MODES_FILE}: {mode:?} is missing its tuning block"
+            );
+        }
         assert!(
             !data.default_loadouts.is_empty(),
             "{LOADOUTS_FILE} must list at least one Loadout"

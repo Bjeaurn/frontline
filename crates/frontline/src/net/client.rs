@@ -12,9 +12,9 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
 use super::protocol::{
-    CONNECTION_TIMEOUT_SECS, ChooseTeam, ControlChannel, Damaged, FireShot, Hello, HitConfirm,
-    KillFeed, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseChannel, PoseUpdate, Respawn,
-    ShotChannel, ShotTracer,
+    BombExploded, CONNECTION_TIMEOUT_SECS, ChooseTeam, ControlChannel, Damaged, FireShot, Hello,
+    HitConfirm, KillFeed, ObjectiveHold, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseChannel,
+    PoseUpdate, Respawn, ShotChannel, ShotTracer,
 };
 use crate::flow::Settings;
 use crate::shared::{
@@ -30,8 +30,10 @@ impl Plugin for ClientNetPlugin {
             .add_message::<FromServer<KillFeed>>()
             .add_message::<FromServer<Respawn>>()
             .add_message::<FromServer<ShotTracer>>()
+            .add_message::<FromServer<BombExploded>>()
             .add_message::<ToServer<FireShot>>()
             .add_message::<ToServer<ChooseTeam>>()
+            .add_message::<ToServer<ObjectiveHold>>()
             .add_observer(on_connected)
             .add_observer(on_disconnected)
             .add_systems(FixedUpdate, send_pose)
@@ -43,12 +45,13 @@ impl Plugin for ClientNetPlugin {
                     forward_from_server::<KillFeed>,
                     forward_from_server::<Respawn>,
                     forward_from_server::<ShotTracer>,
+                    forward_from_server::<BombExploded>,
                 )
                     .after(MessageSystems::Receive),
             )
             .add_systems(
                 PostUpdate,
-                (send_shots, send_team_choices).before(MessageSystems::Send),
+                (send_shots, send_team_choices, send_objective_holds).before(MessageSystems::Send),
             )
             .add_systems(Update, (mark_remote_players, mark_local_replica));
     }
@@ -205,6 +208,17 @@ fn send_team_choices(
     for mut sender in &mut senders {
         for ToServer(choice) in choices.read() {
             sender.send::<ControlChannel>(*choice);
+        }
+    }
+}
+
+fn send_objective_holds(
+    mut holds: MessageReader<ToServer<ObjectiveHold>>,
+    mut senders: Query<&mut MessageSender<ObjectiveHold>, (With<Client>, With<Connected>)>,
+) {
+    for mut sender in &mut senders {
+        for ToServer(hold) in holds.read() {
+            sender.send::<ControlChannel>(*hold);
         }
     }
 }

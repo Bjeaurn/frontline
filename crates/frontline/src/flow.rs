@@ -17,6 +17,7 @@ use crate::cli::Mode;
 use crate::data::GameModeId;
 use crate::match_hud::PendingTeam;
 use crate::player::input::Bindings;
+use crate::rotation::HostSetup;
 use crate::player::{ControllerSystems, MenuOpen};
 use crate::shared::{LocalPlayerReplica, PlayerTeam};
 
@@ -36,6 +37,8 @@ pub enum AppState {
 pub enum MenuScreen {
     #[default]
     Title,
+    /// HOST GAME: pick the Rotation and server settings before starting.
+    HostSetup,
     ServerBrowser,
     Settings,
 }
@@ -103,6 +106,9 @@ pub struct Settings {
     /// Chosen Default Loadout, an index into `GameData::default_loadouts`.
     #[serde(default)]
     pub loadout: usize,
+    /// The Host setup screen's choices.
+    #[serde(default)]
+    pub host: HostSetup,
 }
 
 impl Default for Settings {
@@ -113,6 +119,7 @@ impl Default for Settings {
             fov_deg: 80.0,
             master_volume: 0.8,
             loadout: 0,
+            host: HostSetup::default(),
         }
     }
 }

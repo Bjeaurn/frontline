@@ -14,9 +14,6 @@ use super::server_running;
 use crate::combat::PoseGate;
 use crate::shared::{Health, PlayerName, PlayerPose, PlayerStats, PlayerTeam};
 
-/// Most players a server accepts.
-pub(super) const MAX_PLAYERS: usize = 16;
-
 pub(super) struct ServerNetPlugin;
 
 impl Plugin for ServerNetPlugin {
@@ -40,12 +37,22 @@ pub struct LinkPlayer(pub Entity);
 #[derive(Component, Debug)]
 pub(super) struct ServerName(pub String);
 
+/// Most players the server accepts, announced to LAN discovery.
+#[derive(Component, Debug)]
+pub(super) struct ServerSlots(pub usize);
+
 /// Spawns the netcode/UDP server listening on all interfaces and starts it.
-pub(super) fn start_server(commands: &mut Commands, port: u16, name: String) -> Entity {
+pub(super) fn start_server(
+    commands: &mut Commands,
+    port: u16,
+    name: String,
+    max_players: usize,
+) -> Entity {
     let server = commands
         .spawn((
             Name::new("Server"),
             ServerName(name),
+            ServerSlots(max_players),
             NetcodeServer::new(
                 NetcodeConfig {
                     protocol_id: PROTOCOL_ID,
@@ -56,7 +63,7 @@ pub(super) fn start_server(commands: &mut Commands, port: u16, name: String) -> 
                     server_addr_check: false,
                     ..default()
                 }
-                .with_max_clients(MAX_PLAYERS),
+                .with_max_clients(max_players),
             ),
             LocalAddr(SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port)),
             ServerUdpIo,
@@ -112,7 +119,15 @@ fn spawn_player(
 
 fn log_disconnect(
     trigger: On<Add<Disconnected>>,
-    links: Query<(&RemoteId, &Disconnected, Option<&LinkPlayer>, Has<Connected>), With<ClientOf>>,
+    links: Query<
+        (
+            &RemoteId,
+            &Disconnected,
+            Option<&LinkPlayer>,
+            Has<Connected>,
+        ),
+        With<ClientOf>,
+    >,
     names: Query<&PlayerName>,
 ) {
     let Ok((RemoteId(peer), disconnected, player, was_connected)) = links.get(trigger.entity)

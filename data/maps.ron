@@ -18,7 +18,7 @@
         name: "Crossroads",
         file: "maps/crossroads.map",
         look: Some("overcast_urban"),
-        modes: ["tdm"],
+        modes: ["tdm", "dom", "hq", "sd"],
         factions: ("northern_sabre", "crimson_vanguard"),
     ),
 }
