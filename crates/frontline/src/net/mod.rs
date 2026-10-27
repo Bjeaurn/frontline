@@ -6,6 +6,7 @@
 //! A Dedicated Server starts serving right away; a windowed game hosts, joins and leaves on
 //! `FlowCommand`s (`session`).
 
+mod checkpoints;
 mod client;
 mod discovery;
 pub mod protocol;
@@ -40,6 +41,7 @@ impl Plugin for NetPlugin {
             Mode::Windowed { .. } => {
                 app.add_plugins((
                     client::ClientNetPlugin,
+                    checkpoints::CheckpointWorkaroundPlugin,
                     session::SessionPlugin,
                     discovery::DiscoveryBrowserPlugin,
                 ));
