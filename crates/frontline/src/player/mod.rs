@@ -10,6 +10,7 @@ mod remote;
 use bevy::prelude::*;
 
 use crate::flow::AppState;
+use crate::maps::map_ready;
 
 pub use controller::{ControllerModifiers, EyeCamera, MenuOpen, Motor, MouseCaptured, PITCH_LIMIT};
 pub use life::LocalLife;
@@ -69,9 +70,11 @@ impl Plugin for LocalControllerPlugin {
                     )
                         .chain()
                         .in_set(ControllerSystems::Look),
+                    // Nothing to stand on until the Map's colliders are in.
                     (controller::change_stance, controller::move_player)
                         .chain()
-                        .in_set(ControllerSystems::Move),
+                        .in_set(ControllerSystems::Move)
+                        .run_if(map_ready),
                     (controller::update_eye, controller::apply_horizontal_fov)
                         .chain()
                         .in_set(ControllerSystems::View),

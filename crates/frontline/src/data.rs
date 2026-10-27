@@ -61,6 +61,17 @@ pub enum GameModeId {
     TeamDeathmatch,
 }
 
+impl GameModeId {
+    /// Short key Maps use to say which Game Modes they support (`data/maps.ron`) and which a
+    /// spawn point serves (its `modes` property). Reserved for the next modes: `dom`
+    /// (Domination), `hq` (Headquarters), `sd` (Search & Destroy).
+    pub fn key(self) -> &'static str {
+        match self {
+            GameModeId::TeamDeathmatch => "tdm",
+        }
+    }
+}
+
 /// Stats of one Weapon. Distances in metres, angles in degrees, times in seconds.
 #[derive(Clone, Debug, Deserialize)]
 pub struct WeaponStats {
@@ -291,14 +302,12 @@ pub struct GameModeSettings {
     pub time_limit_secs: u32,
     /// How long the end-of-Match scoreboard shows before the next Match starts.
     pub end_screen_secs: u32,
-    /// Faction ids (see `factions.ron`) that Alpha and Bravo play as, in that order.
-    pub factions: [String; 2],
 }
 
 /// The identity a Team plays as: name, emblem and accent colour. Purely presentational.
 #[derive(Clone, Debug, Deserialize)]
 pub struct Faction {
-    /// Stable key referenced by Game Modes.
+    /// Stable key referenced by Maps (`maps.ron`: each Map's theater picks its two Factions).
     pub id: String,
     pub name: String,
     /// Short form for tight HUD spots (kill feed, score).
@@ -347,13 +356,21 @@ impl GameData {
         &self.game_modes[&id]
     }
 
-    /// The Faction a Team plays as in the given Game Mode.
-    pub fn faction(&self, mode: GameModeId, team: crate::shared::Team) -> &Faction {
-        let id = &self.game_mode(mode).factions[team.index()];
-        self.factions
-            .iter()
-            .find(|faction| &faction.id == id)
-            .expect("validated at load")
+    /// The Faction a Team plays as on `map`: Factions belong to the Map's theater
+    /// (`maps.ron`). A Map this process doesn't know falls back to the Factions in file order.
+    pub fn faction(
+        &self,
+        maps: &crate::maps::MapRegistry,
+        map: &crate::maps::MapId,
+        team: crate::shared::Team,
+    ) -> &Faction {
+        maps.get(map)
+            .and_then(|info| self.faction_by_id(&info.factions[team.index()]))
+            .unwrap_or(&self.factions[team.index()])
+    }
+
+    pub fn faction_by_id(&self, id: &str) -> Option<&Faction> {
+        self.factions.iter().find(|faction| faction.id == id)
     }
 
     /// The Match Rules preset named `preset`, or the default one when this process's data
@@ -404,14 +421,11 @@ impl Plugin for DataPlugin {
             data.match_rules.contains_key(DEFAULT_MATCH_RULES),
             "{MATCH_RULES_FILE} must define the \"{DEFAULT_MATCH_RULES}\" preset"
         );
-        for (mode, settings) in &data.game_modes {
-            for id in &settings.factions {
-                assert!(
-                    data.factions.iter().any(|faction| &faction.id == id),
-                    "{GAME_MODES_FILE}: {mode:?} uses unknown faction \"{id}\""
-                );
-            }
-        }
+        // Two Teams, and the fallback for Maps that name no Factions (`maps::registry`).
+        assert!(
+            data.factions.len() >= 2,
+            "{FACTIONS_FILE} must define at least two Factions"
+        );
         assert!(
             !data.default_loadouts.is_empty(),
             "{LOADOUTS_FILE} must list at least one Loadout"
@@ -430,7 +444,7 @@ impl Plugin for DataPlugin {
 
 /// Parses `data/<file>` if present, else the built-in copy. A present-but-broken file is a
 /// hard error: silently ignoring someone's tuning would be worse than not starting.
-fn load<T: for<'de> Deserialize<'de>>(file: &str, builtin: &str) -> T {
+pub(crate) fn load<T: for<'de> Deserialize<'de>>(file: &str, builtin: &str) -> T {
     let path = Path::new("data").join(file);
     match std::fs::read_to_string(&path) {
         Ok(text) => {

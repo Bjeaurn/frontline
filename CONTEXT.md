@@ -67,7 +67,7 @@ One of the two sides in a team **Game Mode**; each player sees their own as frie
 _Avoid_: Side, squad
 
 **Faction**:
-The identity a **Team** plays as in a **Game Mode**: name, emblem and colours (e.g. Task Force Ranger, Red Brigade).
+The identity a **Team** plays as on a **Map**, set by the Map's theater: name, emblem and colours (e.g. Task Force Ranger, Red Brigade).
 _Avoid_: Team (for the identity), army, clan
 
 **Scoreboard**:

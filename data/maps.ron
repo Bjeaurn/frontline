@@ -1,0 +1,17 @@
+// Every built-in Map, by id (what `--map` takes). Homage Maps are never listed here: they live in
+// the private content folder (content/private/maps.ron and content/private/maps/*.map, ADR 0003).
+//
+// - file: asset path of the TrenchBroom `.map` under crates/frontline/assets/ (`assets/` next to
+//   the executable in a shipped build).
+// - look: look preset from looks.ron; overrides the map's own worldspawn `look` when given.
+// - modes: Game Mode keys the Map has entities for (tdm, dom, hq, sd); empty means every mode.
+// - factions: ids from factions.ron that Alpha and Bravo play as here (the Map's theater).
+{
+    "arena": (
+        name: "Arena",
+        file: "maps/arena.map",
+        look: Some("desert_dust"),
+        modes: ["tdm", "dom", "hq", "sd"],
+        factions: ("ranger", "brigade"),
+    ),
+}

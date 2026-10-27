@@ -4,8 +4,9 @@
 use bevy::prelude::*;
 
 use super::{ENEMY_COLOR, FRIENDLY_COLOR, MatchQuery, clock, own_side};
-use crate::data::{GameData, GameModeId};
+use crate::data::GameData;
 use crate::flow::AppState;
+use crate::maps::{MapId, MapRegistry};
 use crate::player::LocalLife;
 use crate::shared::Team;
 use crate::ui::{self, UiFonts};
@@ -107,13 +108,14 @@ pub(super) fn update_score(
     state: MatchQuery,
     life: Res<LocalLife>,
     data: Res<GameData>,
+    maps: Res<MapRegistry>,
     assets: Res<AssetServer>,
     mut root: Single<&mut Visibility, With<ScoreRoot>>,
     mut parts: Query<(&ScorePart, &mut Text)>,
     mut emblems: Query<(&ScoreFaction, &mut ImageNode)>,
     mut short_names: Query<(&ScoreFaction, &mut Text), Without<ScorePart>>,
     fresh: Query<(), Added<ScoreFaction>>,
-    mut shown: Local<Option<(GameModeId, Team)>>,
+    mut shown: Local<Option<(MapId, Team)>>,
 ) {
     let Ok(state) = state.single() else {
         root.set_if_neq(Visibility::Hidden);
@@ -132,13 +134,14 @@ pub(super) fn update_score(
             text.0 = value;
         }
     }
-    // Factions follow our side; a new session's row starts blank.
-    if *shown == Some((state.mode, ours)) && fresh.is_empty() {
+    // Factions follow the Map and our side; a new session's row starts blank.
+    let key = (state.map.clone(), ours);
+    if shown.as_ref() == Some(&key) && fresh.is_empty() {
         return;
     }
-    *shown = Some((state.mode, ours));
+    *shown = Some(key);
     let faction = |ScoreFaction { enemy }: &ScoreFaction| {
-        data.faction(state.mode, if *enemy { ours.other() } else { ours })
+        data.faction(&maps, &state.map, if *enemy { ours.other() } else { ours })
     };
     for (side, mut image) in &mut emblems {
         image.image = assets.load(faction(side).icon.clone());

@@ -13,11 +13,11 @@ use super::match_flow::is_live;
 use super::shots::PlayerHit;
 use super::spawn::choose_spawn;
 use crate::data::GameData;
+use crate::maps::{MapSpawn, MapSpawns};
 use crate::net::protocol::{Damaged, EventChannel, HitConfirm, KillFeed, PlayerOwner, Respawn};
 use crate::shared::{
     GameLayer, Health, MatchState, PlayerName, PlayerPose, PlayerStats, PlayerTeam, Stance, Team,
 };
-use crate::world::{SpawnPoints, yaw_towards_centre};
 
 /// A respawned client's poses are accepted again once one lands this close to the spawn.
 const RESPAWN_ACCEPT_RADIUS: f32 = 2.0;
@@ -224,7 +224,7 @@ pub(super) fn respawn_players(
         &Hitboxes,
     )>,
     mut senders: Query<&mut MessageSender<Respawn>>,
-    spawns: Res<SpawnPoints>,
+    spawns: Res<MapSpawns>,
     spatial: SpatialQuery,
     state: Single<&MatchState>,
     data: Res<GameData>,
@@ -253,20 +253,20 @@ pub(super) fn respawn_players(
             .filter(|(_, other)| *other == Some(team.other()))
             .map(|(eye, _)| *eye)
             .collect();
-        let free: Vec<Vec3> = spawns
-            .0
+        let usable = spawns.usable(Some(team), state.mode);
+        let free: Vec<&MapSpawn> = usable
             .iter()
             .copied()
-            .filter(|&spawn| {
+            .filter(|spawn| {
                 living
                     .iter()
-                    .all(|(eye, _)| eye.xz().distance(spawn.xz()) > SPAWN_CLEARANCE)
+                    .all(|(eye, _)| eye.xz().distance(spawn.position.xz()) > SPAWN_CLEARANCE)
             })
             .collect();
-        let candidates = if free.is_empty() { &spawns.0 } else { &free };
+        let candidates = if free.is_empty() { &usable } else { &free };
         let candidate_eyes: Vec<Vec3> = candidates
             .iter()
-            .map(|&spawn| spawn + standing_eye)
+            .map(|spawn| spawn.position + standing_eye)
             .collect();
         let line_of_sight = |from: Vec3, to: Vec3| {
             let (direction, distance) = Dir3::new_and_length(to - from).unwrap_or((Dir3::Y, 0.0));
@@ -278,8 +278,7 @@ pub(super) fn respawn_players(
             warn!("No spawn points; cannot respawn {}", name.0);
             continue;
         };
-        let position = candidates[index];
-        let yaw = yaw_towards_centre(position);
+        let MapSpawn { position, yaw, .. } = *candidates[index];
         living.push((position + standing_eye, Some(team)));
 
         let Ok((_, mut health, mut pose, ..)) = players.get_mut(entity) else {

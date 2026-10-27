@@ -9,6 +9,7 @@ use lightyear::prelude::*;
 
 use super::health::PendingRespawn;
 use crate::data::{GameData, GameModeId};
+use crate::maps::{ChangeMap, MapId, MapRegistry};
 use crate::shared::{MatchPhase, MatchState, PlayerStats, PlayerTeam, Team};
 
 /// The only Game Mode until Rotations exist.
@@ -18,6 +19,11 @@ const MODE: GameModeId = GameModeId::TeamDeathmatch;
 /// `GameData` at startup.
 #[derive(Resource, Clone, Debug)]
 pub struct ServerRules(pub String);
+
+/// The Map this process's server starts its first Match on (`--map`), validated against the
+/// `MapRegistry` at startup.
+#[derive(Resource, Clone, Debug)]
+pub struct ServerMap(pub MapId);
 
 /// Exact seconds left in the current phase (playing or end screen); `MatchState` only carries
 /// whole seconds, so it is written once per second.
@@ -50,6 +56,7 @@ pub(super) fn start_match(
     servers: Query<(), With<Server>>,
     data: Res<GameData>,
     rules: Res<ServerRules>,
+    map: Res<ServerMap>,
     mut commands: Commands,
 ) {
     if !servers.contains(trigger.entity) {
@@ -63,6 +70,7 @@ pub(super) fn start_match(
         Name::new("Match"),
         MatchState {
             mode: MODE,
+            map: map.0.clone(),
             rules: rules.0.clone(),
             scores: [0; 2],
             score_limit: settings.score_limit,
@@ -71,7 +79,10 @@ pub(super) fn start_match(
         },
         Replicate::to_clients(NetworkTarget::All),
     ));
-    info!("Match started ({MODE:?}, \"{}\" Match Rules)", rules.0);
+    info!(
+        "Match started ({MODE:?} on \"{}\", \"{}\" Match Rules)",
+        map.0, rules.0
+    );
 }
 
 /// Drops the Match when its server stops (Host leaving).
@@ -142,6 +153,7 @@ pub(super) fn tick_match(
             clock.left = settings.time_limit_secs as f32;
             **state = MatchState {
                 mode: state.mode,
+                map: state.map.clone(),
                 rules: state.rules.clone(),
                 scores: [0; 2],
                 score_limit: settings.score_limit,
@@ -157,6 +169,46 @@ pub(super) fn tick_match(
                 }
             }
             info!("New Match started");
+        }
+    }
+}
+
+/// Carries out [`ChangeMap`]: names the new Map in `MatchState` (every process follows it) and
+/// sends everyone on a Team to respawn, which waits until the new Map is ready.
+pub(super) fn change_map(
+    mut requests: MessageReader<ChangeMap>,
+    mut state: Single<&mut MatchState>,
+    registry: Res<MapRegistry>,
+    players: Query<(Entity, &PlayerTeam)>,
+    mut commands: Commands,
+) {
+    let Some(ChangeMap(map)) = requests.read().last() else {
+        return;
+    };
+    let Some(info) = registry.get(map) else {
+        error!(
+            "Can't change to unknown Map \"{map}\"; known: {}",
+            registry.known_ids()
+        );
+        return;
+    };
+    if !info.supports(state.mode) {
+        error!(
+            "Can't change to Map \"{map}\": it has no {:?} support",
+            state.mode
+        );
+        return;
+    }
+    if state.map == *map {
+        return;
+    }
+    info!("Changing Map from \"{}\" to \"{map}\"", state.map);
+    state.map = map.clone();
+    for (entity, team) in &players {
+        if team.0.is_some() {
+            commands
+                .entity(entity)
+                .insert(PendingRespawn::at(Duration::ZERO));
         }
     }
 }

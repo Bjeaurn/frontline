@@ -9,6 +9,7 @@ use bevy::prelude::*;
 use super::{ENEMY_COLOR, FRIENDLY_COLOR, MatchQuery, own_side};
 use crate::data::GameData;
 use crate::flow::AppState;
+use crate::maps::MapRegistry;
 use crate::net::protocol::PlayerOwner;
 use crate::player::LocalLife;
 use crate::player::input::Bindings;
@@ -241,6 +242,7 @@ pub(super) fn update_scoreboard(
     bindings: Res<Bindings>,
     life: Res<LocalLife>,
     data: Res<GameData>,
+    maps: Res<MapRegistry>,
     fonts: Res<UiFonts>,
     assets: Res<AssetServer>,
     state: MatchQuery,
@@ -289,7 +291,7 @@ pub(super) fn update_scoreboard(
         MatchResult {
             banner,
             color,
-            winner: winner.map(|team| data.faction(state.mode, team).name.clone()),
+            winner: winner.map(|team| data.faction(&maps, &state.map, team).name.clone()),
             next_in,
         }
     });
@@ -319,7 +321,7 @@ pub(super) fn update_scoreboard(
                     .then(a.deaths.cmp(&b.deaths))
                     .then_with(|| a.name.cmp(&b.name))
             });
-            let faction = data.faction(state.mode, team);
+            let faction = data.faction(&maps, &state.map, team);
             Section {
                 faction: faction.name.clone(),
                 icon: faction.icon.clone(),

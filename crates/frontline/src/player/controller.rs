@@ -1,5 +1,5 @@
 //! First-person kinematic controller for the `LocalPlayer`: mouse look, stances, sprint,
-//! move-and-slide against the static arena, landing slowdown, mantling, and server-ordered
+//! move-and-slide against the loaded Map, landing slowdown, mantling, and server-ordered
 //! respawns. Movement tuning comes from `GameData::movement` (`data/movement.ron`).
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
@@ -17,9 +17,9 @@ use super::input::{Binding, Bindings};
 use super::life::LocalLife;
 use crate::data::{GameData, MovementTuning};
 use crate::flow::{AppState, Settings};
+use crate::maps::MapSpawns;
 use crate::net::protocol::Respawn;
 use crate::shared::{FromServer, GameLayer, LocalPlayer, PlayerName, PlayerPose, Stance};
-use crate::world::{SpawnPoints, yaw_towards_centre};
 
 // Collision geometry (metres).
 /// Surfaces whose normal has at least this much `y` count as ground (about 50 degrees).
@@ -338,20 +338,25 @@ fn find_ledge(
     Some(ledge + Vec3::Y * HEADROOM_LIFT)
 }
 
-fn random_spawn(spawns: &SpawnPoints) -> Vec3 {
-    let index = RandomState::new().hash_one(0_u8) as usize % spawns.0.len().max(1);
-    spawns.0.get(index).copied().unwrap_or_default()
+/// Feet position and yaw of a random spawn point of the loaded Map (any Team's); the origin
+/// before a Map is ready.
+fn random_spawn(spawns: Option<&MapSpawns>) -> (Vec3, f32) {
+    let spawns = spawns.map_or(&[][..], |spawns| &spawns.0[..]);
+    let index = RandomState::new().hash_one(0_u8) as usize % spawns.len().max(1);
+    spawns
+        .get(index)
+        .map_or((Vec3::ZERO, 0.0), |spawn| (spawn.position, spawn.yaw))
 }
 
 pub(super) fn spawn_local_player(
     mut commands: Commands,
     data: Res<GameData>,
-    spawns: Res<SpawnPoints>,
+    spawns: Option<Res<MapSpawns>>,
     settings: Res<Settings>,
 ) {
     let name = settings.name.clone();
-    let feet = random_spawn(&spawns) + Vec3::Y * HEADROOM_LIFT;
-    let yaw = yaw_towards_centre(feet);
+    let (feet, yaw) = random_spawn(spawns.as_deref());
+    let feet = feet + Vec3::Y * HEADROOM_LIFT;
     let stance = Stance::Standing;
     commands.spawn((
         Name::new("LocalPlayer"),
@@ -546,7 +551,7 @@ pub(super) fn move_player(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<Bindings>,
     shapes: Res<StanceShapes>,
-    spawns: Res<SpawnPoints>,
+    spawns: Option<Res<MapSpawns>>,
     move_and_slide: MoveAndSlide,
     mut player: Query<
         (
@@ -638,7 +643,7 @@ pub(super) fn move_player(
     }
 
     if pose.position.y < KILL_Y {
-        pose.position = random_spawn(&spawns) + Vec3::Y * HEADROOM_LIFT;
+        pose.position = random_spawn(spawns.as_deref()).0 + Vec3::Y * HEADROOM_LIFT;
         *motor = Motor::new(tuning);
     }
     *transform = Transform::from_translation(pose.position)
@@ -646,7 +651,7 @@ pub(super) fn move_player(
 }
 
 /// One frame of walking, jumping or falling towards horizontal velocity `wish`, sliding along
-/// the static arena.
+/// the Map.
 fn slide(
     pose: &mut PlayerPose,
     motor: &mut Motor,

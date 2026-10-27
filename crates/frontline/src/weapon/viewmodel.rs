@@ -492,8 +492,8 @@ fn attach_viewmodel(
                 },
                 ..default()
             },
+            // The Map's grade comes from `atmosphere`, which follows look changes.
             atmosphere::TONEMAPPING,
-            atmosphere::color_grading(),
             Projection::Perspective(PerspectiveProjection {
                 near: 0.01,
                 far: 10.0,

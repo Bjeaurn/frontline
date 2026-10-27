@@ -1,12 +1,11 @@
 //! The material library: one tileable PBR texture set (CC0, see `assets/textures/CREDITS.md`)
-//! per [`SurfaceKind`], plus [`textured_box`] meshes whose UVs follow world size so textures
-//! never stretch. Client/Host only; a Dedicated Server has no textures or materials.
+//! per [`SurfaceKind`], each with one shared, tinted material that Map faces use (`maps`).
+//! Client/Host only; a Dedicated Server has no textures or materials.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{
     ImageAddressMode, ImageFilterMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor,
 };
-use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 
@@ -53,12 +52,9 @@ impl SurfaceKind {
         }
     }
 
-    /// The kind a map texture name refers to, e.g. `"concrete"`, `"walls/brick_red"` or
-    /// `"crate_plywood"`: the last path segment, matched case-insensitively by keyword.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "for the TrenchBroom map loader")
-    )]
+    /// The kind a map texture name refers to, e.g. `"concrete/color"`, `"walls/brick_red"` or
+    /// `"crate_plywood"`: the last path segment naming a kind wins, matched case-insensitively
+    /// by keyword.
     pub fn from_texture_name(name: &str) -> Option<SurfaceKind> {
         const KEYWORDS: &[(&str, SurfaceKind)] = &[
             // Before "metal", which "corrugated metal" names also contain.
@@ -79,28 +75,26 @@ impl SurfaceKind {
             ("sand", SurfaceKind::Ground),
             ("brick", SurfaceKind::Brick),
         ];
-        let name = name.rsplit(['/', '\\']).next()?.to_ascii_lowercase();
-        KEYWORDS
-            .iter()
-            .find(|(keyword, _)| name.contains(keyword))
-            .map(|&(_, kind)| kind)
+        name.rsplit(['/', '\\']).find_map(|segment| {
+            let segment = segment.to_ascii_lowercase();
+            KEYWORDS
+                .iter()
+                .find(|(keyword, _)| segment.contains(keyword))
+                .map(|&(_, kind)| kind)
+        })
     }
 
-    /// Metres one texture repeat covers, (horizontal, vertical) on walls.
-    fn texture_metres(self) -> Vec2 {
+    /// Multiplied into the colour texture: the bright palette Maps share.
+    fn tint(self) -> Color {
         match self {
-            SurfaceKind::Concrete => Vec2::new(2.2, 1.1),
-            SurfaceKind::Plaster => Vec2::new(2.0, 1.0),
-            SurfaceKind::Metal | SurfaceKind::Corrugated => Vec2::splat(2.0),
-            SurfaceKind::Wood => Vec2::splat(1.0),
-            SurfaceKind::Ground => Vec2::splat(4.0),
-            SurfaceKind::Brick => Vec2::new(2.4, 1.2),
+            SurfaceKind::Concrete => Color::srgb(0.90, 0.90, 0.93),
+            SurfaceKind::Plaster => Color::srgb(0.97, 0.92, 0.82),
+            SurfaceKind::Metal => Color::srgb(0.62, 0.72, 0.56),
+            SurfaceKind::Corrugated => Color::srgb(0.88, 0.50, 0.32),
+            SurfaceKind::Wood => Color::srgb(0.95, 0.88, 0.78),
+            SurfaceKind::Ground => Color::srgb(0.86, 0.88, 0.94),
+            SurfaceKind::Brick => Color::srgb(0.92, 0.86, 0.84),
         }
-    }
-
-    /// Texture repeats per metre, for [`textured_box`].
-    pub fn uv_scale(self) -> Vec2 {
-        self.texture_metres().recip()
     }
 
     fn texture_path(self, map: &str) -> String {
@@ -116,7 +110,7 @@ pub struct SurfaceTextures {
     pub roughness: Handle<Image>,
 }
 
-/// Textures and an untinted material per [`SurfaceKind`], loaded once at startup.
+/// Textures and a tinted material per [`SurfaceKind`], loaded once at startup.
 #[derive(Resource, Clone, Debug)]
 pub struct SurfaceMaterials {
     textures: [SurfaceTextures; 7],
@@ -128,14 +122,13 @@ impl SurfaceMaterials {
         &self.textures[kind as usize]
     }
 
-    /// The shared, untinted material of `kind`.
-    #[expect(dead_code, reason = "for the TrenchBroom map loader")]
+    /// The shared material of `kind`, tinted with its palette colour.
     pub fn material(&self, kind: SurfaceKind) -> Handle<StandardMaterial> {
         self.materials[kind as usize].clone()
     }
 
     /// A new material of `kind` whose textures are multiplied by `tint`.
-    pub fn tinted(&self, kind: SurfaceKind, tint: Color) -> StandardMaterial {
+    fn tinted(&self, kind: SurfaceKind, tint: Color) -> StandardMaterial {
         let textures = self.textures(kind);
         StandardMaterial {
             base_color: tint,
@@ -175,7 +168,7 @@ impl FromWorld for SurfaceMaterials {
         };
         let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
         library.materials =
-            SurfaceKind::ALL.map(|kind| materials.add(library.tinted(kind, Color::WHITE)));
+            SurfaceKind::ALL.map(|kind| materials.add(library.tinted(kind, kind.tint())));
         library
     }
 }
@@ -285,54 +278,9 @@ fn generate_mips(image: &mut Image) {
     image.texture_descriptor.mip_level_count = levels;
 }
 
-/// A box of full extents `size`, centred on the origin, whose UVs repeat `uv_scale` times per
-/// metre (see [`SurfaceKind::uv_scale`]). Side faces keep texture "up" along +Y; with
-/// tangents for normal mapping.
-pub fn textured_box(size: Vec3, uv_scale: Vec2) -> Mesh {
-    // (normal, u direction, v direction); v runs down the texture, so "up" is -v.
-    const FACES: [(Vec3, Vec3, Vec3); 6] = [
-        (Vec3::X, Vec3::NEG_Z, Vec3::NEG_Y),
-        (Vec3::NEG_X, Vec3::Z, Vec3::NEG_Y),
-        (Vec3::Z, Vec3::X, Vec3::NEG_Y),
-        (Vec3::NEG_Z, Vec3::NEG_X, Vec3::NEG_Y),
-        (Vec3::Y, Vec3::X, Vec3::Z),
-        (Vec3::NEG_Y, Vec3::X, Vec3::NEG_Z),
-    ];
-    let half = size / 2.0;
-    let extent = |axis: Vec3| axis.abs().dot(size);
-    let mut positions = Vec::with_capacity(24);
-    let mut normals = Vec::with_capacity(24);
-    let mut uvs = Vec::with_capacity(24);
-    let mut tangents = Vec::with_capacity(24);
-    let mut indices = Vec::with_capacity(36);
-    for (normal, u, v) in FACES {
-        let base = positions.len() as u32;
-        let uv_size = Vec2::new(extent(u), extent(v)) * uv_scale;
-        for (su, sv) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
-            let position = (normal + u * su + v * sv) * half;
-            positions.push(position.to_array());
-            normals.push(normal.to_array());
-            uvs.push([(su + 1.0) / 2.0 * uv_size.x, (sv + 1.0) / 2.0 * uv_size.y]);
-            // Bitangent = normal x tangent = texture "up", the OpenGL normal-map convention.
-            tangents.push(u.extend(1.0).to_array());
-        }
-        indices.extend([0, 2, 1, 0, 3, 2].map(|i| base + i));
-    }
-    Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_TANGENT, tangents)
-    .with_inserted_indices(Indices::U32(indices))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::mesh::VertexAttributeValues;
 
     #[test]
     fn texture_names_map_to_kinds() {
@@ -345,47 +293,15 @@ mod tests {
             ("ground/dirt01", Some(SurfaceKind::Ground)),
             ("plaster_white", Some(SurfaceKind::Plaster)),
             ("__TB_empty", None),
+            // TrenchBroom names: folder per kind, `color` the map to paint with.
+            ("concrete/color", Some(SurfaceKind::Concrete)),
+            ("textures/brick/color", Some(SurfaceKind::Brick)),
         ];
         for (name, kind) in cases {
             assert_eq!(SurfaceKind::from_texture_name(name), kind, "{name}");
         }
         for kind in SurfaceKind::ALL {
             assert_eq!(SurfaceKind::from_texture_name(kind.name()), Some(kind));
-        }
-    }
-
-    #[test]
-    fn box_uvs_follow_world_size() {
-        let mesh = textured_box(Vec3::new(4.0, 1.0, 0.5), Vec2::splat(0.5));
-        let Some(VertexAttributeValues::Float32x2(uvs)) = mesh.attribute(Mesh::ATTRIBUTE_UV_0)
-        else {
-            panic!("box has no UVs");
-        };
-        assert_eq!(uvs.len(), 24);
-        // +Z face: 4 m wide and 1 m tall at 0.5 repeats per metre.
-        let front = &uvs[8..12];
-        let max = front
-            .iter()
-            .fold(Vec2::ZERO, |max, &uv| max.max(Vec2::from(uv)));
-        assert_eq!(max, Vec2::new(2.0, 0.5));
-    }
-
-    #[test]
-    fn box_faces_wind_outward() {
-        let mesh = textured_box(Vec3::new(2.0, 3.0, 4.0), Vec2::ONE);
-        let Some(VertexAttributeValues::Float32x3(positions)) =
-            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
-        else {
-            panic!("box has no positions");
-        };
-        let Some(Indices::U32(indices)) = mesh.indices() else {
-            panic!("box has no indices");
-        };
-        for triangle in indices.chunks(3) {
-            let [a, b, c] = [0, 1, 2].map(|i| Vec3::from(positions[triangle[i] as usize]));
-            let centroid = (a + b + c) / 3.0;
-            // Counter-clockwise from outside: the face normal points away from the centre.
-            assert!((b - a).cross(c - a).dot(centroid) > 0.0);
         }
     }
 

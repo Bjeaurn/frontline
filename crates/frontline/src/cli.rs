@@ -5,6 +5,10 @@ use clap::Parser;
 
 use crate::data::DEFAULT_MATCH_RULES;
 use crate::flow::FlowCommand;
+use crate::maps::{DEFAULT_MAP, MapId};
+
+/// Environment variable that turns on `--write-trenchbroom-config`.
+const WRITE_TRENCHBROOM_CONFIG_ENV: &str = "FRONTLINE_WRITE_TRENCHBROOM_CONFIG";
 
 /// Default UDP port a server listens on.
 pub const DEFAULT_PORT: u16 = 5000;
@@ -39,6 +43,17 @@ pub struct Cli {
     /// e.g. `hardcore`.
     #[arg(long, default_value = DEFAULT_MATCH_RULES, conflicts_with = "connect")]
     rules: String,
+
+    /// Map a server plays (when hosting or dedicated), by id from `data/maps.ron` or the private
+    /// content folder; also the main menu's backdrop.
+    #[arg(long, default_value = DEFAULT_MAP, conflicts_with = "connect")]
+    map: String,
+
+    /// Write TrenchBroom's game config for Frontline (FGD, texture folder) into TrenchBroom's
+    /// user folder on startup. Also on when the `FRONTLINE_WRITE_TRENCHBROOM_CONFIG` environment
+    /// variable is set.
+    #[arg(long)]
+    write_trenchbroom_config: bool,
 }
 
 /// How this process participates in a game. Inserted as a resource at startup.
@@ -80,5 +95,15 @@ impl Cli {
     /// The Match Rules preset this process's server runs.
     pub fn rules(&self) -> &str {
         &self.rules
+    }
+
+    /// The Map this process's server starts on.
+    pub fn map(&self) -> MapId {
+        MapId::new(self.map.clone())
+    }
+
+    /// Whether to write TrenchBroom's game config on startup.
+    pub fn write_trenchbroom_config(&self) -> bool {
+        self.write_trenchbroom_config || std::env::var_os(WRITE_TRENCHBROOM_CONFIG_ENV).is_some()
     }
 }

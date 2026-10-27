@@ -1,4 +1,4 @@
-//! The title screen over a slow fly-around of the arena.
+//! The title screen over a slow fly-around of the idle Map (`--map`, the arena by default).
 
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
@@ -12,7 +12,7 @@ const ORBIT_HEIGHT: f32 = 16.0;
 const ORBIT_SPEED: f32 = 0.04;
 const ORBIT_TARGET: Vec3 = Vec3::new(0.0, 2.0, 0.0);
 
-/// The main menu's camera, circling the arena.
+/// The main menu's camera, circling the Map.
 #[derive(Component)]
 pub(super) struct MenuCamera;
 

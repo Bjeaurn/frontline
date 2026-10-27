@@ -1,0 +1,66 @@
+// Look presets: the per-Map mood layered on the fixed camera setup (tone curve, bloom, SSAO) in
+// crates/frontline/src/atmosphere.rs. A Map picks one by name (data/maps.ron `look`, or the
+// map's worldspawn `look`). Surfaces keep their saturated palette; the presets pull the overall
+// image darker and grittier.
+//
+// - exposure: stops (EV) added to the camera; negative is darker.
+// - temperature / tint: white balance shifts (warm + / cool -, magenta + / green -), about -1..1.
+// - saturation: 1 is unchanged. contrast: midtone contrast, 1 is unchanged.
+// - fog_visibility: metres at which the fog hides about 95% of a surface (lower is denser).
+// - fog_sun_color: colour of sunlight glowing through the fog towards the sun; alpha is strength.
+// - sun_illuminance: lux. sun_direction: the way the light travels (y down is negative).
+// - ambient_brightness: cd/m^2 of flat fill light. sky_color: the background.
+// Colours are sRGB 0..1.
+{
+    // Grey, overcast city: flat soft light, lifted ambient, heavy contrast, muted colour.
+    "overcast_urban": (
+        exposure: -0.3,
+        temperature: -0.03,
+        tint: 0.0,
+        saturation: 0.86,
+        contrast: 1.16,
+        fog_color: (0.50, 0.53, 0.56),
+        fog_visibility: 170.0,
+        fog_sun_color: (0.80, 0.82, 0.85, 0.15),
+        sun_color: (0.86, 0.89, 0.94),
+        sun_illuminance: 5500.0,
+        sun_direction: (-0.25, -1.0, -0.35),
+        ambient_color: (0.72, 0.76, 0.82),
+        ambient_brightness: 230.0,
+        sky_color: (0.54, 0.57, 0.61),
+    ),
+    // Sun-bleached desert: harsh high sun, sepia dust haze, deep shadows.
+    "desert_dust": (
+        exposure: -0.3,
+        temperature: 0.04,
+        tint: 0.01,
+        saturation: 0.92,
+        contrast: 1.15,
+        fog_color: (0.70, 0.62, 0.50),
+        fog_visibility: 260.0,
+        fog_sun_color: (1.0, 0.84, 0.60, 0.40),
+        sun_color: (1.0, 0.90, 0.74),
+        sun_illuminance: 18000.0,
+        sun_direction: (-0.4, -1.0, -0.6),
+        ambient_color: (0.84, 0.77, 0.66),
+        ambient_brightness: 110.0,
+        sky_color: (0.72, 0.67, 0.58),
+    ),
+    // Cold winter dawn: low orange sun raking across, blue shadows and haze.
+    "dawn_cold": (
+        exposure: -0.3,
+        temperature: -0.05,
+        tint: 0.01,
+        saturation: 0.85,
+        contrast: 1.12,
+        fog_color: (0.46, 0.51, 0.60),
+        fog_visibility: 220.0,
+        fog_sun_color: (1.0, 0.72, 0.50, 0.40),
+        sun_color: (1.0, 0.76, 0.56),
+        sun_illuminance: 9000.0,
+        sun_direction: (-0.85, -0.28, -0.45),
+        ambient_color: (0.62, 0.68, 0.86),
+        ambient_brightness: 160.0,
+        sky_color: (0.42, 0.47, 0.56),
+    ),
+}

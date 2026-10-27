@@ -17,6 +17,9 @@ lightyear = { version = "=0.31.0", default-features = false }
 # crates/frontline/src/net/checkpoints.rs. Moves with lightyear.
 bevy_replicon = { version = "=0.45.4", default-features = false, features = ["client"] }
 avian3d = "=0.8.0"
+# The release made for Bevy 0.20 / avian 0.8. `client` (PBR materials) stays on: the one binary
+# also renders; a Dedicated Server registers the few asset types it needs (src/maps/mod.rs).
+bevy_trenchbroom = { version = "=0.15.0", features = ["avian_f32"] }
 clap = { version = "4.6", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 ron = "0.12"

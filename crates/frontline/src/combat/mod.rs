@@ -16,8 +16,9 @@ mod teams;
 use bevy::prelude::*;
 
 pub use health::PoseGate;
-pub use match_flow::ServerRules;
+pub use match_flow::{ServerMap, ServerRules};
 
+use crate::maps::map_ready;
 use crate::net::server_running;
 
 pub struct CombatServerPlugin;
@@ -29,12 +30,13 @@ impl Plugin for CombatServerPlugin {
             .add_observer(match_flow::start_match)
             .add_observer(match_flow::end_match)
             // Respawn before syncing, so a respawned player's hitboxes are posed at the spawn.
+            // Respawns wait for the Map: its spawn points and colliders.
             .add_systems(
                 FixedUpdate,
                 (
                     health::regenerate,
                     match_flow::tick_match,
-                    health::respawn_players,
+                    health::respawn_players.run_if(map_ready),
                     hitbox::sync_hitboxes,
                 )
                     .chain()
@@ -45,6 +47,7 @@ impl Plugin for CombatServerPlugin {
             .add_systems(
                 Update,
                 (
+                    match_flow::change_map,
                     teams::choose_teams,
                     shots::resolve_shots,
                     health::apply_hits,

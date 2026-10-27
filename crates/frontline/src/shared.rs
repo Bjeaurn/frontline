@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::data::GameModeId;
+use crate::maps::MapId;
 
 /// Body posture; changes speed, eye height and hitbox height.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Reflect)]
@@ -113,6 +114,8 @@ pub struct PlayerTeam(pub Option<Team>);
 #[derive(Component, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MatchState {
     pub mode: GameModeId,
+    /// The Map being played; every process loads it (`maps`).
+    pub map: MapId,
     /// Name of the Match Rules preset in effect; clients look it up in their own `GameData`.
     pub rules: String,
     /// Team scores, indexed by `Team::index`.
@@ -133,8 +136,9 @@ pub enum MatchPhase {
     },
 }
 
-/// Physics layers. Arena geometry is `World`; player hitboxes are `Hitbox` and collide with
-/// nothing. Movement queries use `World` only; shots query `World` and `Hitbox`.
+/// Physics layers. Map geometry (brushes, colliding props) is `World`; player hitboxes are
+/// `Hitbox` and collide with nothing. Movement queries use `World` only; shots query `World` and
+/// `Hitbox`.
 #[derive(PhysicsLayer, Clone, Copy, Debug, Default)]
 pub enum GameLayer {
     #[default]

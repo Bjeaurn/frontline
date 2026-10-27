@@ -12,6 +12,7 @@ use bevy::ui_widgets::{Activate, Button};
 use super::{MatchQuery, PendingTeam, faction_color};
 use crate::data::{Faction, GameData};
 use crate::flow::Overlay;
+use crate::maps::MapRegistry;
 use crate::net::protocol::{ChooseTeam, PlayerOwner};
 use crate::shared::{LocalPlayerReplica, PlayerName, PlayerTeam, Team, ToServer};
 use crate::ui::{self, UiFonts};
@@ -101,10 +102,11 @@ fn auto_assign(counts: [usize; 2]) -> Team {
     })
 }
 
-/// Builds the screen once the Match state (and so the Factions) is known.
+/// Builds the screen once the Match state (and so the Map's Factions) is known.
 pub(super) fn spawn_team_select(
     state: MatchQuery,
     data: Res<GameData>,
+    maps: Res<MapRegistry>,
     fonts: Res<UiFonts>,
     assets: Res<AssetServer>,
     players: Query<(&PlayerTeam, Has<LocalPlayerReplica>), With<PlayerOwner>>,
@@ -142,7 +144,7 @@ pub(super) fn spawn_team_select(
             })
             .with_children(|row| {
                 for (slot, team) in Team::ALL.into_iter().enumerate() {
-                    let faction = data.faction(state.mode, team);
+                    let faction = data.faction(&maps, &state.map, team);
                     let emblem = assets.load(faction.icon.clone());
                     spawn_card(row, &fonts, faction, emblem, slot + 1, team);
                 }

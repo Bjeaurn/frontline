@@ -1,6 +1,7 @@
 // Factions: the identity a Team plays as. Add one here (with an emblem PNG) and reference its id
-// from a Game Mode in game_modes.ron. Built-in emblems live under embedded://frontline/icons/;
-// other icon paths are loaded from the assets folder.
+// from a Map in maps.ron (Factions belong to a Map's theater). Built-in emblems live under
+// embedded://frontline/icons/; other icon paths are loaded from the assets folder. Maps that name
+// no Factions (private maps without a maps.ron entry) use the first two, in this order.
 [
     (
         id: "ranger",
