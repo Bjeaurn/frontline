@@ -11,6 +11,7 @@ The definition for a MVP would be Team deathmatch, 3-5 weapons with a different 
 ## Decisions so far
 
 - **Goal:** prove it's fun at an upcoming LAN party, less than 1 month away. Solo dev. A public release is undecided, so don't build for it yet.
+- **Working mode (2026-10-27):** get working demos of every feature first, as fast and token-cheap as possible. Verification is a quick smoke pass; deeper testing, cleanup and polish come later, once things work.
 - **Stack:** Rust, Bevy + lightyear (netcode) + avian3d (physics) + bevy_trenchbroom (TrenchBroom brush maps). Pin all versions on day 1 and don't upgrade before the party. Targets: Linux/macOS/Windows.
 - **Topology:** one binary. "Host Game" runs a listen server; a `--dedicated` flag runs it headless. LAN UDP-broadcast **Server Browser** plus join-by-IP. Online lobby/relay is deferred.
 - **Authority:** clients own their own movement, and the server decides hits (it raycasts each shot and applies damage). No prediction or lag compensation until we play over the internet. Anti-cheat is the honor system.
@@ -40,6 +41,8 @@ The definition for a MVP would be Team deathmatch, 3-5 weapons with a different 
 - **Profile:** client-local file (name, XP, Level) sent on join. The server awards XP and the client saves it. Survives a change of Host.
 - **Health/TTK default:** CoD core. 100 HP, regen after ~5s, AR kills in 3–4 body shots up close, ~1.4× headshots, damage falls off with range, 3s respawn, spawns avoid enemy line of sight. All of these are **Match Rules** values, not hardcoded. Each Game Mode has default Match Rules. **Hardcore** and health-pack variants are presets added later.
 - **Movement:** walk, sprint (limited; Marathon extends it), crouch, prone, jump, **Mantle** (ledges up to ~1.6 m, ~0.4 s). Landing briefly slows you instead of sliding. ADS slows you. No slide or lean. Mantle reverses the earlier "no mantle" call (2026-10-26) to make 1–1.5 m cover climbable. All numbers in `data/movement.ron`.
+- **Future: dive to prone.** Going prone while sprinting dives forward into prone: a short lunge that keeps some momentum and drops you behind cover, then a brief recovery before you can move or stand. It must slow you overall, so run/prone/run spamming isn't faster than running. Tunables go in movement.ron.
+- **Host setup screen:** HOST GAME opens a setup screen before starting. It picks the **Rotation** (Map + Game Mode + Match Rules preset per entry; a single entry is a plain one-map game), server name, max players, and the per-mode score/time limits. Settings are remembered between sessions.
 - **Input:** keyboard + mouse only, with rebindable keys and a sensitivity setting. No controller. Set up a 3-OS CI build matrix (Linux/macOS/Windows) in week 1.
 - **Teams:** free pick, including on **Join In Progress** (the smaller team is pre-selected). Stacking is allowed. Friendly fire is a **Match Rules** option, off by default.
 - **Loadouts:** the **Profile** holds 3 custom and 3 default (AR/SMG/Sniper preset) **Loadouts**. They're editable in the menu or mid-Match. A change applies on the next spawn, or instantly within ~5s of spawning. The server trusts the Loadout and checks it against Level unlocks only loosely.

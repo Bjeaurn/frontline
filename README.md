@@ -76,18 +76,30 @@ Brushes in worldspawn or any brush entity (`func_group`, `func_generic`) become 
 | `dom_flag` | `label` (A, B, C) | Domination Flag |
 | `hq_site` | | Headquarters site |
 | `bomb_site` | `label` (A, B) | Search & Destroy bomb site |
-| `prop` | `model` (glTF asset path), `collider` (none, box, convex) | A model; `box` collides as one box around it, `convex` as a hull per mesh |
+| `prop` | `model` (glTF asset path), `collider` (none, box, convex) | A model, e.g. `models/downtown/Prop_Bollard.glb`; `box` collides as one box around it, `convex` as a hull per mesh. Homage Maps point at their own copy, `private://models/...` |
 | `light_point`, `light_spot`, `light_directional` | Bevy light settings | Extra lights (the sun, sky and fog come from the look). A `light_point` with `targetname` `practical` is a lamp: its intensity is scaled by the look's `practical_lights` (night looks switch it on, day looks leave it dark) |
 
 ### Generated maps
 
-`tools/mapgen/` is a small Python 3 library (no dependencies) that writes Valve 220 `.map` text from layouts in game space (metres, y up): boxes, turned boxes, ramps (`wedge`) and entities. `tools/mapgen/arena.py` describes the arena; regenerate it with:
+`tools/mapgen/` is a small Python 3 library (no dependencies) that writes Valve 220 `.map` text from layouts in game space (metres, y up): boxes, turned boxes, ramps (`wedge`) and entities. `kit.py` builds on it with a `Level` (walls with door and window gaps, slabs with stairwell holes, ramps, vehicle and barrier blockouts, `prop` entities, optional 180-degree mirroring) and a walkability checker (`--check`) that flood-fills the floor on foot to find unreachable objectives, trapped spots and closed-off pockets without launching the game. `arena.py` describes the arena and `crossroads.py` the Remix Map Crossroads (an original urban layout: three lanes, a two-storey building in the middle, about 12 s to cross); regenerate them with:
 
 ```sh
-python3 tools/mapgen/arena.py   # writes crates/frontline/assets/maps/arena.map
+python3 tools/mapgen/arena.py                # writes crates/frontline/assets/maps/arena.map
+python3 tools/mapgen/crossroads.py --check   # writes crossroads.map, then checks it can be walked
 ```
 
 Generated maps stay editable in TrenchBroom, but regenerating overwrites hand edits, so pick one source per map.
+
+### Props
+
+Props are glTF models from the CC0 Downtown City MegaKit (Quaternius), processed into one `.glb` each (textures at most 1024 px, shared ones in `models/downtown/textures/`) under `crates/frontline/assets/models/downtown/`; credits in `assets/models/CREDITS.md`. The raw pack stays in the git-ignored `content/assets/`. `tools/assets/import_props.py` picks the pieces out of the zip, and with `--from-maps` imports exactly the ones the maps use:
+
+```sh
+python3 tools/assets/import_props.py --zip "content/assets/Downtown City MegaKit[Standard].zip" \
+    --pack downtown --from-maps crates/frontline/assets/maps/*.map --clean
+```
+
+The kit has no vehicles, barriers or lamp posts, so the generators build those as brushes. Homage Maps keep their own copy in `content/private/models/` (`--prefix private://models --out content/private/models`), so the public repo carries nothing selected for them.
 
 ## Layout
 
@@ -106,7 +118,8 @@ Generated maps stay editable in TrenchBroom, but regenerating overwrites hand ed
 - `crates/frontline/src/materials.rs`: material library (one tinted material per `SurfaceKind` texture set)
 - `crates/frontline/src/atmosphere.rs`: camera look (tonemapping, bloom, SSAO) and per-Map look presets (`data/looks.ron`)
 - `crates/frontline/src/assets.rs`: files embedded in the binary (faction emblems, surface textures; CC0 credits in `assets/textures/CREDITS.md`)
-- `tools/mapgen/`: Python generator for `.map` files (the arena)
+- `tools/mapgen/`: Python generator for `.map` files (the arena, Crossroads) and its building kit
+- `tools/assets/`: imports prop models from raw asset packs (`import_props.py`)
 - `crates/frontline/src/shared.rs`: pose and stance types shared by netcode and gameplay
 
 Private content such as Homage Maps lives in the separate private repo `Bjeaurn/frontline-private`, cloned into the git-ignored `content/private/` (see `docs/adr/0003`):

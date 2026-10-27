@@ -14,4 +14,11 @@
         modes: ["tdm", "dom", "hq", "sd"],
         factions: ("ranger", "harmattan"),
     ),
+    "crossroads": (
+        name: "Crossroads",
+        file: "maps/crossroads.map",
+        look: Some("overcast_urban"),
+        modes: ["tdm"],
+        factions: ("northern_sabre", "crimson_vanguard"),
+    ),
 }

@@ -1,0 +1,647 @@
+"""Building blocks for generated Maps, on top of mapgen.py: a `Level` that places solid blocks,
+walls with doorways and windows, ramps, vehicles and other cover, glTF props and the game's
+entities, optionally point-mirrored for symmetric layouts, plus a walkability checker that finds
+unreachable objectives, trapped spots and closed-off pockets without launching the game.
+
+Coordinates are game space (metres, y up, -z is "north"); the ground's top face is y = 0.
+Python 3, standard library only.
+"""
+
+from __future__ import annotations
+
+import math
+from contextlib import contextmanager
+from pathlib import Path
+
+from mapgen import UNITS_PER_METRE, Brush, Entity, Map, box, oriented_box, point_entity, wedge
+
+REPO = Path(__file__).resolve().parents[2]
+MAPS_DIR = REPO / "crates" / "frontline" / "assets" / "maps"
+
+# Where a Map's `prop` models live: the Downtown City MegaKit under crates/frontline/assets/ for
+# the built-in Maps, a `private://` copy in the private content folder for Homage Maps.
+DOWNTOWN = "models/downtown"
+PRIVATE_DOWNTOWN = "private://models/downtown"
+
+# Interior bounds of the MegaKit's complete buildings: (x0, x1, z0, z1, height). They face +z at
+# yaw 0, the front (with its entrance stoop) on z = 0.
+BUILDINGS = {
+    "Building_Small_1": (-7.0, 5.0, -12.0, 0.0, 16.0),
+    "Building_Medium_2_001": (-7.0, 7.0, -12.0, 0.0, 24.0),
+    "Building_Large_2": (-9.0, 11.0, -16.0, 0.0, 27.0),
+}
+
+Vec3 = tuple[float, float, float]
+
+
+def door(a: float, b: float, height: float = 2.4) -> tuple[float, float, float, float]:
+    """A doorway gap from `a` to `b` along a wall, from the floor up `height` metres."""
+    return (a, b, 0.0, height)
+
+
+def window(a: float, b: float, sill: float = 1.0, head: float = 2.4) -> tuple[float, float, float, float]:
+    """A window gap from `a` to `b` along a wall, `sill` to `head` metres above the floor (a
+    1 m sill can be vaulted or mantled)."""
+    return (a, b, sill, head)
+
+
+def _planes(brush: Brush) -> list[tuple[Vec3, float]]:
+    """A brush's half-spaces in game space: (outward normal, offset) with n . p <= offset."""
+    planes = []
+    for face in brush.faces:
+        nx, ny, nz = face.normal
+        normal = (-ny, nz, -nx)
+        px, py, pz = face.point
+        point = (-py / UNITS_PER_METRE, pz / UNITS_PER_METRE, -px / UNITS_PER_METRE)
+        planes.append((normal, sum(n * p for n, p in zip(normal, point))))
+    return planes
+
+
+class Level:
+    """A Map under construction."""
+
+    def __init__(self, name: str, look: str, models: str = DOWNTOWN):
+        self.map = Map(worldspawn={"name": name, "look": look})
+        self.models_dir = models
+        self.models: set[str] = set()
+        # (min corner, max corner, planes) per solid, for the walkability checker.
+        self.solids: list[tuple[Vec3, Vec3, list[tuple[Vec3, float]]]] = []
+        self._mirror = False
+
+    # ---- mirroring -------------------------------------------------------------------------
+
+    @contextmanager
+    def mirrored(self):
+        """Everything built inside is also built turned 180 degrees about the origin."""
+        self._mirror = True
+        try:
+            yield
+        finally:
+            self._mirror = False
+
+    def _signs(self) -> tuple[float, ...]:
+        return (1.0, -1.0) if self._mirror else (1.0,)
+
+    # ---- solids ----------------------------------------------------------------------------
+
+    def _add(self, brush: Brush, lo: Vec3, hi: Vec3) -> None:
+        self.map.brushes.append(brush)
+        self.solids.append((lo, hi, _planes(brush)))
+
+    def block(self, surface: str, x0: float, x1: float, y0: float, y1: float, z0: float, z1: float) -> None:
+        """An axis-aligned block between two corners."""
+        assert x1 > x0 and y1 > y0 and z1 > z0, (surface, x0, x1, y0, y1, z0, z1)
+        for s in self._signs():
+            xa, xb = sorted((s * x0, s * x1))
+            za, zb = sorted((s * z0, s * z1))
+            brush = box(((xa + xb) / 2, (y0 + y1) / 2, (za + zb) / 2), (xb - xa, y1 - y0, zb - za), surface)
+            self._add(brush, (xa, y0, za), (xb, y1, zb))
+
+    def turned(self, surface: str, cx: float, cy: float, cz: float, sx: float, sy: float, sz: float, yaw: float) -> None:
+        """A block of extents (sx, sy, sz) centred on (cx, cy, cz), turned `yaw` radians about y
+        (as `Quat::from_rotation_y`): its x axis ends up at (cos, 0, -sin)."""
+        for s in self._signs():
+            a = yaw + (math.pi if s < 0 else 0.0)
+            c, n = math.cos(a), math.sin(a)
+            axes = ((c, 0.0, -n), (0.0, 1.0, 0.0), (n, 0.0, c))
+            centre = (s * cx, cy, s * cz)
+            brush = oriented_box(centre, (sx, sy, sz), surface, axes)
+            reach = abs(c) * sx / 2 + abs(n) * sz / 2, abs(n) * sx / 2 + abs(c) * sz / 2
+            lo = (centre[0] - reach[0], cy - sy / 2, centre[2] - reach[1])
+            hi = (centre[0] + reach[0], cy + sy / 2, centre[2] + reach[1])
+            self._add(brush, lo, hi)
+
+    def floor(self, surface: str, x0: float, x1: float, z0: float, z1: float, y: float = 0.0, depth: float = 1.0) -> None:
+        """A slab whose top face is at height `y`."""
+        self.block(surface, x0, x1, y - depth, y, z0, z1)
+
+    def slab(self, surface: str, x0: float, x1: float, z0: float, z1: float, top: float, thick: float = 0.3, holes=()) -> None:
+        """A floor slab whose top face is at `top`, with rectangular `holes` ((x0, x1, z0, z1)
+        each, inside the slab) cut out for stairwells."""
+        xs = sorted({x0, x1, *(v for h in holes for v in h[:2])})
+        for xa, xb in zip(xs, xs[1:]):
+            cursor = z0
+            for hz0, hz1 in sorted((h[2], h[3]) for h in holes if h[0] < xb and h[1] > xa):
+                if hz0 > cursor:
+                    self.block(surface, xa, xb, top - thick, top, cursor, hz0)
+                cursor = max(cursor, hz1)
+            if cursor < z1:
+                self.block(surface, xa, xb, top - thick, top, cursor, z1)
+
+    def wall(self, surface: str, axis: str, c: float, a0: float, a1: float, y0: float, y1: float, t: float = 0.4, gaps=()) -> None:
+        """A wall from y0 to y1 in the plane x = c (axis "x", running along z from a0 to a1) or
+        z = c (axis "z", running along x). `gaps` are `door()`/`window()` tuples along the
+        wall, heights relative to y0; they must not overlap."""
+        segments = []
+        cursor = a0
+        for g0, g1, h0, h1 in sorted(gaps):
+            assert a0 <= g0 < g1 <= a1 and g0 >= cursor, ("bad gap", axis, c, g0, g1)
+            if g0 > cursor:
+                segments.append((cursor, g0, y0, y1))
+            if y0 + h0 > y0:
+                segments.append((g0, g1, y0, y0 + h0))
+            if y0 + h1 < y1:
+                segments.append((g0, g1, y0 + h1, y1))
+            cursor = g1
+        if cursor < a1:
+            segments.append((cursor, a1, y0, y1))
+        for a, b, ya, yb in segments:
+            if axis == "x":
+                self.block(surface, c - t / 2, c + t / 2, ya, yb, a, b)
+            else:
+                self.block(surface, a, b, ya, yb, c - t / 2, c + t / 2)
+
+    def room(self, surface: str, x0: float, x1: float, z0: float, z1: float, y0: float, y1: float, t: float = 0.4, north=(), south=(), west=(), east=()) -> None:
+        """Four walls round the outer rectangle (x0..x1, z0..z1), each with its gaps, the corners
+        belonging to the north and south walls."""
+        self.wall(surface, "z", z0 + t / 2, x0, x1, y0, y1, t, north)
+        self.wall(surface, "z", z1 - t / 2, x0, x1, y0, y1, t, south)
+        self.wall(surface, "x", x0 + t / 2, z0 + t, z1 - t, y0, y1, t, west)
+        self.wall(surface, "x", x1 - t / 2, z0 + t, z1 - t, y0, y1, t, east)
+
+    def ramp(self, surface: str, x0: float, x1: float, z0: float, z1: float, y0: float, y1: float, rise: str) -> None:
+        """A solid ramp filling the box (x0..x1, y0..y1, z0..z1), climbing from y0 to y1 towards
+        `rise` ("+x", "-x", "+z" or "-z")."""
+        flip = {"+x": "-x", "-x": "+x", "+z": "-z", "-z": "+z"}
+        for s in self._signs():
+            direction = rise if s > 0 else flip[rise]
+            xa, xb = sorted((s * x0, s * x1))
+            za, zb = sorted((s * z0, s * z1))
+            self._add(wedge((xa, y0, za), (xb, y1, zb), direction, surface), (xa, y0, za), (xb, y1, zb))
+
+    def slab_ramp(self, surface: str, start: Vec3, end: Vec3, width: float, thickness: float = 0.25) -> None:
+        """A thin plank from `start` to `end` (centre line of its top face), `width` wide: a
+        raised ramp or bridge with open space below."""
+        for s in self._signs():
+            a = (s * start[0], start[1], s * start[2])
+            b = (s * end[0], end[1], s * end[2])
+            run = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+            length = math.sqrt(sum(v * v for v in run))
+            forward = tuple(v / length for v in run)
+            flat = math.hypot(forward[0], forward[2])
+            side = (-forward[2] / flat, 0.0, forward[0] / flat)
+            up = (
+                forward[1] * side[2] - forward[2] * side[1],
+                forward[2] * side[0] - forward[0] * side[2],
+                forward[0] * side[1] - forward[1] * side[0],
+            )
+            if up[1] < 0:
+                up = (-up[0], -up[1], -up[2])
+            centre = tuple((a[i] + b[i]) / 2 - up[i] * thickness / 2 for i in range(3))
+            brush = oriented_box(centre, (length, thickness, width), surface, (forward, up, side))
+            corners = [
+                tuple(centre[i] + sx * forward[i] * length / 2 + sy * up[i] * thickness / 2 + sz * side[i] * width / 2 for i in range(3))
+                for sx in (-1, 1)
+                for sy in (-1, 1)
+                for sz in (-1, 1)
+            ]
+            lo = tuple(min(c[i] for c in corners) for i in range(3))
+            hi = tuple(max(c[i] for c in corners) for i in range(3))
+            self._add(brush, lo, hi)
+
+    # ---- props -----------------------------------------------------------------------------
+
+    def prop(self, name: str, x: float, z: float, facing: float = 0.0, y: float = 0.0, collider: str = "none") -> None:
+        """A MegaKit model (`<models dir>/<name>.glb`) with its origin at (x, y, z). `facing`
+        is the direction its front (+z in the model) looks, in degrees: 0 south (+z), 90 east
+        (+x), 180 north (-z), 270 west (-x)."""
+        self.models.add(name)
+        for s in self._signs():
+            yaw = math.radians(facing + (180.0 if s < 0 else 0.0))
+            self.map.entities.append(
+                point_entity("prop", (s * x, y, s * z), yaw, model=f"{self.models_dir}/{name}.glb", collider=collider)
+            )
+
+    def building(self, name: str, x: float, z: float, facing: float = 0.0, inset: float = 0.25) -> None:
+        """A complete MegaKit building with a solid brush body of the same footprint behind it
+        (the model itself has no collider). (x, z) is the building's origin: the middle of
+        its front-face plane at yaw 0."""
+        x0, x1, z0, z1, height = BUILDINGS[name]
+        assert facing % 90 == 0, "buildings turn in quarter turns"
+        self.prop(name, x, z, facing)
+        for s in self._signs():
+            theta = math.radians(facing + (180.0 if s < 0 else 0.0))
+            c, n = round(math.cos(theta)), round(math.sin(theta))
+            corners = [
+                (s * x + lx * c + lz * n, s * z - lx * n + lz * c)
+                for lx, lz in ((x0 + inset, z0 + inset), (x1 - inset, z1 - inset))
+            ]
+            (ax, az), (bx, bz) = corners
+            lo_x, hi_x = sorted((ax, bx))
+            lo_z, hi_z = sorted((az, bz))
+            brush = box(((lo_x + hi_x) / 2, height / 2, (lo_z + hi_z) / 2), (hi_x - lo_x, height, hi_z - lo_z), "brick")
+            self._add(brush, (lo_x, 0.0, lo_z), (hi_x, height, hi_z))
+
+    def facade(self, names, axis: str, c: float, a0: float, a1: float, gaps, y: float, outward: int) -> None:
+        """MegaKit facade pieces (2 m wide, `names` taking turns) along the solid stretches of a
+        wall face, skipping its `gaps` (the same `door()`/`window()` tuples the wall was built
+        with). `axis` "x" is a wall in the plane x = c running along z (outward is -1 for the face
+        looking west, +1 east); "z" a wall in z = c running along x (outward -1 north, +1 south).
+        The pieces stand 0.22 m outside the plane, a hair off the wall brush so the faces don't
+        fight."""
+        index = 0
+        cursor = a0
+        runs = []
+        for g0, g1, *_ in sorted(gaps):
+            if g0 > cursor:
+                runs.append((cursor, g0))
+            cursor = g1
+        if cursor < a1:
+            runs.append((cursor, a1))
+        for r0, r1 in runs:
+            count = int((r1 - r0) // 2.0)
+            start = r0 + ((r1 - r0) - count * 2.0) / 2.0
+            for i in range(count):
+                mid = start + (i + 0.5) * 2.0
+                name = names[index % len(names)]
+                index += 1
+                if axis == "x":
+                    self.prop(name, c + outward * 0.22, mid, 90.0 if outward > 0 else 270.0, y)
+                else:
+                    self.prop(name, mid, c + outward * 0.22, 0.0 if outward > 0 else 180.0, y)
+
+    # ---- entities --------------------------------------------------------------------------
+
+    def spawn(self, team: str, modes: str, x: float, z: float, towards: tuple[float, float]) -> None:
+        """A spawn point at (x, z) facing the point `towards`."""
+        yaw = math.atan2(x - towards[0], z - towards[1])
+        self.map.entities.append(point_entity("spawn_point", (x, 0.0, z), yaw, team=team, modes=modes))
+
+    def flag(self, label: str, x: float, z: float, y: float = 0.0) -> None:
+        self.map.entities.append(point_entity("dom_flag", (x, y, z), label=label))
+
+    def hq(self, x: float, z: float, y: float = 0.0) -> None:
+        self.map.entities.append(point_entity("hq_site", (x, y, z)))
+
+    def bomb(self, label: str, x: float, z: float, y: float = 0.0) -> None:
+        self.map.entities.append(point_entity("bomb_site", (x, y, z), label=label))
+
+    def light(self, x: float, y: float, z: float, color: str = "1 0.92 0.8", intensity: float = 300000.0, reach: float = 12.0, practical: bool = False) -> None:
+        """A point light. `practical` ones (lamps) are switched on by the look's
+        `practical_lights` (night looks) and off by day."""
+        extra = {"targetname": "practical"} if practical else {}
+        for s in self._signs():
+            self.map.entities.append(
+                point_entity(
+                    "light_point",
+                    (s * x, y, s * z),
+                    color=color,
+                    intensity=f"{intensity:.0f}",
+                    range=f"{reach:.1f}",
+                    shadows_enabled="false",
+                    **extra,
+                )
+            )
+
+    # ---- cover -----------------------------------------------------------------------------
+
+    def car(self, x: float, z: float, yaw: float = 0.0, body: str = "metal") -> None:
+        """A sedan blockout, 4.5 x 1.8 m, 1.5 m tall, long axis along x at yaw 0 (radians)."""
+        c, n = math.cos(yaw), math.sin(yaw)
+        place = lambda dx, dz: (x + dx * c + dz * n, z - dx * n + dz * c)
+        px, pz = place(0.0, 0.0)
+        self.turned(body, px, 0.55, pz, 4.5, 0.7, 1.8, yaw)
+        cx, cz = place(-0.2, 0.0)
+        self.turned(body, cx, 1.1, cz, 2.3, 0.45, 1.6, yaw)
+
+    def van(self, x: float, z: float, yaw: float = 0.0, body: str = "corrugated") -> None:
+        """A delivery van blockout, 5.4 x 2.1 m, 2.5 m tall."""
+        c, n = math.cos(yaw), math.sin(yaw)
+        px, pz = x, z
+        self.turned(body, px, 1.3, pz, 5.4, 2.1, 2.1, yaw)
+        fx, fz = x + 2.5 * c, z - 2.5 * n
+        self.turned(body, fx, 0.55, fz, 1.0, 0.8, 2.0, yaw)
+
+    def jersey(self, x: float, z: float, yaw: float = 0.0, length: float = 3.0, surface: str = "concrete") -> None:
+        """A concrete jersey barrier: knee-high cover you can crouch behind (0.9 m)."""
+        self.turned(surface, x, 0.45, z, length, 0.9, 0.5, yaw)
+
+    def lamp(self, x: float, z: float, height: float = 5.5) -> None:
+        """A street lamp: a thin pole (it blocks movement but hardly any view) and an arm."""
+        self.block("metal", x - 0.1, x + 0.1, 0.0, height, z - 0.1, z + 0.1)
+        self.block("metal", x - 0.1, x + 0.9, height - 0.2, height, z - 0.1, z + 0.1)
+        self.light(x + 0.8, height - 0.5, z, color="1 0.78 0.45", intensity=500000.0, reach=22.0, practical=True)
+
+    def dumpster(self, x: float, z: float, yaw: float = 0.0) -> None:
+        self.turned("metal", x, 0.65, z, 2.0, 1.3, 1.2, yaw)
+
+    def crate(self, x: float, z: float, size: float = 1.0, y: float = 0.0, yaw: float = 0.0) -> None:
+        self.turned("wood", x, y + size / 2, z, size, size, size, yaw)
+
+    # ---- output ----------------------------------------------------------------------------
+
+    def write(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.map.write(str(path))
+        counts: dict[str, int] = {}
+        for entity in self.map.entities:
+            counts[entity.classname] = counts.get(entity.classname, 0) + 1
+        brushes = len(self.map.brushes)
+        print(f"Wrote {path}: {brushes} brushes, " + ", ".join(f"{n} {k}" for k, n in sorted(counts.items())))
+
+
+# ---- walkability checker -------------------------------------------------------------------
+
+CELL = 0.25
+BODY_HEIGHT = 1.8
+STEP = 0.4
+MANTLE = 1.5
+MAX_DROP = 6.0
+
+
+def _spans(level: Level, bounds: tuple[float, float, float, float]):
+    """Solid vertical spans per grid cell: {(i, j): [(y0, y1), ...]} merged and sorted."""
+    x0, x1, z0, z1 = bounds
+    spans: dict[tuple[int, int], list[tuple[float, float]]] = {}
+    for lo, hi, planes in level.solids:
+        i0, i1 = max(int((lo[0] - x0) / CELL), 0), int((hi[0] - x0) / CELL)
+        j0, j1 = max(int((lo[2] - z0) / CELL), 0), int((hi[2] - z0) / CELL)
+        for i in range(i0, i1 + 1):
+            x = x0 + (i + 0.5) * CELL
+            if not lo[0] <= x <= hi[0]:
+                continue
+            for j in range(j0, j1 + 1):
+                z = z0 + (j + 0.5) * CELL
+                if not lo[2] <= z <= hi[2]:
+                    continue
+                bottom, top = lo[1] - 1e-6, hi[1] + 1e-6
+                for (nx, ny, nz), d in planes:
+                    rest = d - nx * x - nz * z
+                    if abs(ny) < 1e-9:
+                        if rest < -1e-9:
+                            top = bottom - 1
+                            break
+                    elif ny > 0:
+                        top = min(top, rest / ny)
+                    else:
+                        bottom = max(bottom, rest / ny)
+                if top > bottom + 1e-6:
+                    spans.setdefault((i, j), []).append((bottom, top))
+    for key, items in spans.items():
+        items.sort()
+        merged = [items[0]]
+        for a, b in items[1:]:
+            if a <= merged[-1][1] + 1e-4:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+            else:
+                merged.append((a, b))
+        spans[key] = merged
+    return spans
+
+
+def check_walkability(level: Level, bounds, starts, goals, image: Path | None = None, loose_goals=(), tour=(), route_out: Path | None = None) -> bool:
+    """Floods the map from `starts` ((x, z) pairs) on foot, a 1.8 m tall body that steps up 0.4 m
+    and drops down freely, and reports: goals ({name: (x, z)} or (x, y, z)) it cannot reach; spots
+    reachable but not escapable (a drop with no way back); and closed-off walkable areas. A second
+    flood that also vaults ledges up to 1.5 m shows what is only reachable by mantling. Writes a
+    top-down image (green reachable on foot, yellow by mantling, red trapped, blue other
+    floor, dark solid) when `image` is given. With `tour` (a list of (x, z) or (x, y, z) points)
+    and `route_out`, also writes the on-foot route through them, keeping off walls, as `x y z`
+    lines (about a metre apart) for the in-game walk hook. Returns True when everything checks
+    out."""
+    x0, x1, z0, z1 = bounds
+    width, height = int((x1 - x0) / CELL), int((z1 - z0) / CELL)
+    spans = _spans(level, bounds)
+
+    # Floors: (i, j, k) -> height, for cells whose body fits above a span top.
+    floors: dict[tuple[int, int], list[float]] = {}
+    for (i, j), items in spans.items():
+        if not (0 <= i < width and 0 <= j < height):
+            continue
+        for k, (_, top) in enumerate(items):
+            above = items[k + 1][0] if k + 1 < len(items) else math.inf
+            if above - top >= BODY_HEIGHT:
+                floors.setdefault((i, j), []).append(top)
+
+    def shoulder_clear(i: int, j: int, h: float) -> bool:
+        # No solid at body height in the 8 cells around: the body is 0.6 m wide.
+        for di in (-1, 0, 1):
+            for dj in (-1, 0, 1):
+                for a, b in spans.get((i + di, j + dj), ()):
+                    if b > h + STEP and a < h + BODY_HEIGHT:
+                        return False
+        return True
+
+    def blocked(i: int, j: int, h: float) -> bool:
+        """Solid at body height above a floor at `h` in this cell."""
+        return any(b > h + STEP and a < h + BODY_HEIGHT for a, b in spans.get((i, j), ()))
+
+    def falls_through(landing, h: float) -> bool:
+        """A drop from height `h` that would pass through a slab above the landing node."""
+        low = nodes[landing]
+        return any(b > low + 1e-3 and a < h - 1e-2 for a, b in spans.get(landing[:2], ()))
+
+    nodes = {(i, j, k): h for (i, j), hs in floors.items() for k, h in enumerate(hs) if shoulder_clear(i, j, h)}
+    by_cell: dict[tuple[int, int], list[tuple[int, int, int]]] = {}
+    for node in nodes:
+        by_cell.setdefault(node[:2], []).append(node)
+
+    cache: dict = {}
+
+    def neighbours(node, rise):
+        key = (node, rise)
+        if key not in cache:
+            cache[key] = list(_neighbours(node, rise))
+        return cache[key]
+
+    def _neighbours(node, rise):
+        i, j, _ = node
+        h = nodes[node]
+        # Stepping off a ledge: the body's edge clears it, so land up to two cells away (the
+        # cells right below a wall or ledge are not standable themselves), but never through a
+        # wall or a window's sill: the cell between must be open at body height.
+        for di in range(-2, 3):
+            for dj in range(-2, 3):
+                if max(abs(di), abs(dj)) == 2 and not blocked(i + int(di / 2), j + int(dj / 2), h) and not blocked(i + di, j + dj, h):
+                    for other in by_cell.get((i + di, j + dj), ()):
+                        if -MAX_DROP <= nodes[other] - h <= -0.5 and not falls_through(other, h):
+                            yield other
+        for di in (-1, 0, 1):
+            for dj in (-1, 0, 1):
+                if di == 0 and dj == 0:
+                    continue
+                # Diagonal moves need both side cells open, so corners are not cut.
+                for other in by_cell.get((i + di, j + dj), ()):
+                    dy = nodes[other] - h
+                    if -MAX_DROP <= dy <= rise and not (dy < -0.5 and (falls_through(other, h) or blocked(i + di, j + dj, h))):
+                        if di and dj and not (
+                            any(abs(nodes[o] - h) <= rise for o in by_cell.get((i + di, j), ()))
+                            and any(abs(nodes[o] - h) <= rise for o in by_cell.get((i, j + dj), ()))
+                        ):
+                            continue
+                        yield other
+
+    def nearest(x, z, y=None):
+        cell = (int((x - x0) / CELL), int((z - z0) / CELL))
+        best = None
+        for radius in range(0, 6):
+            for di in range(-radius, radius + 1):
+                for dj in range(-radius, radius + 1):
+                    for node in by_cell.get((cell[0] + di, cell[1] + dj), ()):
+                        key = (abs(nodes[node] - (y if y is not None else 0.0)), radius)
+                        if best is None or key < best[0]:
+                            best = (key, node)
+            if best:
+                return best[1]
+        return None
+
+    def flood(seeds, rise):
+        seen = set(seeds)
+        stack = list(seeds)
+        while stack:
+            node = stack.pop()
+            for other in neighbours(node, rise):
+                if other not in seen:
+                    seen.add(other)
+                    stack.append(other)
+        return seen
+
+    seeds = []
+    ok = True
+    for x, z in starts:
+        node = nearest(x, z)
+        if node is None:
+            print(f"  NO FLOOR at spawn ({x}, {z})")
+            ok = False
+        else:
+            seeds.append(node)
+    on_foot = flood(seeds, STEP)
+    mantled = flood(seeds, MANTLE)
+
+    for name, goal in goals.items():
+        x, z = goal[0], goal[-1]
+        y = goal[1] if len(goal) == 3 else 0.0
+        node = nearest(x, z, y)
+        if node is None or abs(nodes[node] - y) > 0.6:
+            print(f"  NO FLOOR at {name} ({x}, {z})")
+            ok = False
+        elif node not in on_foot:
+            print(f"  UNREACHABLE on foot: {name} ({x}, {z}) {'(mantle only)' if node in mantled else '(not at all)'}")
+            ok = False
+
+    # Trapped: reachable on foot but no way back to a spawn (reverse flood over directed edges).
+    reverse: dict = {}
+    for node in nodes:
+        for other in neighbours(node, STEP):
+            reverse.setdefault(other, []).append(node)
+    back = set(seeds)
+    stack = list(seeds)
+    while stack:
+        node = stack.pop()
+        for other in reverse.get(node, ()):
+            if other not in back:
+                back.add(other)
+                stack.append(other)
+    trapped = [n for n in on_foot if n not in back]
+    if trapped:
+        ok = False
+        xs = [x0 + (n[0] + 0.5) * CELL for n in trapped]
+        zs = [z0 + (n[1] + 0.5) * CELL for n in trapped]
+        print(f"  TRAPPED: {len(trapped)} cells ({len(trapped) * CELL * CELL:.1f} m2) x {min(xs):.1f}..{max(xs):.1f} z {min(zs):.1f}..{max(zs):.1f}")
+
+    # Closed-off floor: connected components (by on-foot edges, either direction) apart from the
+    # main one, ignoring slivers.
+    rest = [n for n in nodes if n not in on_foot and n not in mantled]
+    unseen = set(rest)
+    pockets = []
+    while unseen:
+        seed = next(iter(unseen))
+        comp = flood([seed], STEP) & unseen
+        unseen -= comp
+        if len(comp) * CELL * CELL >= 2.0:
+            xs = [x0 + (n[0] + 0.5) * CELL for n in comp]
+            zs = [z0 + (n[1] + 0.5) * CELL for n in comp]
+            ys = [nodes[n] for n in comp]
+            pockets.append((len(comp), min(xs), max(xs), min(zs), max(zs), min(ys), max(ys)))
+    for count, ax, bx, az, bz, ay, by in sorted(pockets, reverse=True)[:12]:
+        print(f"  closed-off floor {count * CELL * CELL:.1f} m2 x {ax:.1f}..{bx:.1f} z {az:.1f}..{bz:.1f} y {ay:.2f}..{by:.2f}")
+    only_mantle = len(mantled) - len(on_foot)
+    area = lambda cells: len(cells) * CELL * CELL
+    print(f"  walkable {area(nodes):.0f} m2: {area(on_foot):.0f} on foot, {area(mantled - on_foot):.0f} more by mantling")
+
+    if tour and route_out is not None:
+        _write_route(nodes, by_cell, neighbours, nearest, tour, route_out, x0, z0)
+
+    if image is not None:
+        for suffix, band in (("", (-1.0, 1.5)), (".up", (1.5, 99.0))):
+            rows = []
+            for j in range(height):
+                row = bytearray()
+                for i in range(width):
+                    cell_nodes = [n for n in by_cell.get((i, j), ()) if band[0] <= nodes[n] < band[1]]
+                    if any(n in on_foot for n in cell_nodes):
+                        colour = (60, 200, 90) if all(n in back for n in cell_nodes if n in on_foot) else (220, 50, 50)
+                    elif any(n in mantled for n in cell_nodes):
+                        colour = (230, 200, 60)
+                    elif cell_nodes:
+                        colour = (70, 120, 220)
+                    elif (i, j) in spans and spans[(i, j)][-1][1] > 0.5:
+                        colour = (40, 40, 48)
+                    else:
+                        colour = (120, 120, 120)
+                    row += bytes(colour)
+                rows.append(bytes(row))
+            # Row 0 is the north (-z) edge, column 0 the west edge.
+            with open(image.with_suffix(suffix + ".ppm"), "wb") as handle:
+                handle.write(f"P6 {width} {height} 255\n".encode() + b"".join(rows))
+    return ok
+
+
+def _write_route(nodes, by_cell, neighbours, nearest, tour, route_out: Path, x0: float, z0: float) -> None:
+    """Dijkstra over the on-foot graph through the tour's points, preferring cells away from
+    walls, written as `x y z` lines about a metre apart."""
+    import heapq
+
+    near_cache: dict = {}
+
+    def near_wall(node) -> bool:
+        """Within 0.5 m of a wall, a ledge or a void: some cell around has no floor at about the
+        node's height."""
+        if node not in near_cache:
+            i, j, _ = node
+            h = nodes[node]
+            near_cache[node] = any(
+                not any(abs(nodes[o] - h) <= 0.5 for o in by_cell.get((i + di, j + dj), ()))
+                for di in range(-2, 3)
+                for dj in range(-2, 3)
+            )
+        return near_cache[node]
+
+    def centre(node):
+        return (x0 + (node[0] + 0.5) * CELL, nodes[node], z0 + (node[1] + 0.5) * CELL)
+
+    lines = []
+    previous = None
+    for point in tour:
+        node = nearest(point[0], point[-1], point[1] if len(point) == 3 else 0.0)
+        if previous is not None:
+            best = {previous: 0.0}
+            parent = {}
+            heap = [(0.0, previous)]
+            while heap:
+                cost, current = heapq.heappop(heap)
+                if current == node:
+                    break
+                if cost > best.get(current, math.inf):
+                    continue
+                for other in neighbours(current, STEP):
+                    step = math.hypot(other[0] - current[0], other[1] - current[1]) * CELL
+                    step *= 4.0 if near_wall(other) else 1.0
+                    if cost + step < best.get(other, math.inf):
+                        best[other] = cost + step
+                        parent[other] = current
+                        heapq.heappush(heap, (cost + step, other))
+            if node not in parent and node != previous:
+                print(f"  NO ROUTE to {point}")
+                return
+            chain = [node]
+            while chain[-1] in parent:
+                chain.append(parent[chain[-1]])
+            chain.reverse()
+            lines.extend(centre(n) for n in chain[::4])
+            lines.append(centre(node))
+        else:
+            lines.append(centre(node))
+        previous = node
+    route_out.write_text("".join(f"{x:.2f} {y:.2f} {z:.2f}\n" for x, y, z in lines))
+    print(f"  route: {len(lines)} waypoints -> {route_out}")
