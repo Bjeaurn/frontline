@@ -1,12 +1,15 @@
 //! Frontline: one binary for the windowed game (main menu, Client or Host) and the headless
 //! Dedicated Server.
 
+mod assets;
+mod atmosphere;
 mod cli;
 mod combat;
 mod data;
 mod flow;
 mod loadout;
 mod match_hud;
+mod materials;
 mod menus;
 mod net;
 mod player;
@@ -74,6 +77,9 @@ fn main() -> AppExit {
     app.insert_resource(combat::ServerRules(cli.rules().to_owned()));
     if matches!(mode, Mode::Windowed { .. }) {
         app.add_plugins((
+            assets::EmbeddedAssetsPlugin,
+            materials::MaterialsPlugin,
+            atmosphere::AtmospherePlugin,
             flow::FlowPlugin,
             ui::UiPlugin,
             menus::MenusPlugin,

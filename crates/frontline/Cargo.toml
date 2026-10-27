@@ -11,7 +11,8 @@ publish.workspace = true
 dev = ["bevy/dynamic_linking"]
 
 [dependencies]
-bevy.workspace = true
+# JPEG decoding for the embedded surface textures (src/materials.rs).
+bevy = { workspace = true, features = ["jpeg"] }
 lightyear = { workspace = true, features = [
   "std",
   "client",

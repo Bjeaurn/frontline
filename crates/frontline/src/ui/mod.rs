@@ -6,9 +6,6 @@
 //! `commands.spawn(button(&fonts, "Host Game")).observe(|_: On<Activate>, ...| { ... })`
 //! (`bevy::ui_widgets::Activate`; also fires on Enter/Space when the button has focus).
 
-use std::path::{Path, PathBuf};
-
-use bevy::asset::io::embedded::EmbeddedAssetRegistry;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::text::{EditableText, TextCursorStyle};
@@ -38,26 +35,10 @@ pub struct UiFonts {
     pub bold: Handle<Font>,
 }
 
-/// Built-in images registered as `embedded://frontline/<path>`.
-const EMBEDDED: &[(&str, &[u8])] = &[
-    (
-        "icons/factions/ranger.png",
-        include_bytes!("../../assets/icons/factions/ranger.png"),
-    ),
-    (
-        "icons/factions/brigade.png",
-        include_bytes!("../../assets/icons/factions/brigade.png"),
-    ),
-];
-
 pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        let registry = app.world().resource::<EmbeddedAssetRegistry>();
-        for (path, bytes) in EMBEDDED {
-            registry.insert_asset(PathBuf::new(), &Path::new("frontline").join(path), *bytes);
-        }
         let mut fonts = app.world_mut().resource_mut::<Assets<Font>>();
         let regular = fonts.add(Font::from_bytes(
             include_bytes!("../../assets/fonts/Rajdhani-SemiBold.ttf").to_vec(),

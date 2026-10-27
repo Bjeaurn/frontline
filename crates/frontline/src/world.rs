@@ -1,9 +1,10 @@
-//! The greybox arena: static colliders in every mode, meshes and lights only when rendering.
+//! The arena: static colliders in every mode; textured meshes and lights only when rendering.
 
 use avian3d::prelude::*;
 use bevy::{mesh::MeshPlugin, prelude::*};
 
 use crate::cli::Mode;
+use crate::materials::{SurfaceKind, SurfaceMaterials, textured_box};
 use crate::shared::GameLayer;
 
 /// Arena floor is `ARENA_SIZE` x `ARENA_SIZE` metres, centred on the origin, top face at y = 0.
@@ -50,39 +51,48 @@ pub fn yaw_towards_centre(position: Vec3) -> f32 {
     position.x.atan2(position.z)
 }
 
-/// Surface category of an arena block; picks its greybox colour.
+/// Role of an arena block; picks its material and colour tint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Surface {
     Floor,
+    /// The outer walls.
     Perimeter,
+    /// Tall freestanding walls inside the arena.
+    Wall,
     Building,
     Ramp,
     Cover,
     Crate,
     Slab,
+    Container,
 }
 
 impl Surface {
     /// In declaration order, so `surface as usize` indexes it.
-    const ALL: [Surface; 7] = [
+    const ALL: [Surface; 9] = [
         Surface::Floor,
         Surface::Perimeter,
+        Surface::Wall,
         Surface::Building,
         Surface::Ramp,
         Surface::Cover,
         Surface::Crate,
         Surface::Slab,
+        Surface::Container,
     ];
 
-    fn color(self) -> Color {
+    /// Material and the tint multiplied into its colour texture, keeping the bright palette.
+    fn look(self) -> (SurfaceKind, Color) {
         match self {
-            Surface::Floor => Color::srgb(0.36, 0.37, 0.38),
-            Surface::Perimeter => Color::srgb(0.55, 0.55, 0.57),
-            Surface::Building => Color::srgb(0.68, 0.64, 0.56),
-            Surface::Ramp => Color::srgb(0.72, 0.50, 0.28),
-            Surface::Cover => Color::srgb(0.47, 0.52, 0.45),
-            Surface::Crate => Color::srgb(0.56, 0.44, 0.30),
-            Surface::Slab => Color::srgb(0.42, 0.46, 0.55),
+            Surface::Floor => (SurfaceKind::Ground, Color::srgb(0.86, 0.88, 0.94)),
+            Surface::Perimeter => (SurfaceKind::Concrete, Color::srgb(0.90, 0.90, 0.93)),
+            Surface::Wall => (SurfaceKind::Brick, Color::srgb(0.92, 0.86, 0.84)),
+            Surface::Building => (SurfaceKind::Plaster, Color::srgb(0.97, 0.92, 0.82)),
+            Surface::Ramp => (SurfaceKind::Wood, Color::srgb(1.0, 0.86, 0.70)),
+            Surface::Cover => (SurfaceKind::Metal, Color::srgb(0.62, 0.72, 0.56)),
+            Surface::Crate => (SurfaceKind::Wood, Color::srgb(0.95, 0.88, 0.78)),
+            Surface::Slab => (SurfaceKind::Concrete, Color::srgb(0.74, 0.80, 0.92)),
+            Surface::Container => (SurfaceKind::Corrugated, Color::srgb(0.88, 0.50, 0.32)),
         }
     }
 }
@@ -126,35 +136,36 @@ fn spawn_arena(mut commands: Commands) {
 fn add_arena_visuals(
     mut commands: Commands,
     blocks: Query<(Entity, &ArenaBlock)>,
+    library: Res<SurfaceMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let palette = Surface::ALL.map(|surface| {
-        materials.add(StandardMaterial {
-            base_color: surface.color(),
-            perceptual_roughness: 0.9,
-            ..default()
-        })
+        let (kind, tint) = surface.look();
+        materials.add(library.tinted(kind, tint))
     });
     for (entity, block) in &blocks {
+        let (kind, _) = block.surface.look();
         commands.entity(entity).insert((
-            Mesh3d(meshes.add(Cuboid::from_size(block.size))),
+            Mesh3d(meshes.add(textured_box(block.size, kind.uv_scale()))),
             MeshMaterial3d(palette[block.surface as usize].clone()),
         ));
     }
 }
 
+/// Bright sky and a warm afternoon sun; cool, dimmer ambient keeps shadows readable but contrasty.
 fn spawn_lighting(mut commands: Commands) {
-    commands.insert_resource(ClearColor(Color::srgb(0.62, 0.70, 0.78)));
+    commands.insert_resource(ClearColor(Color::srgb(0.52, 0.67, 0.86)));
     commands.insert_resource(GlobalAmbientLight {
-        color: Color::srgb(0.85, 0.9, 1.0),
-        brightness: 250.0,
+        color: Color::srgb(0.78, 0.85, 1.0),
+        brightness: 160.0,
         ..default()
     });
     commands.spawn((
         Name::new("Sun"),
         DirectionalLight {
-            illuminance: 12_000.0,
+            color: Color::srgb(1.0, 0.92, 0.80),
+            illuminance: 14_000.0,
             shadow_maps_enabled: true,
             ..default()
         },
@@ -178,7 +189,11 @@ fn arena_layout() -> Vec<(ArenaBlock, Transform)> {
     // Floor (top face at y = 0) and perimeter walls.
     let half = ARENA_SIZE / 2.0;
     let wall_y = PERIMETER_WALL_HEIGHT / 2.0;
-    add(Surface::Floor, [ARENA_SIZE, 1.0, ARENA_SIZE], [0.0, -0.5, 0.0]);
+    add(
+        Surface::Floor,
+        [ARENA_SIZE, 1.0, ARENA_SIZE],
+        [0.0, -0.5, 0.0],
+    );
     for sign in [-1.0, 1.0] {
         add(
             Surface::Perimeter,
@@ -214,8 +229,8 @@ fn arena_layout() -> Vec<(ArenaBlock, Transform)> {
     add(Surface::Slab, [1.0, 1.6, 1.0], [-16.0, 0.8, -2.0]);
     add(Surface::Slab, [1.0, 1.6, 1.0], [-16.0, 0.8, 2.0]);
     add(Surface::Slab, [1.0, 1.0, 5.0], [-16.0, 1.1, 0.0]);
-    add(Surface::Perimeter, [0.5, 2.5, 8.0], [-16.0, 1.25, -6.5]);
-    add(Surface::Perimeter, [0.5, 2.5, 8.0], [-16.0, 1.25, 6.5]);
+    add(Surface::Wall, [0.5, 2.5, 8.0], [-16.0, 1.25, -6.5]);
+    add(Surface::Wall, [0.5, 2.5, 8.0], [-16.0, 1.25, 6.5]);
 
     // Crouch-height (1 m) cover walls.
     add(Surface::Cover, [4.0, 1.0, 0.4], [0.0, 0.5, -14.0]);
@@ -239,10 +254,10 @@ fn arena_layout() -> Vec<(ArenaBlock, Transform)> {
     add(Surface::Cover, [2.0, 1.5, 2.0], [8.0, 0.75, 20.0]);
     add(Surface::Cover, [2.0, 2.2, 2.0], [16.0, 1.1, 16.0]);
     add(Surface::Cover, [2.0, 2.2, 2.0], [-16.0, 1.1, -16.0]);
-    add(Surface::Perimeter, [6.0, 2.5, 0.5], [16.0, 1.25, -22.0]);
-    add(Surface::Perimeter, [6.0, 2.5, 0.5], [-16.0, 1.25, 22.0]);
-    add(Surface::Slab, [2.5, 2.6, 6.0], [-22.0, 1.3, 18.0]);
-    add(Surface::Slab, [2.5, 2.6, 6.0], [22.0, 1.3, -14.0]);
+    add(Surface::Wall, [6.0, 2.5, 0.5], [16.0, 1.25, -22.0]);
+    add(Surface::Wall, [6.0, 2.5, 0.5], [-16.0, 1.25, 22.0]);
+    add(Surface::Container, [2.5, 2.6, 6.0], [-22.0, 1.3, 18.0]);
+    add(Surface::Container, [2.5, 2.6, 6.0], [22.0, 1.3, -14.0]);
 
     // Ramp from the east floor (x = 13) up to the roof edge (x = 6, y = 3.3).
     let (run, rise, thickness) = (7.0_f32, 3.3_f32, 0.3_f32);

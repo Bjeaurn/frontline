@@ -4,5 +4,7 @@
 # Homage Maps and other private content; must never be committed (docs/adr/0003).
 /content/private/
 
-# Raw asset downloads waiting to be picked through; only processed files get committed.
+# Raw third-party asset packs and downloads; only processed, license-checked files get committed
+# (into crates/frontline/assets/ with a CREDITS entry).
 /content/incoming/
+/content/assets/

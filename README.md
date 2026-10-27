@@ -56,7 +56,14 @@ Tuning lives in `data/`: `weapons.ron` (including per-Weapon Hit Zone damage mul
 - `crates/frontline/src/player/`: first-person controller, input bindings, damage/kill-feed/death HUD, remote player visuals and their bodies
 - `crates/frontline/src/weapon/`: local Weapon (firing, ammo, aiming, recoil, bolt cycle), per-weapon viewmodels, shot effects, crosshair/hitmarker/ammo/scope HUD
 - `crates/frontline/src/loadout/`: chosen Loadout (saved with Settings), CoD swap rule, Loadout screen
-- `crates/frontline/src/world.rs`: greybox arena and spawn points
+- `crates/frontline/src/world.rs`: arena layout, its colliders, textured blocks, sun and sky
+- `crates/frontline/src/materials.rs`: material library (`SurfaceKind` texture sets, tiling `textured_box` meshes)
+- `crates/frontline/src/atmosphere.rs`: camera look (tonemapping, bloom, SSAO, haze, colour grade)
+- `crates/frontline/src/assets.rs`: files embedded in the binary (faction emblems, surface textures; CC0 credits in `assets/textures/CREDITS.md`)
 - `crates/frontline/src/shared.rs`: pose and stance types shared by netcode and gameplay
 
-Private content such as Homage Maps goes in `content/private/`, which git ignores (see `docs/adr/0003`).
+Private content such as Homage Maps lives in the separate private repo `Bjeaurn/frontline-private`, cloned into the git-ignored `content/private/` (see `docs/adr/0003`):
+
+```sh
+git clone https://github.com/Bjeaurn/frontline-private.git content/private
+```

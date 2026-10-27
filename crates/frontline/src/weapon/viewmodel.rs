@@ -7,13 +7,16 @@
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
+use bevy::camera::CameraOutputMode;
 use bevy::camera::visibility::RenderLayers;
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
+use bevy::render::render_resource::BlendState;
 
 use super::effects::MuzzleFlash;
 use super::{HeldWeapon, ShotFired, WeaponSystems, ease};
+use crate::atmosphere;
 use crate::data::{GameData, GunModel, WeaponId, WeaponStats};
 use crate::flow::AppState;
 use crate::player::{ControllerSystems, EyeCamera, LocalLife, Motor, MouseCaptured};
@@ -93,8 +96,11 @@ impl Plugin for ViewmodelPlugin {
     }
 }
 
+/// Draws the gun on top of the world camera. It renders LDR with MSAA into its own texture
+/// (the world camera is HDR without MSAA, see `atmosphere`), cleared transparent and
+/// alpha-composited over the world, with the world's tone curve and grade.
 #[derive(Component)]
-struct ViewmodelCamera;
+pub struct ViewmodelCamera;
 
 /// The gun root under the viewmodel camera, with its procedural animation state.
 #[derive(Component, Debug, Default)]
@@ -479,9 +485,15 @@ fn attach_viewmodel(
             Camera3d::default(),
             Camera {
                 order: 1,
-                clear_color: ClearColorConfig::None,
+                clear_color: ClearColorConfig::Custom(Color::NONE),
+                output_mode: CameraOutputMode::Write {
+                    blend_state: Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    clear_color: ClearColorConfig::None,
+                },
                 ..default()
             },
+            atmosphere::TONEMAPPING,
+            atmosphere::color_grading(),
             Projection::Perspective(PerspectiveProjection {
                 near: 0.01,
                 far: 10.0,

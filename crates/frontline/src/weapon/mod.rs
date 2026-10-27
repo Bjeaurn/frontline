@@ -5,6 +5,8 @@ mod effects;
 mod hud;
 mod viewmodel;
 
+pub use viewmodel::ViewmodelCamera;
+
 use std::hash::{BuildHasher, RandomState};
 
 use avian3d::prelude::*;
