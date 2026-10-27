@@ -9,7 +9,9 @@ Python 3, standard library only.
 
 from __future__ import annotations
 
+import json
 import math
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -66,7 +68,26 @@ class Level:
         self.models: set[str] = set()
         # (min corner, max corner, planes) per solid, for the walkability checker.
         self.solids: list[tuple[Vec3, Vec3, list[tuple[Vec3, float]]]] = []
+        # What the checks read: (team, modes, x, z) per spawn; (label, x, y, z) per objective site
+        # by entity class; (model, x, base y, z, model bounds) per prop.
+        self.spawns: list[tuple[str, str, float, float]] = []
+        self.sites: dict[str, list[tuple[str, float, float, float]]] = {}
+        self.props: list[tuple[str, float, float, float, tuple[Vec3, Vec3] | None]] = []
+        self._bounds = model_bounds(models)
         self._mirror = False
+        self._dx = self._dz = 0.0
+
+    @contextmanager
+    def shifted(self, dx: float, dz: float):
+        """Everything built inside is moved by (dx, dz) metres (before any mirroring): a way to
+        spread a layout's parts apart without touching their own coordinates."""
+        old = (self._dx, self._dz)
+        self._dx += dx
+        self._dz += dz
+        try:
+            yield
+        finally:
+            self._dx, self._dz = old
 
     # ---- mirroring -------------------------------------------------------------------------
 
@@ -91,6 +112,7 @@ class Level:
     def block(self, surface: str, x0: float, x1: float, y0: float, y1: float, z0: float, z1: float) -> None:
         """An axis-aligned block between two corners."""
         assert x1 > x0 and y1 > y0 and z1 > z0, (surface, x0, x1, y0, y1, z0, z1)
+        x0, x1, z0, z1 = x0 + self._dx, x1 + self._dx, z0 + self._dz, z1 + self._dz
         for s in self._signs():
             xa, xb = sorted((s * x0, s * x1))
             za, zb = sorted((s * z0, s * z1))
@@ -100,6 +122,7 @@ class Level:
     def turned(self, surface: str, cx: float, cy: float, cz: float, sx: float, sy: float, sz: float, yaw: float) -> None:
         """A block of extents (sx, sy, sz) centred on (cx, cy, cz), turned `yaw` radians about y
         (as `Quat::from_rotation_y`): its x axis ends up at (cos, 0, -sin)."""
+        cx, cz = cx + self._dx, cz + self._dz
         for s in self._signs():
             a = yaw + (math.pi if s < 0 else 0.0)
             c, n = math.cos(a), math.sin(a)
@@ -163,6 +186,7 @@ class Level:
         """A solid ramp filling the box (x0..x1, y0..y1, z0..z1), climbing from y0 to y1 towards
         `rise` ("+x", "-x", "+z" or "-z")."""
         flip = {"+x": "-x", "-x": "+x", "+z": "-z", "-z": "+z"}
+        x0, x1, z0, z1 = x0 + self._dx, x1 + self._dx, z0 + self._dz, z1 + self._dz
         for s in self._signs():
             direction = rise if s > 0 else flip[rise]
             xa, xb = sorted((s * x0, s * x1))
@@ -172,6 +196,8 @@ class Level:
     def slab_ramp(self, surface: str, start: Vec3, end: Vec3, width: float, thickness: float = 0.25) -> None:
         """A thin plank from `start` to `end` (centre line of its top face), `width` wide: a
         raised ramp or bridge with open space below."""
+        start = (start[0] + self._dx, start[1], start[2] + self._dz)
+        end = (end[0] + self._dx, end[1], end[2] + self._dz)
         for s in self._signs():
             a = (s * start[0], start[1], s * start[2])
             b = (s * end[0], end[1], s * end[2])
@@ -202,14 +228,19 @@ class Level:
     # ---- props -----------------------------------------------------------------------------
 
     def prop(self, name: str, x: float, z: float, facing: float = 0.0, y: float = 0.0, collider: str = "none") -> None:
-        """A MegaKit model (`<models dir>/<name>.glb`) with its origin at (x, y, z). `facing`
-        is the direction its front (+z in the model) looks, in degrees: 0 south (+z), 90 east
-        (+x), 180 north (-z), 270 west (-x)."""
+        """A MegaKit model (`<models dir>/<name>.glb`) standing at (x, z) with its lowest point
+        (the base of the model's bounds, `bounds.json`) at height `y`, wherever the model puts
+        its origin. `facing` is the direction its front (+z in the model) looks, in degrees:
+        0 south (+z), 90 east (+x), 180 north (-z), 270 west (-x)."""
         self.models.add(name)
+        bounds = self._bounds.get(name)
+        origin_y = y - (bounds[0][1] if bounds else 0.0)
+        x, z = x + self._dx, z + self._dz
         for s in self._signs():
             yaw = math.radians(facing + (180.0 if s < 0 else 0.0))
+            self.props.append((name, s * x, y, s * z, bounds))
             self.map.entities.append(
-                point_entity("prop", (s * x, y, s * z), yaw, model=f"{self.models_dir}/{name}.glb", collider=collider)
+                point_entity("prop", (s * x, origin_y, s * z), yaw, model=f"{self.models_dir}/{name}.glb", collider=collider)
             )
 
     def building(self, name: str, x: float, z: float, facing: float = 0.0, inset: float = 0.25) -> None:
@@ -219,6 +250,7 @@ class Level:
         x0, x1, z0, z1, height = BUILDINGS[name]
         assert facing % 90 == 0, "buildings turn in quarter turns"
         self.prop(name, x, z, facing)
+        x, z = x + self._dx, z + self._dz
         for s in self._signs():
             theta = math.radians(facing + (180.0 if s < 0 else 0.0))
             c, n = round(math.cos(theta)), round(math.sin(theta))
@@ -264,22 +296,30 @@ class Level:
 
     def spawn(self, team: str, modes: str, x: float, z: float, towards: tuple[float, float]) -> None:
         """A spawn point at (x, z) facing the point `towards`."""
+        x, z = x + self._dx, z + self._dz
         yaw = math.atan2(x - towards[0], z - towards[1])
+        self.spawns.append((team, modes, x, z))
         self.map.entities.append(point_entity("spawn_point", (x, 0.0, z), yaw, team=team, modes=modes))
 
+    def _site(self, classname: str, tag: str, x: float, y: float, z: float, **properties: str) -> None:
+        x, z = x + self._dx, z + self._dz
+        self.sites.setdefault(classname, []).append((tag, x, y, z))
+        self.map.entities.append(point_entity(classname, (x, y, z), **properties))
+
     def flag(self, label: str, x: float, z: float, y: float = 0.0) -> None:
-        self.map.entities.append(point_entity("dom_flag", (x, y, z), label=label))
+        self._site("dom_flag", label, x, y, z, label=label)
 
     def hq(self, x: float, z: float, y: float = 0.0) -> None:
-        self.map.entities.append(point_entity("hq_site", (x, y, z)))
+        self._site("hq_site", "", x, y, z)
 
     def bomb(self, label: str, x: float, z: float, y: float = 0.0) -> None:
-        self.map.entities.append(point_entity("bomb_site", (x, y, z), label=label))
+        self._site("bomb_site", label, x, y, z, label=label)
 
-    def light(self, x: float, y: float, z: float, color: str = "1 0.92 0.8", intensity: float = 300000.0, reach: float = 12.0, practical: bool = False) -> None:
+    def light(self, x: float, y: float, z: float, color: str = "1 0.92 0.8", intensity: float = 300000.0, reach: float = 12.0, practical: bool = False, shadows: bool = False) -> None:
         """A point light. `practical` ones (lamps) are switched on by the look's
         `practical_lights` (night looks) and off by day."""
         extra = {"targetname": "practical"} if practical else {}
+        x, z = x + self._dx, z + self._dz
         for s in self._signs():
             self.map.entities.append(
                 point_entity(
@@ -288,7 +328,7 @@ class Level:
                     color=color,
                     intensity=f"{intensity:.0f}",
                     range=f"{reach:.1f}",
-                    shadows_enabled="false",
+                    shadows_enabled="true" if shadows else "false",
                     **extra,
                 )
             )
@@ -300,7 +340,7 @@ class Level:
         c, n = math.cos(yaw), math.sin(yaw)
         place = lambda dx, dz: (x + dx * c + dz * n, z - dx * n + dz * c)
         px, pz = place(0.0, 0.0)
-        self.turned(body, px, 0.55, pz, 4.5, 0.7, 1.8, yaw)
+        self.turned(body, px, 0.45, pz, 4.5, 0.9, 1.8, yaw)
         cx, cz = place(-0.2, 0.0)
         self.turned(body, cx, 1.1, cz, 2.3, 0.45, 1.6, yaw)
 
@@ -308,9 +348,9 @@ class Level:
         """A delivery van blockout, 5.4 x 2.1 m, 2.5 m tall."""
         c, n = math.cos(yaw), math.sin(yaw)
         px, pz = x, z
-        self.turned(body, px, 1.3, pz, 5.4, 2.1, 2.1, yaw)
+        self.turned(body, px, 1.175, pz, 5.4, 2.35, 2.1, yaw)
         fx, fz = x + 2.5 * c, z - 2.5 * n
-        self.turned(body, fx, 0.55, fz, 1.0, 0.8, 2.0, yaw)
+        self.turned(body, fx, 0.475, fz, 1.0, 0.95, 2.0, yaw)
 
     def jersey(self, x: float, z: float, yaw: float = 0.0, length: float = 3.0, surface: str = "concrete") -> None:
         """A concrete jersey barrier: knee-high cover you can crouch behind (0.9 m)."""
@@ -331,6 +371,15 @@ class Level:
     # ---- output ----------------------------------------------------------------------------
 
     def write(self, path: Path) -> None:
+        """Writes the .map, unless an objective site breaks the minimum spacing (see
+        `objective_problems`): then it prints what and exits, so a layout can't ship with HQs
+        on top of each other."""
+        problems = objective_problems(self)
+        if problems:
+            print("Objective spacing violated, nothing written:")
+            for line in problems:
+                print("  " + line)
+            sys.exit(1)
         path.parent.mkdir(parents=True, exist_ok=True)
         self.map.write(str(path))
         counts: dict[str, int] = {}
@@ -338,6 +387,107 @@ class Level:
             counts[entity.classname] = counts.get(entity.classname, 0) + 1
         brushes = len(self.map.brushes)
         print(f"Wrote {path}: {brushes} brushes, " + ", ".join(f"{n} {k}" for k, n in sorted(counts.items())))
+        print("  " + objective_summary(self))
+
+
+# ---- model bounds, objective spacing, grounding ---------------------------------------------
+
+# Minimum distance (metres) between two sites of a class: HQs and bomb sites 30, Flags 25.
+MIN_SPACING = {"hq_site": 30.0, "dom_flag": 25.0, "bomb_site": 30.0}
+WALK_SPEED = 5.5  # m/s, data/movement.ron
+
+
+def model_bounds(models: str) -> dict[str, tuple[Vec3, Vec3]]:
+    """{model name: (min, max)} from the `bounds.json` that tools/assets/import_props.py writes
+    next to a pack's .glb files (empty when the folder has none)."""
+    if models.startswith("private://"):
+        folder = REPO / "content" / "private" / models.removeprefix("private://")
+    else:
+        folder = REPO / "crates" / "frontline" / "assets" / models
+    path = folder / "bounds.json"
+    if not path.exists():
+        return {}
+    return {name: (tuple(b["min"]), tuple(b["max"])) for name, b in json.loads(path.read_text()).items()}
+
+
+def objective_problems(level: Level) -> list[str]:
+    """Pairs of HQ sites, Flags or bomb sites closer than `MIN_SPACING`."""
+    problems = []
+    for classname, minimum in MIN_SPACING.items():
+        sites = level.sites.get(classname, [])
+        for i, (la, xa, _, za) in enumerate(sites):
+            for lb, xb, _, zb in sites[i + 1 :]:
+                distance = math.hypot(xa - xb, za - zb)
+                if distance < minimum:
+                    problems.append(
+                        f"{classname} {la or '#'+str(i)} ({xa:.1f}, {za:.1f}) and {lb or '#'} ({xb:.1f}, {zb:.1f}) are {distance:.1f} m apart, need {minimum:.0f}"
+                    )
+    return problems
+
+
+def objective_summary(level: Level) -> str:
+    parts = []
+    for classname, minimum in MIN_SPACING.items():
+        sites = level.sites.get(classname, [])
+        gaps = [math.hypot(a[1] - b[1], a[3] - b[3]) for i, a in enumerate(sites) for b in sites[i + 1 :]]
+        if gaps:
+            parts.append(f"{classname} min spacing {min(gaps):.1f} m (>= {minimum:.0f})")
+    return "; ".join(parts)
+
+
+def check_grounded(level: Level) -> list[str]:
+    """Floating things: brushes that aren't attached (touching or overlapping, chained) to the
+    ground, and props whose base isn't on top of a solid at their spot."""
+    problems = []
+    solids = level.solids
+    margin = 0.05
+    grounded = [lo[1] <= 0.03 for lo, _, _ in solids]
+    # Index by grid cell to keep it quick.
+    cells: dict[tuple[int, int], list[int]] = {}
+    for index, (lo, hi, _) in enumerate(solids):
+        for i in range(int((lo[0] - margin) // 4), int((hi[0] + margin) // 4) + 1):
+            for j in range(int((lo[2] - margin) // 4), int((hi[2] + margin) // 4) + 1):
+                cells.setdefault((i, j), []).append(index)
+
+    def touching(a: int) -> set[int]:
+        lo, hi, _ = solids[a]
+        found = set()
+        for i in range(int((lo[0] - margin) // 4), int((hi[0] + margin) // 4) + 1):
+            for j in range(int((lo[2] - margin) // 4), int((hi[2] + margin) // 4) + 1):
+                for b in cells.get((i, j), ()):
+                    lo2, hi2, _ = solids[b]
+                    if (
+                        b != a
+                        and lo2[0] <= hi[0] + margin and hi2[0] >= lo[0] - margin
+                        and lo2[2] <= hi[2] + margin and hi2[2] >= lo[2] - margin
+                        and lo2[1] <= hi[1] + margin and hi2[1] >= lo[1] - margin
+                    ):
+                        found.add(b)
+        return found
+
+    stack = [i for i, g in enumerate(grounded) if g]
+    while stack:
+        for other in touching(stack.pop()):
+            if not grounded[other]:
+                grounded[other] = True
+                stack.append(other)
+    for index, ok in enumerate(grounded):
+        if not ok:
+            lo, hi, _ = solids[index]
+            problems.append(f"floating brush x {lo[0]:.1f}..{hi[0]:.1f} y {lo[1]:.2f}..{hi[1]:.2f} z {lo[2]:.1f}..{hi[2]:.1f}")
+
+    for name, x, y, z, bounds in level.props:
+        if bounds is None or bounds[1][1] - bounds[0][1] < 0.05:
+            continue  # unknown, or a flat decal or tile lying on the ground
+        on_top = False
+        for index in cells.get((int(x // 4), int(z // 4)), ()):
+            lo, hi, _ = solids[index]
+            if lo[0] - 0.6 <= x <= hi[0] + 0.6 and lo[2] - 0.6 <= z <= hi[2] + 0.6 and abs(hi[1] - y) <= 0.06:
+                on_top = True
+                break
+        if not on_top:
+            problems.append(f"prop {name} at ({x:.1f}, {z:.1f}) base y {y:.2f} has nothing under it")
+    return problems
 
 
 # ---- walkability checker -------------------------------------------------------------------
@@ -389,7 +539,7 @@ def _spans(level: Level, bounds: tuple[float, float, float, float]):
     return spans
 
 
-def check_walkability(level: Level, bounds, starts, goals, image: Path | None = None, loose_goals=(), tour=(), route_out: Path | None = None) -> bool:
+def check_walkability(level: Level, bounds, starts, goals, image: Path | None = None, loose_goals=(), tour=(), route_out: Path | None = None, walk_range: tuple[float, float] | None = None) -> bool:
     """Floods the map from `starts` ((x, z) pairs) on foot, a 1.8 m tall body that steps up 0.4 m
     and drops down freely, and reports: goals ({name: (x, z)} or (x, y, z)) it cannot reach; spots
     reachable but not escapable (a drop with no way back); and closed-off walkable areas. A second
@@ -558,6 +708,13 @@ def check_walkability(level: Level, bounds, starts, goals, image: Path | None = 
     only_mantle = len(mantled) - len(on_foot)
     area = lambda cells: len(cells) * CELL * CELL
     print(f"  walkable {area(nodes):.0f} m2: {area(on_foot):.0f} on foot, {area(mantled - on_foot):.0f} more by mantling")
+    ok = _measure_layout(level, nodes, nearest, neighbours, on_foot, x0, z0, walk_range) and ok
+    for line in check_grounded(level):
+        print(f"  FLOATING: {line}")
+        ok = False
+    for line in objective_problems(level):
+        print(f"  SPACING: {line}")
+        ok = False
 
     if tour and route_out is not None:
         _write_route(nodes, by_cell, neighbours, nearest, tour, route_out, x0, z0)
@@ -585,6 +742,62 @@ def check_walkability(level: Level, bounds, starts, goals, image: Path | None = 
             with open(image.with_suffix(suffix + ".ppm"), "wb") as handle:
                 handle.write(f"P6 {width} {height} 255\n".encode() + b"".join(rows))
     return ok
+
+
+def _measure_layout(level: Level, nodes, nearest, neighbours, on_foot, x0: float, z0: float, walk_range) -> bool:
+    """Prints the playable extents (the on-foot cells' bounding box), the objective spacing and
+    the longest walk between the Teams' spawns (shortest on-foot path of each pair, longest pair;
+    also over every spawn including the free-for-all ones), with the crossing time at the walk
+    speed. `walk_range` (min, max metres) is the size this Map is meant to have: outside it the
+    check fails."""
+    import heapq
+
+    xs = [x0 + (n[0] + 0.5) * CELL for n in on_foot]
+    zs = [z0 + (n[1] + 0.5) * CELL for n in on_foot]
+    print(f"  extents: x {min(xs):.1f}..{max(xs):.1f} ({max(xs) - min(xs):.0f} m) z {min(zs):.1f}..{max(zs):.1f} ({max(zs) - min(zs):.0f} m); {objective_summary(level)}")
+
+    def spots(*teams):
+        return sorted({(x, z) for team, _, x, z in level.spawns if team in teams})
+
+    alpha, bravo, anyone = spots("alpha"), spots("bravo"), spots("any")
+    everyone = alpha + bravo + anyone
+    if not alpha or not bravo:
+        return True
+    goals = {nearest(x, z): (x, z) for x, z in everyone}
+    goals.pop(None, None)
+    longest = {"teams": (0.0, None), "all": (0.0, None)}
+    for sx, sz in alpha + anyone:
+        source = nearest(sx, sz)
+        if source is None:
+            continue
+        dist = {source: 0.0}
+        heap = [(0.0, source)]
+        pending = set(goals)
+        while heap and pending:
+            cost, current = heapq.heappop(heap)
+            if cost > dist.get(current, math.inf):
+                continue
+            pending.discard(current)
+            for other in neighbours(current, STEP):
+                step = math.hypot(other[0] - current[0], other[1] - current[1]) * CELL + abs(nodes[other] - nodes[current])
+                if cost + step < dist.get(other, math.inf):
+                    dist[other] = cost + step
+                    heapq.heappush(heap, (cost + step, other))
+        for node, spot in goals.items():
+            if node in dist and node != source:
+                if dist[node] > longest["all"][0]:
+                    longest["all"] = (dist[node], ((sx, sz), spot))
+                if (sx, sz) in alpha and spot in bravo and dist[node] > longest["teams"][0]:
+                    longest["teams"] = (dist[node], ((sx, sz), spot))
+    length, pair = longest["teams"]
+    print(f"  longest spawn-to-spawn walk (Alpha to Bravo): {length:.0f} m = {length / WALK_SPEED:.0f} s at {WALK_SPEED} m/s, {pair}")
+    length_all, pair_all = longest["all"]
+    print(f"  longest walk between any two spawns: {length_all:.0f} m = {length_all / WALK_SPEED:.0f} s, {pair_all}")
+    if walk_range is not None and not walk_range[0] <= length <= walk_range[1]:
+        print(f"  SIZE: longest Alpha-Bravo walk {length:.0f} m is outside the intended {walk_range[0]:.0f}..{walk_range[1]:.0f} m")
+        return False
+    return True
+
 
 
 def _write_route(nodes, by_cell, neighbours, nearest, tour, route_out: Path, x0: float, z0: float) -> None:

@@ -337,27 +337,41 @@ fn sync_map(
 fn mark_colliders_built(
     ready: On<SceneCollidersReady>,
     roots: Query<&MapRoot>,
-    colliders: Query<&Collider>,
+    colliders: Query<(&Collider, &GlobalTransform)>,
     mut commands: Commands,
 ) {
     let Ok(root) = roots.get(ready.scene_root_entity) else {
         return;
     };
-    let brushes: usize = ready
+    let mut brushes = 0;
+    let (mut low, mut high) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+    for (collider, transform) in ready
         .collider_entities
         .iter()
         .filter_map(|&entity| colliders.get(entity).ok())
-        .map(|collider| {
-            collider
-                .shape()
-                .as_compound()
-                .map_or(1, |compound| compound.shapes().len())
-        })
-        .sum();
+    {
+        brushes += collider
+            .shape()
+            .as_compound()
+            .map_or(1, |compound| compound.shapes().len());
+        let aabb = collider.aabb(transform.translation(), transform.rotation(), 0.0);
+        low = low.min(aabb.min);
+        high = high.max(aabb.max);
+    }
+    let size = high - low;
     info!(
-        "Map \"{}\": {brushes} brush colliders on {} entities",
+        "Map \"{}\": {brushes} brush colliders on {} entities, extents {:.0} x {:.0} m \
+         (x {:.0}..{:.0}, z {:.0}..{:.0}, up to {:.0} m high; all brushes, perimeter and skyline \
+         bodies included)",
         root.id,
-        ready.collider_entities.len()
+        ready.collider_entities.len(),
+        size.x,
+        size.z,
+        low.x,
+        high.x,
+        low.z,
+        high.z,
+        high.y,
     );
     commands
         .entity(ready.scene_root_entity)

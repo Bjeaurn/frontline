@@ -6,7 +6,10 @@
 // - exposure: stops (EV) added to the camera; negative is darker.
 // - temperature / tint: white balance shifts (warm + / cool -, magenta + / green -), about -1..1.
 // - saturation: 1 is unchanged. contrast: midtone contrast, 1 is unchanged.
-// - fog_visibility: metres at which the fog hides about 95% of a surface (lower is denser).
+// - fog_visibility: metres at which the fog hides about 95% of a surface (lower is denser). Sized
+//   to the Maps: about 1.5x the longest dimension of the biggest Map using the look, so the far
+//   side is hazy but never hidden (Crossroads 123 m: overcast_urban 185; Backlot 113 m:
+//   desert_dust 170). Looks no Map uses are scaled like overcast_urban (x1.09).
 // - fog_sun_color: colour of sunlight glowing through the fog towards the sun; alpha is strength.
 // - sun_illuminance: lux. sun_direction: the way the light travels (y down is negative).
 // - ambient_brightness: cd/m^2 of flat fill light. sky_color: the background.
@@ -22,7 +25,7 @@
         saturation: 0.86,
         contrast: 1.16,
         fog_color: (0.50, 0.53, 0.56),
-        fog_visibility: 170.0,
+        fog_visibility: 185.0,
         fog_sun_color: (0.80, 0.82, 0.85, 0.15),
         sun_color: (0.86, 0.89, 0.94),
         sun_illuminance: 5500.0,
@@ -39,7 +42,7 @@
         saturation: 0.92,
         contrast: 1.15,
         fog_color: (0.70, 0.62, 0.50),
-        fog_visibility: 260.0,
+        fog_visibility: 170.0,
         fog_sun_color: (1.0, 0.84, 0.60, 0.40),
         sun_color: (1.0, 0.90, 0.74),
         sun_illuminance: 18000.0,
@@ -56,7 +59,7 @@
         saturation: 0.85,
         contrast: 1.12,
         fog_color: (0.46, 0.51, 0.60),
-        fog_visibility: 220.0,
+        fog_visibility: 240.0,
         fog_sun_color: (1.0, 0.72, 0.50, 0.40),
         sun_color: (1.0, 0.76, 0.56),
         sun_illuminance: 9000.0,
@@ -73,7 +76,7 @@
         saturation: 0.9,
         contrast: 1.06,
         fog_color: (0.56, 0.67, 0.56),
-        fog_visibility: 150.0,
+        fog_visibility: 165.0,
         fog_sun_color: (0.90, 1.0, 0.72, 0.28),
         sun_color: (0.84, 1.0, 0.70),
         sun_illuminance: 9500.0,
@@ -91,7 +94,7 @@
         saturation: 0.7,
         contrast: 1.1,
         fog_color: (0.07, 0.11, 0.22),
-        fog_visibility: 160.0,
+        fog_visibility: 175.0,
         fog_sun_color: (0.40, 0.55, 1.0, 0.25),
         sun_color: (0.62, 0.72, 1.0),
         sun_illuminance: 2800.0,

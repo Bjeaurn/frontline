@@ -5,9 +5,11 @@ use bevy::prelude::*;
 use bevy::text::EditableText;
 use bevy::ui_widgets::{Activate, SliderStep, SliderValue};
 
+use super::rules_editor::{EditorOrigin, RulesOrigin};
 use crate::flow::{MenuScreen, Overlay, Settings};
 use crate::ui::{
-    ACCENT, TEXT_DIM, UiFonts, backdrop, button, label, panel, slider, text_field, title,
+    ACCENT, TEXT_DIM, UiFonts, backdrop, button, compact_button, label, panel, slider, text_field,
+    title,
 };
 
 const MAX_NAME_CHARS: usize = 24;
@@ -137,6 +139,36 @@ fn spawn_settings(mut commands: Commands, fonts: &UiFonts, settings: &Settings, 
         ));
     }
 
+    // The Custom Match Rules editor; the settings edited so far are applied on the way, so
+    // coming back shows them.
+    let rules_row = setting_row(&mut commands, fonts, panel, "Match rules");
+    commands
+        .spawn((
+            ChildOf(rules_row),
+            compact_button(fonts, "Custom rule sets", 240.0, 22.0),
+        ))
+        .observe(
+            move |_: On<Activate>,
+                  name: Single<&EditableText, With<NameField>>,
+                  sliders: Query<(&SettingSlider, &SliderValue)>,
+                  mut settings: ResMut<Settings>,
+                  mut menu: ResMut<NextState<MenuScreen>>,
+                  mut overlay: ResMut<NextState<Overlay>>,
+                  mut commands: Commands| {
+                commit(&name, &sliders, &mut settings);
+                match origin {
+                    Origin::MainMenu => {
+                        commands.insert_resource(RulesOrigin(EditorOrigin::Settings));
+                        menu.set(MenuScreen::Rules);
+                    }
+                    Origin::Pause => {
+                        commands.insert_resource(RulesOrigin(EditorOrigin::PauseSettings));
+                        overlay.set(Overlay::Rules);
+                    }
+                }
+            },
+        );
+
     let buttons = commands
         .spawn((
             ChildOf(panel),
@@ -156,19 +188,7 @@ fn spawn_settings(mut commands: Commands, fonts: &UiFonts, settings: &Settings, 
                   mut settings: ResMut<Settings>,
                   mut menu: ResMut<NextState<MenuScreen>>,
                   mut overlay: ResMut<NextState<Overlay>>| {
-                let mut edited = settings.clone();
-                let name = name.value().to_string();
-                if !name.trim().is_empty() {
-                    edited.name = name.trim().to_owned();
-                }
-                for (kind, value) in &sliders {
-                    match kind {
-                        SettingSlider::Sensitivity => edited.mouse_sensitivity = value.0,
-                        SettingSlider::Fov => edited.fov_deg = value.0,
-                        SettingSlider::Volume => edited.master_volume = value.0,
-                    }
-                }
-                settings.set_if_neq(edited);
+                commit(&name, &sliders, &mut settings);
                 origin.go_back(&mut menu, &mut overlay);
             },
         );
@@ -219,4 +239,25 @@ pub(super) fn show_readouts(
             }
         }
     }
+}
+
+/// Writes the screen's name and slider values into the Settings.
+fn commit(
+    name: &EditableText,
+    sliders: &Query<(&SettingSlider, &SliderValue)>,
+    settings: &mut ResMut<Settings>,
+) {
+    let mut edited = settings.clone();
+    let name = name.value().to_string();
+    if !name.trim().is_empty() {
+        edited.name = name.trim().to_owned();
+    }
+    for (kind, value) in sliders {
+        match kind {
+            SettingSlider::Sensitivity => edited.mouse_sensitivity = value.0,
+            SettingSlider::Fov => edited.fov_deg = value.0,
+            SettingSlider::Volume => edited.master_volume = value.0,
+        }
+    }
+    settings.set_if_neq(edited);
 }

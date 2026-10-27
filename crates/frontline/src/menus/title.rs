@@ -6,8 +6,8 @@ use bevy::ui_widgets::Activate;
 use crate::flow::{AppState, FlowCommand, MenuScreen};
 use crate::ui::{ACCENT, TEXT_DIM, UiFonts, button, label, title};
 
-const ORBIT_RADIUS: f32 = 40.0;
-const ORBIT_HEIGHT: f32 = 16.0;
+const ORBIT_RADIUS: f32 = 46.0;
+const ORBIT_HEIGHT: f32 = 34.0;
 /// Radians per second.
 const ORBIT_SPEED: f32 = 0.04;
 const ORBIT_TARGET: Vec3 = Vec3::new(0.0, 2.0, 0.0);

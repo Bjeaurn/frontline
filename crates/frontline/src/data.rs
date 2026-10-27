@@ -5,7 +5,7 @@
 //! edited and picked up on restart without recompiling. When the file isn't there (e.g. the
 //! binary was copied on its own), the copy built into the binary is used.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 use bevy::ecs::system::SystemParam;
@@ -332,7 +332,7 @@ impl WeaponStats {
 }
 
 /// Tunable survival settings of a Match (CONTEXT.md: Match Rules).
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MatchRules {
     pub max_health: f32,
     pub regen_delay_secs: f32,
@@ -358,7 +358,7 @@ impl MatchRules {
 
 /// How hard falls hurt (CoD style): nothing up to `min_height`, then linearly more until a fall
 /// of `max_height` is lethal. Heights are in metres, counted from the peak of the fall.
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FallDamageRules {
     pub min_height: f32,
     pub max_height: f32,
@@ -377,7 +377,7 @@ impl FallDamageRules {
 }
 
 /// Which HUD elements a Match shows (IDEA.md: HUD in Match Rules).
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HudRules {
     pub crosshair: bool,
     /// A white marker on every hit.
@@ -582,6 +582,8 @@ pub struct GameData {
     pub perks: HashMap<PerkId, Perk>,
     pub ammo_pack: AmmoPackTuning,
     pub match_rules: HashMap<String, MatchRules>,
+    /// Which `match_rules` are the Host's own custom sets (`rules.rs`), not built-in presets.
+    pub custom_rule_names: BTreeSet<String>,
     pub movement: MovementTuning,
     pub presentation: PresentationTuning,
     pub game_modes: HashMap<GameModeId, GameModeSettings>,
@@ -655,8 +657,8 @@ impl GameData {
     }
 }
 
-/// The Match Rules of the current Match, as named in the replicated `MatchState`; the default
-/// preset before the Match has arrived.
+/// The Match Rules of the current Match: the values the server replicates in `MatchState`, so a
+/// client needs no file for a custom set; the default preset before the Match has arrived.
 #[derive(SystemParam)]
 pub struct ActiveRules<'w, 's> {
     data: Res<'w, GameData>,
@@ -665,12 +667,10 @@ pub struct ActiveRules<'w, 's> {
 
 impl ActiveRules<'_, '_> {
     pub fn get(&self) -> &MatchRules {
-        let preset = self
-            .matches
-            .iter()
-            .next()
-            .map_or(DEFAULT_MATCH_RULES, |state| state.rules.as_str());
-        self.data.rules(preset)
+        self.matches.iter().next().map_or_else(
+            || self.data.rules(DEFAULT_MATCH_RULES),
+            |state| &state.rule_values,
+        )
     }
 }
 
@@ -678,7 +678,10 @@ pub struct DataPlugin;
 
 impl Plugin for DataPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(GameData::load());
+        let mut data = GameData::load();
+        let custom = crate::rules::load_custom_rules(&data);
+        data.use_custom_rules(custom);
+        app.insert_resource(data);
     }
 }
 
@@ -694,6 +697,7 @@ impl GameData {
             perks: perks.perks,
             ammo_pack: perks.ammo_pack,
             match_rules: load(MATCH_RULES_FILE, BUILTIN_MATCH_RULES),
+            custom_rule_names: BTreeSet::new(),
             movement: load(MOVEMENT_FILE, BUILTIN_MOVEMENT),
             presentation: load(PRESENTATION_FILE, BUILTIN_PRESENTATION),
             game_modes: load(GAME_MODES_FILE, BUILTIN_GAME_MODES),

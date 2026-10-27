@@ -54,6 +54,10 @@ _Avoid_: Ruleset, game settings, mutators
 A named **Match Rules** preset with low health, no regen and a minimal HUD, applicable to any **Game Mode**.
 _Avoid_: Hardcore mode
 
+**Custom rule set**:
+A named **Match Rules** set a **Host** makes by copying a preset in the rules editor and changing its values. It is saved on the Host's machine, selectable per **Rotation entry**, and its values reach the clients with the Match, so they need no copy of it. The built-in presets stay read-only.
+_Avoid_: Mod, mutator, custom mode
+
 **Team Deathmatch**:
 A two-team **Game Mode** where each kill scores a point for the killer's team.
 _Avoid_: TDM (in docs), deathmatch

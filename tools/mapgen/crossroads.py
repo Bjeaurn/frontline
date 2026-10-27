@@ -1,6 +1,6 @@
 """Generates crates/frontline/assets/maps/crossroads.map: Crossroads, an original urban Map in the
 Call of Duty recipe: three lanes (west street, a two-storey building in the middle, east street),
-sightlines of 15-40 m, about 12 s to cross, sized for 6-10 players. The layout is point-symmetric
+sightlines of 15-40 m, about 22 s to cross at a walk (a spawn-to-spawn path of ~120 m), sized for 6-10 players. The layout is point-symmetric
 (turned 180 degrees about the centre), so both Teams get the same map; Alpha starts in the north
 (-z), Bravo in the south.
 
@@ -26,6 +26,13 @@ STOREY = 3.6  # floor to floor
 SLAB = 0.3
 WALL_TOP = STOREY - SLAB  # top of a storey's walls
 ROOF = 2 * STOREY  # top of the central building's roof slab
+
+# The Map is spread out rather than scaled: the buildings keep their size, the gaps between them
+# grow. The blocks sit BX further out (wide lanes), the streets and Teams' plazas are pushed out
+# along z, and the open ground in between is filled with cover.
+BX = 8.0
+DZ = 10.0  # how much further out the streets and plazas sit than the lanes' ends
+HX, HZ = 46.0, 62.0  # half extents of the playfield
 
 
 def central_building(L: Level) -> None:
@@ -107,7 +114,7 @@ def central_building(L: Level) -> None:
 
 def blocks(L: Level) -> None:
     """The east block's garage and workshop (and, turned about, the west block's): one storey
-    with a roof you reach by a ramp from the north street. x 24..38, z -12..12."""
+    with a roof you reach by a ramp from the north street. x 24..38, z -12..12 (before `BX`)."""
     wall = "brick"
     t = 0.4
     top = WALL_TOP
@@ -149,125 +156,172 @@ def blocks(L: Level) -> None:
 def perimeter(L: Level) -> None:
     """Tall walls closing the Map, with complete MegaKit buildings on the skyline."""
     wall = "brick"
-    L.block(wall, -41.0, 41.0, 0.0, 14.0, -37.0, -34.0)  # north
-    L.block(wall, -41.0, 41.0, 0.0, 14.0, 34.0, 37.0)  # south
-    L.block(wall, -41.0, -38.0, 0.0, 14.0, -34.0, 34.0)  # west
-    L.block(wall, 38.0, 41.0, 0.0, 14.0, -34.0, 34.0)  # east
+    L.block(wall, -HX - 3, HX + 3, 0.0, 14.0, -HZ - 3, -HZ)  # north
+    L.block(wall, -HX - 3, HX + 3, 0.0, 14.0, HZ, HZ + 3)  # south
+    L.block(wall, -HX - 3, -HX, 0.0, 14.0, -HZ, HZ)  # west
+    L.block(wall, HX, HX + 3, 0.0, 14.0, -HZ, HZ)  # east
     # Skyline: complete buildings along the north and west edges (the mirror gives the south
     # and east), fronts on the playable side.
     with L.mirrored():
-        L.building("Building_Large_2", -14.0, -34.0, 0.0)
-        L.building("Building_Small_1", 6.0, -34.0, 0.0)
-        L.building("Building_Medium_2_001", 26.0, -34.0, 0.0)
-        L.building("Building_Small_1", -38.0, -24.0, 90.0)
-        L.building("Building_Medium_2_001", -38.0, 20.0, 90.0)
-    # Fronts of the blocks' outer sides and the end walls of the streets.
-    return
+        L.building("Building_Large_2", -34.0, -HZ, 0.0)
+        L.building("Building_Medium_2_001", -12.0, -HZ, 0.0)
+        L.building("Building_Small_1", 8.0, -HZ, 0.0)
+        L.building("Building_Large_2", 32.0, -HZ, 0.0)
+        L.building("Building_Small_1", -HX, -44.0, 90.0)
+        L.building("Building_Large_2", -HX, -14.0, 90.0)
+        L.building("Building_Medium_2_001", -HX, 14.0, 90.0)
+        L.building("Building_Medium_2_001", -HX, 40.0, 90.0)
 
 
 def street(L: Level) -> None:
     """Ground, asphalt tiles, road markings and street furniture."""
-    L.floor("concrete", -38.0, 38.0, -34.0, 34.0, 0.0)
+    L.floor("concrete", -HX, HX, -HZ, HZ, 0.0)
     asphalt = "Street_Asphalt_6x6"
+    # The tile's base is its surface: 1 cm over the floor, decals 1 cm over the tile.
+    for i in range(15):  # the north and south streets
+        for z in (-40.0 - DZ, -34.0 - DZ, 34.0 + DZ, 40.0 + DZ):
+            L.prop(asphalt, -42.0 + 6.0 * i, z, 0.0, 0.01)
+    for x in (-27.0, -21.0, -15.0, 15.0, 21.0, 27.0):  # the lanes
+        for j in range(14):
+            L.prop(asphalt, x, -39.0 + 6.0 * j, 0.0, 0.01)
     with L.mirrored():
-        for i in range(12):  # north street, z -24..-12
-            for j in range(2):
-                L.prop(asphalt, -33.0 + 6.0 * i, -21.0 + 6.0 * j, 0.0, 0.16)
-        for i in range(2):  # west lane, z -12..0 (the mirror gives the other half and the east lane)
-            for j in range(2):
-                L.prop(asphalt, -21.0 + 6.0 * i, -9.0 + 6.0 * j, 0.0, 0.16)
-        # Road markings.
-        for i in range(12):
-            L.prop("Decal_DoubleYellow_Straight", -33.0 + 6.0 * i, -18.0, 0.0, 0.16)
-        L.prop("Decal_Crosswalk", -6.0, -13.0, 90.0, 0.16)
-        L.prop("Decal_Crosswalk", -18.0, -13.0, 90.0, 0.16)
-        L.prop("Decal_ArrowStraight", -18.0, -6.0, 0.0, 0.16)
+        for i in range(15):
+            L.prop("Decal_DoubleYellow_Straight", -42.0 + 6.0 * i, -37.0 - DZ, 0.0, 0.02)
+        for x in (-21.0, 21.0):
+            L.prop("Decal_Crosswalk", x, -29.0 - DZ, 90.0, 0.02)
+            L.prop("Decal_ArrowStraight", x, -28.0, 0.0, 0.02)
+            L.prop("Decal_ArrowStraight", x, -14.0, 0.0, 0.02)
         # Street furniture.
-        L.prop("Prop_ManholeCover", -8.0, -21.0, 0.0, 0.17)
-        L.prop("Prop_ManholeCover", -18.0, -2.0, 0.0, 0.17)
-        L.prop("Prop_Drain", -23.4, -14.6, 0.0, 0.17)
-        for x in (-34.0, -30.0):
-            L.prop("Prop_Planter_Single", x, -30.5, 0.0, 0.0, "box")
-        for x in (-12.0, 12.0):
-            L.prop("Prop_Planter_Single", x, -30.5, 0.0, 0.0, "box")
+        L.prop("Prop_ManholeCover", -8.0, -37.0 - DZ, 0.0, 0.02)
+        L.prop("Prop_ManholeCover", -21.0, -3.0, 0.0, 0.02)
+        L.prop("Prop_Drain", -23.4, -31.6 - DZ, 0.0, 0.02)
+        L.prop("Prop_Drain", 27.4, -14.6, 0.0, 0.02)
+        for x in (-42.0, -38.0, -14.0, 14.0, 38.0, 42.0):
+            L.prop("Prop_Planter_Single", x, -HZ + 1.5, 0.0, 0.0, "box")
         for x in (-11.0, -9.0):
             L.prop("Prop_Bollard", x, -12.5, 0.0, 0.0, "box")
 
 
 def cover(L: Level) -> None:
-    """Vehicles and barriers: the cover that breaks the long sightlines."""
+    """Vehicles and barriers: the cover that breaks the long sightlines. Everything here is the
+    north half (the mirror makes the south half)."""
     with L.mirrored():
-        # North street (the mirror makes the south street).
-        L.car(-30.0, -19.5, 0.0)
-        L.car(-26.0, -16.5, 0.25, "corrugated")
-        L.van(-4.5, -21.0, 0.0)
+        # North street and Alpha's plaza, DZ further out than the lanes' ends.
+        with L.shifted(0.0, -DZ):
+            L.car(-40.0, -40.5, 0.0)
+            L.car(-35.0, -35.5, 0.25, "corrugated")
+            L.van(-24.0, -38.0, 0.0)
+            L.jersey(-30.0, -32.5, 0.0, 3.0)
+            L.jersey(-27.0, -32.5, 0.0, 3.0)
+            L.car(-10.0, -35.0, 0.0)
+            L.van(14.0, -36.0, 0.0, "metal")
+            L.car(26.0, -41.0, math.pi / 2)
+            L.car(34.0, -35.0, 0.0, "corrugated")
+            L.jersey(40.0, -32.5, 0.0, 3.0)
+            L.dumpster(43.0, -41.0, 0.0)
+            # North plaza (Alpha's spawn).
+            L.jersey(-9.0, -43.0, 0.0, 3.0)
+            L.jersey(9.0, -43.0, 0.0, 3.0)
+            L.crate(-24.0, -49.0, 1.2)
+            L.crate(-22.7, -49.2, 1.0)
+            L.crate(24.0, -47.0, 1.0)
+            L.dumpster(-19.0, -50.5, 0.0)
+            L.dumpster(18.0, -50.5, 0.0)
+            L.crate(-38.0, -48.0, 1.2)
+            L.jersey(-6.0, -30.0, 0.0, 3.0)
+            L.jersey(6.0, -29.0, 0.0, 3.0)
+        # The lanes' far ends and the central plaza in front of the hall (z -42..-30).
+        L.van(-22.0, -36.0, math.pi / 2)
+        L.jersey(-28.0, -40.0, 0.0, 3.0)
+        L.car(-14.0, -38.0, 0.4, "corrugated")
+        L.crate(-30.0, -34.0, 1.2)
+        L.crate(-28.7, -34.2, 1.0)
+        L.car(24.0, -37.0, math.pi / 2)
+        L.jersey(16.0, -34.0, 0.0, 3.0)
+        L.dumpster(30.0, -40.0, 0.0)
+        L.van(20.0, -42.0, 0.0, "metal")
+        L.jersey(-4.0, -36.0, 0.0, 3.0)
+        L.jersey(5.0, -41.0, 0.0, 3.0)
+        L.crate(0.0, -32.0, 1.2)
+        # North half of the central plaza, in front of the hall.
+        L.van(-5.0, -22.0, 0.0)
         L.car(7.5, -15.5, 0.0)
-        L.jersey(-18.0, -13.0, 0.0, 3.0)
-        L.jersey(-21.0, -13.0, 0.0, 3.0)
-        L.jersey(14.5, -13.0, 0.0, 3.0)
-        L.dumpster(34.0, -22.0, 0.0)
-        L.car(22.0, -22.0, math.pi / 2)
-        # North plaza (Alpha's spawn).
-        L.jersey(-6.0, -28.0, 0.0, 3.0)
-        L.jersey(6.0, -28.0, 0.0, 3.0)
-        L.crate(-24.0, -31.0, 1.2)
-        L.crate(-22.7, -31.2, 1.0)
-        L.crate(24.0, -29.0, 1.0)
-        L.dumpster(-14.0, -32.5, 0.0)
-        # Lanes: a van across each lane's middle, barriers, lamps.
-        L.van(-16.0, 1.0, 0.0)
-        L.jersey(-21.5, 5.5, math.pi / 2, 3.0)
-        L.jersey(-12.5, -5.5, math.pi / 2, 3.0)
-        L.crate(-22.5, -7.0, 1.2)
-        L.crate(-22.5, -5.8, 1.0)
-        for x, z in ((-23.0, -11.0), (-11.0, 7.0), (-36.0, -23.0), (-12.0, -23.0), (12.0, -23.0), (36.0, -23.0)):
+        L.crate(0.0, -26.0, 1.2)
+        L.crate(1.3, -26.2, 1.0)
+        # West lane, north end: a van across the lane, barriers at its mouth, crates and a car.
+        L.van(-18.0, -19.0, math.pi / 2)
+        L.jersey(-14.0, -26.0, math.pi / 2, 3.0)
+        L.car(-28.0, -14.0, 0.3)
+        L.crate(-30.0, -28.0, 1.2)
+        L.crate(-28.7, -28.2, 1.0)
+        L.dumpster(-12.0, -31.0, 0.0)
+        L.jersey(-24.0, -10.5, 0.0, 3.0)
+        L.jersey(-27.0, -10.5, 0.0, 3.0)
+        # West lane, middle: a van across its middle, barriers, crates.
+        L.van(-20.0, 2.0, 0.0)
+        L.jersey(-26.0, 6.0, math.pi / 2, 3.0)
+        L.jersey(-14.0, -5.5, math.pi / 2, 3.0)
+        L.crate(-27.0, -6.0, 1.2)
+        L.crate(-27.0, -4.8, 1.0)
+        # East lane, north end (and the west lane's south end by the mirror).
+        L.car(14.0, -19.0, math.pi / 2)
+        L.van(26.0, -26.0, 0.0, "metal")
+        L.jersey(28.0, -16.0, math.pi / 2, 3.0)
+        L.dumpster(30.0, -30.0, 0.0)
+        L.crate(18.0, -30.0, 1.2)
+        L.crate(19.3, -30.2, 1.0)
+        L.car(14.0, -27.0, 0.2, "corrugated")
+        L.jersey(26.0, -9.0, 0.0, 3.0)
+        L.crate(12.0, -10.0, 1.2)
+        for x, z in ((-42.0, -41.0), (-22.0, -41.0), (-12.0, -18.0), (12.0, -26.0), (-30.0, -8.0), (30.0, -41.0), (-6.0, -57.0)):
             L.lamp(x, z)
 
 
 def entities(L: Level) -> None:
     centre = (0.0, 0.0)
     # Team Deathmatch and the objective modes: Alpha spawns north, Bravo south.
-    alpha = [(-12.0, -32.0), (-6.0, -30.0), (0.0, -32.0), (6.0, -30.0), (12.0, -32.0), (0.0, -27.0)]
+    alpha = [(-12.0, -60.0), (-6.0, -58.0), (0.0, -60.0), (6.0, -58.0), (12.0, -60.0), (0.0, -55.0)]
     for team, sign in (("alpha", -1.0), ("bravo", 1.0)):
         for x, z in alpha:
             # Alpha faces south from the north; Bravo is the same spot turned about the centre.
             L.spawn(team, "tdm dom hq sd", x if sign < 0 else -x, z if sign < 0 else -z, centre)
     # Free-for-all (a later Game Mode): spread over the street ends and lanes.
-    for x, z in [(-34.0, -19.0), (34.0, 19.0), (-34.0, 19.0), (34.0, -19.0), (-18.0, 0.0), (18.0, 0.0), (0.0, -31.0), (0.0, 31.0)]:
+    for x, z in [(-42.0, -40.0), (42.0, 40.0), (-42.0, 40.0), (42.0, -40.0), (-21.0, 0.0), (21.0, 0.0), (0.0, -58.0), (0.0, 58.0)]:
         L.spawn("any", "ffa", x, z, centre)
     # Domination: A on Alpha's side, B in the central hall, C on Bravo's side.
-    L.flag("A", -19.0, -18.0)
+    L.flag("A", -21.0, -32.0)
     L.flag("B", 0.0, 0.0)
-    L.flag("C", 19.0, 18.0)
-    # Headquarters: both lanes and the hall.
-    L.hq(-17.0, 4.5)
-    L.hq(17.0, -4.5)
+    L.flag("C", 21.0, 32.0)
+    # Headquarters: the hall and the two far lane ends.
     L.hq(0.0, 3.0)
+    L.hq(-24.0, 22.0)
+    L.hq(24.0, -22.0)
     # Search & Destroy: one site in each flanking block.
-    L.bomb("A", -31.0, -5.0)
-    L.bomb("B", 31.0, 5.0)
+    L.bomb("A", -39.0, -5.0)
+    L.bomb("B", 39.0, 5.0)
 
 
 def dress(L: Level) -> None:
     """MegaKit facades, door leaves and roof props on top of the blockout."""
     brick = ["Brick_Plain_3", "Brick_Plain_3_noWear"]
     with L.mirrored():
-        # East block: lane face and the street faces.
-        lane_side = [door(-9.0, -5.0, 2.8), window(-3.8, -1.8), window(1.5, 3.5), door(5.5, 7.0), window(8.5, 10.3)]
-        # Facing the lane (west): z runs along the face.
-        L.facade(brick, "x", 24.0, -12.0, 12.0, lane_side, 0.0, -1)
-        north_side = [window(26.0, 27.8), window(32.0, 33.4), door(34.0, 35.5)]
-        L.facade(brick, "z", -12.0, 24.0, 38.0, north_side, 0.0, -1)
+        with L.shifted(BX, 0.0):
+            # East block: lane face and the street faces.
+            lane_side = [door(-9.0, -5.0, 2.8), window(-3.8, -1.8), window(1.5, 3.5), door(5.5, 7.0), window(8.5, 10.3)]
+            # Facing the lane (west): z runs along the face.
+            L.facade(brick, "x", 24.0, -12.0, 12.0, lane_side, 0.0, -1)
+            north_side = [window(26.0, 27.8), window(32.0, 33.4), door(34.0, 35.5)]
+            L.facade(brick, "z", -12.0, 24.0, 38.0, north_side, 0.0, -1)
+            # Roof props: AC units are cover-sized.
+            L.prop("Prop_ACUnit", 32.0, 9.0, 0.0, STOREY, "box")
+            L.prop("Prop_ACUnit", 27.0, -9.0, 180.0, STOREY, "box")
         # Central building: the hall's north face and the side faces.
         north_gf = [door(-1.4, 1.4), window(-8.0, -6.2), window(6.2, 8.0)]
         L.facade(["Trim_Plain_3", "Brick_Plain_3"], "z", -8.0, -10.0, 10.0, north_gf, 0.0, -1)
         west_gf = [door(-5.5, -4.0), window(2.5, 4.3)]
         L.facade(["Trim_Plain_3", "Brick_Plain_3"], "x", -10.0, -8.0, 8.0, west_gf, 0.0, -1)
-        # Roof props: AC units are cover-sized.
-        L.prop("Prop_ACUnit", 5.0, 1.2, 0.0, ROOF + 0.0, "box")
+        L.prop("Prop_ACUnit", 5.0, 1.2, 0.0, ROOF, "box")
         L.prop("Prop_ACUnit", -2.0, -6.8, 180.0, ROOF, "box")
-        L.prop("Prop_ACUnit", 32.0, 9.0, 0.0, STOREY, "box")
-        L.prop("Prop_ACUnit", 27.0, -9.0, 180.0, STOREY, "box")
 
 
 def build() -> Level:
@@ -275,7 +329,8 @@ def build() -> Level:
     street(L)
     perimeter(L)
     central_building(L)
-    blocks(L)
+    with L.shifted(BX, 0.0):
+        blocks(L)
     cover(L)
     dress(L)
     entities(L)
@@ -288,20 +343,24 @@ if __name__ == "__main__":
     if "--check" in sys.argv:
         from kit import check_walkability
 
-        starts = [(0.0, -30.0), (0.0, 30.0)]
+        starts = [(0.0, -58.0), (0.0, 58.0)]
         goals = {
-            "flag A": (-19.0, -18.0),
+            "flag A": (-21.0, -32.0),
             "flag B": (0.0, 0.0),
-            "flag C": (19.0, 18.0),
-            "HQ W": (-17.0, 4.5),
-            "HQ E": (17.0, -4.5),
-            "bomb A": (-31.0, -5.0),
-            "bomb B": (31.0, 5.0),
+            "flag C": (21.0, 32.0),
+            "HQ hall": (0.0, 3.0),
+            "HQ W": (-24.0, 22.0),
+            "HQ E": (24.0, -22.0),
+            "bomb A": (-39.0, -5.0),
+            "bomb B": (39.0, 5.0),
             "hall 2F": (0.0, STOREY, -3.0),
             "roof": (0.0, ROOF, 0.0),
         }
         tour = [
-            (0.0, -30.0), goals["flag A"], goals["HQ W"], goals["bomb A"], goals["flag B"], goals["hall 2F"],
-            goals["roof"], goals["flag C"], goals["bomb B"], goals["HQ E"], (0.0, 30.0),
+            (0.0, -58.0), goals["flag A"], goals["HQ E"], goals["bomb B"], goals["flag B"], goals["hall 2F"],
+            goals["roof"], goals["HQ W"], goals["flag C"], goals["bomb A"], (0.0, 58.0),
         ]
-        check_walkability(level, (-41.0, 41.0, -37.0, 37.0), starts, goals, image=Path("/tmp/crossroads_nav.ppm"), tour=tour, route_out=Path("/tmp/crossroads.route"))
+        check_walkability(
+            level, (-HX - 1, HX + 1, -HZ - 1, HZ + 1), starts, goals, image=Path("/tmp/crossroads_nav.ppm"), tour=tour,
+            route_out=Path("/tmp/crossroads.route"), walk_range=(110.0, 140.0),
+        )

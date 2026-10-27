@@ -241,6 +241,69 @@ def import_model(archive: zipfile.ZipFile, name: str, out: Path, embed: bool, ma
     return len(glb)
 
 
+def model_bounds(gltf: Gltf) -> tuple[list[float], list[float]]:
+    """The model's axis-aligned bounds in its own space (glTF, y up, metres): the POSITION
+    accessors' min/max of every mesh in the default scene, through the node transforms."""
+    document = gltf.document
+
+    def matrix_of(node: dict) -> list[list[float]]:
+        if "matrix" in node:
+            m = node["matrix"]  # column-major
+            return [[m[c * 4 + r] for c in range(4)] for r in range(4)]
+        tx, ty, tz = node.get("translation", [0.0, 0.0, 0.0])
+        qx, qy, qz, qw = node.get("rotation", [0.0, 0.0, 0.0, 1.0])
+        sx, sy, sz = node.get("scale", [1.0, 1.0, 1.0])
+        rot = [
+            [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)],
+            [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
+            [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)],
+        ]
+        return [
+            [rot[0][0] * sx, rot[0][1] * sy, rot[0][2] * sz, tx],
+            [rot[1][0] * sx, rot[1][1] * sy, rot[1][2] * sz, ty],
+            [rot[2][0] * sx, rot[2][1] * sy, rot[2][2] * sz, tz],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+
+    def multiply(a, b):
+        return [[sum(a[r][k] * b[k][c] for k in range(4)) for c in range(4)] for r in range(4)]
+
+    low, high = [float("inf")] * 3, [float("-inf")] * 3
+
+    def visit(index: int, parent) -> None:
+        node = document["nodes"][index]
+        world = multiply(parent, matrix_of(node))
+        if "mesh" in node:
+            for primitive in document["meshes"][node["mesh"]]["primitives"]:
+                accessor = document["accessors"][primitive["attributes"]["POSITION"]]
+                for corner in range(8):
+                    point = [accessor["max" if corner >> axis & 1 else "min"][axis] for axis in range(3)] + [1.0]
+                    for axis in range(3):
+                        value = sum(world[axis][k] * point[k] for k in range(4))
+                        low[axis] = min(low[axis], value)
+                        high[axis] = max(high[axis], value)
+        for child in node.get("children", []):
+            visit(child, world)
+
+    identity = [[1.0 if r == c else 0.0 for c in range(4)] for r in range(4)]
+    scene = document["scenes"][document.get("scene", 0)]
+    for root in scene["nodes"]:
+        visit(root, identity)
+    return low, high
+
+
+def write_bounds(out: Path) -> None:
+    """`bounds.json` next to the pack's .glb files: {name: {"min": [x, y, z], "max": [x, y, z]}}.
+    The map generators (tools/mapgen/kit.py) place a prop by its bottom with it, so a model whose
+    origin is not at its base doesn't float or sink."""
+    bounds = {}
+    for path in sorted(out.glob("*.glb")):
+        low, high = model_bounds(read_glb(path.read_bytes()))
+        bounds[path.stem] = {"min": [round(v, 4) for v in low], "max": [round(v, 4) for v in high]}
+    (out / "bounds.json").write_text(json.dumps(bounds, indent=1) + "\n", encoding="utf-8")
+    print(f"bounds of {len(bounds)} models -> {out / 'bounds.json'}")
+
+
 def models_in_maps(paths: list[str], pack: str, prefix: str) -> list[str]:
     pattern = re.compile(rf'"model"\s+"{re.escape(prefix)}/{re.escape(pack)}/([^"/]+)\.glb"')
     names: set[str] = set()
@@ -251,7 +314,7 @@ def models_in_maps(paths: list[str], pack: str, prefix: str) -> list[str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--zip", required=True, type=Path, help="the asset pack zip")
+    parser.add_argument("--zip", type=Path, help="the asset pack zip (not needed with --bounds-only)")
     parser.add_argument("--pack", required=True, help="folder name under assets/models/")
     parser.add_argument("--max-texture", type=int, default=1024, help="longest texture side in px")
     parser.add_argument("--embed", action="store_true", help="embed textures in each .glb")
@@ -260,7 +323,14 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=MODELS_DIR, help="models folder")
     parser.add_argument("--prefix", default="models", help="what --from-maps model paths start with (private://models for a private folder)")
     parser.add_argument("pieces", nargs="*", help="model names (file stem) to import")
+    parser.add_argument("--bounds-only", action="store_true", help="only rewrite <pack>/bounds.json from the .glb files already there")
     args = parser.parse_args()
+
+    if args.bounds_only:
+        write_bounds(args.out / args.pack)
+        return
+    if args.zip is None:
+        sys.exit("--zip is required unless --bounds-only")
 
     names = list(args.pieces)
     if args.from_maps:
@@ -279,6 +349,7 @@ def main() -> None:
             total += import_model(archive, name, out, args.embed, args.max_texture)
     textures = sum(f.stat().st_size for f in (out / "textures").glob("*")) if (out / "textures").exists() else 0
     print(f"{len(names)} models, {total / 1e6:.1f} MB of .glb + {textures / 1e6:.1f} MB shared textures -> {out}")
+    write_bounds(out)
 
 
 if __name__ == "__main__":

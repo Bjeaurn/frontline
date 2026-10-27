@@ -22,7 +22,7 @@ cargo run -- --host --map arena                          # Host on a given Map (
 cargo run -- --host --look night_ops                     # Host with another look preset (dev/test)
 ```
 
-Servers listen on UDP 5000 (`--port <n>` changes it; it's also the port HOST GAME uses). Every server answers LAN discovery on UDP 5001; a second server on the same machine can't take that port, so it logs a warning and only shows up when joined by IP. `--name` sets your player name for this run (overriding Settings) or a Dedicated Server's name in the browser. `--rules <preset>` picks the Match Rules preset a server (Dedicated, or Host) runs, from `data/match_rules.ron`: `default` unless given, or `hardcore` (30 HP, no regen, friendly fire, no crosshair, hitmarkers or damage direction, kill feed 6 s late). An unknown name stops it at startup with the list of presets. Clients take the HUD settings of that preset from their own copy of the file. For faster rebuilds during development, add `--features dev` (dynamic linking).
+Servers listen on UDP 5000 (`--port <n>` changes it; it's also the port HOST GAME uses). Every server answers LAN discovery on UDP 5001; a second server on the same machine can't take that port, so it logs a warning and only shows up when joined by IP. `--name` sets your player name for this run (overriding Settings) or a Dedicated Server's name in the browser. `--rules <preset>` picks the Match Rules set a server (Dedicated, or Host) runs: `default` unless given, `hardcore` (30 HP, no regen, friendly fire, no crosshair, hitmarkers or damage direction, kill feed 6 s late), or one of your custom sets (Match Rules, below). An unknown name stops it at startup with the list of sets. The server sends the rule *values* to every client with the Match state, so a client needs neither the preset file nor your custom set. For faster rebuilds during development, add `--features dev` (dynamic linking).
 
 Settings (name, mouse sensitivity, field of view, master volume) are saved to `<config dir>/frontline/settings.ron`: `~/Library/Application Support/` on macOS, `~/.config/` on Linux, `%APPDATA%` on Windows. The Profile (custom Loadouts and the chosen Loadout) is saved next to it as `profile.ron`.
 
@@ -54,7 +54,11 @@ Every Match runs one Game Mode (`data/game_modes.ron`; every number below is dat
 
 ### Host setup
 
-HOST GAME opens a setup screen: server name, max players, the Rotation (pick a Map, a Game Mode the Map supports and a Match Rules preset, ADD; reorder or remove entries), per-mode score and time limits (in Search & Destroy: rounds to win and minutes per round), then START. Your choices are saved with Settings. `--host` skips the screen and plays the `--map`/`--mode`/`--rules` entry.
+HOST GAME opens a setup screen: server name, max players, the Rotation, per-mode score and time limits (in Search & Destroy: rounds to win and minutes per round), then START. The Rotation is a table under the column headers MAP / MODE / RULES: each entry is a row and each cell a picker that shows its current value between ◀ ▶ arrows (a Map that lacks the entry's Game Mode brings its first one); `^` `v` reorder a row and `X` removes it; ADD ENTRY copies the last entry (up to 8). MATCH RULES opens the rules editor and returns to the same setup. Score limits step by 5 points (Search & Destroy: whole rounds), time limits by a minute. Your choices are saved with Settings. `--host` skips the screen and plays the `--map`/`--mode`/`--rules` entry.
+
+### Match Rules
+
+The built-in presets (`default`, `hardcore`, from `data/match_rules.ron`) are read-only starting points. The rules editor (SETTINGS > CUSTOM RULE SETS, or MATCH RULES on the Host setup screen) lists them with your own sets: select one, type a name (or leave it empty for `<set> copy`) and COPY SELECTED makes a custom set, which you edit field by field: max health, health regen on/off with its delay and rate, respawn delay and the earliest early respawn, damage scale, friendly fire, where fall damage starts and where it is lethal, every HUD toggle (crosshair, hitmarkers, kill hitmarker, kill feed, damage direction, name tags) and the kill feed delay. DONE saves your sets to `<config dir>/frontline/rules.ron`; BACK (or Esc) discards the edits. Custom sets then appear in the Rotation's RULES column next to the presets. A Match's rule values travel to the clients in `MatchState`, so only the Host needs the file; a Dedicated Server reads its own `rules.ron`.
 
 ## Controls
 
@@ -168,7 +172,7 @@ Brushes in worldspawn or any brush entity (`func_group`, `func_generic`) become 
 
 ### Generated maps
 
-`tools/mapgen/` is a small Python 3 library (no dependencies) that writes Valve 220 `.map` text from layouts in game space (metres, y up): boxes, turned boxes, ramps (`wedge`) and entities. `kit.py` builds on it with a `Level` (walls with door and window gaps, slabs with stairwell holes, ramps, vehicle and barrier blockouts, `prop` entities, optional 180-degree mirroring) and a walkability checker (`--check`) that flood-fills the floor on foot to find unreachable objectives, trapped spots and closed-off pockets without launching the game. `arena.py` describes the arena and `crossroads.py` the Remix Map Crossroads (an original urban layout: three lanes, a two-storey building in the middle, about 12 s to cross); regenerate them with:
+`tools/mapgen/` is a small Python 3 library (no dependencies) that writes Valve 220 `.map` text from layouts in game space (metres, y up): boxes, turned boxes, ramps (`wedge`) and entities. `kit.py` builds on it with a `Level` (walls with door and window gaps, slabs with stairwell holes, ramps, vehicle and barrier blockouts, `prop` entities, optional 180-degree mirroring, and `shifted(dx, dz)` to move a part of a layout apart from the rest) and a walkability checker (`--check`) that flood-fills the floor on foot to find unreachable objectives, trapped spots and closed-off pockets without launching the game. The same check measures the playable extents and the longest spawn-to-spawn walk (shortest on-foot path of each Alpha-Bravo pair, longest pair; at 5.5 m/s a 22 s crossing is ~120 m), fails when that is outside the size a Map is meant to have, and flags floating geometry (brushes not attached to the ground, props with nothing under their base). Writing a Map also fails when objectives sit too close: HQ sites and bomb sites 30 m apart, Domination Flags 25 m. Maps are spread out rather than scaled up (players stay real size): buildings and props keep their size, the gaps and yards between them grow, and the new space gets cover. Walk lengths now: Arena 115 m, Crossroads 130 m, Backlot 119 m, Vacant 112 m. `arena.py` describes the arena and `crossroads.py` the Remix Map Crossroads (an original urban layout: three lanes, a two-storey building in the middle, ~22 s to cross); regenerate them with:
 
 ```sh
 python3 tools/mapgen/arena.py                # writes crates/frontline/assets/maps/arena.map
@@ -179,7 +183,7 @@ Generated maps stay editable in TrenchBroom, but regenerating overwrites hand ed
 
 ### Props
 
-Props are glTF models from the CC0 Downtown City MegaKit (Quaternius), processed into one `.glb` each (textures at most 1024 px, shared ones in `models/downtown/textures/`) under `crates/frontline/assets/models/downtown/`; credits in `assets/models/CREDITS.md`. The raw pack stays in the git-ignored `content/assets/`. `tools/assets/import_props.py` picks the pieces out of the zip, and with `--from-maps` imports exactly the ones the maps use:
+Props are glTF models from the CC0 Downtown City MegaKit (Quaternius), processed into one `.glb` each (textures at most 1024 px, shared ones in `models/downtown/textures/`) under `crates/frontline/assets/models/downtown/`; credits in `assets/models/CREDITS.md`. The raw pack stays in the git-ignored `content/assets/`. `tools/assets/import_props.py` picks the pieces out of the zip, writes each pack's `bounds.json` (the model bounds the generators place by: `Level.prop(..., y)` puts a model's *base* at `y`, wherever its origin is; `--bounds-only` rewrites it from the `.glb` files already there), and with `--from-maps` imports exactly the ones the maps use:
 
 ```sh
 python3 tools/assets/import_props.py --zip "content/assets/Downtown City MegaKit[Standard].zip" \
@@ -191,12 +195,13 @@ The kit has no vehicles, barriers or lamp posts, so the generators build those a
 ## Layout
 
 - `crates/frontline/src/flow.rs`: screen states (main menu, in game, overlays), flow commands, Settings file
-- `crates/frontline/src/menus/`: title, Host setup, Server Browser, Connecting, Pause and Settings screens
+- `crates/frontline/src/menus/`: title, Host setup, Server Browser, Connecting, Pause, Settings and Match Rules editor screens
 - `crates/frontline/src/ui/`: shared menu look: fonts, palette, buttons, panels, sliders, text fields
 - `crates/frontline/src/match_hud/`: team select (Faction cards), top-centre score with Faction emblems, the objective HUD, Tab Scoreboard and end screen, friendly name tags
 - `crates/frontline/src/combat/`: server-side shots, per-Hit-Zone hitboxes, damage, health/regen, death and respawn, spawn selection, the Match flow (Rotation, scores, end) and the Bevy systems of the objective modes (`mode_systems.rs`)
 - `crates/frontline/src/modes/`: pure, unit-tested rules of Domination, Headquarters and Search & Destroy (capture, scoring, rounds), the replicated `ModeView`, and the client visuals (zone rings, markers, explosion, spectating)
 - `crates/frontline/src/rotation.rs`: Rotation entries, the server's `ServerConfig` and the Host setup that Settings remembers
+- `crates/frontline/src/rules.rs`: Custom Match Rules: the `rules.ron` file, validation, naming, merging the custom sets into `GameData` (unit-tested)
 - `crates/frontline/src/data.rs`: loads the `data/*.ron` tuning files
 - `crates/frontline/src/net/`: lightyear protocol, server, client, Host/Join/Leave sessions, LAN discovery
 - `crates/frontline/src/player/`: first-person controller, input bindings, damage/kill-feed/death HUD, remote player visuals and their bodies
@@ -213,7 +218,7 @@ The kit has no vehicles, barriers or lamp posts, so the generators build those a
 - `crates/frontline/src/assets.rs`: files embedded in the binary (faction emblems, camo textures, surface textures; CC0 credits in `assets/textures/CREDITS.md`)
 - `tools/mapgen/`: Python generator for `.map` files (the arena, Crossroads) and its building kit
 - `tools/camos/`: generates the weapon camo textures (`camos.py`, Pillow only)
-- `tools/assets/`: imports prop models from raw asset packs (`import_props.py`)
+- `tools/assets/`: imports prop models from raw asset packs (`import_props.py`, also their `bounds.json`)
 - `crates/frontline/src/shared.rs`: pose and stance types shared by netcode and gameplay
 
 Private content such as Homage Maps lives in the separate private repo `Bjeaurn/frontline-private`, cloned into the git-ignored `content/private/` (see `docs/adr/0003`):

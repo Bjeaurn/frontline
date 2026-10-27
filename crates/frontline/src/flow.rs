@@ -43,6 +43,8 @@ pub enum MenuScreen {
     HostSetup,
     ServerBrowser,
     Settings,
+    /// The Custom Match Rules editor, opened from Settings or Host setup.
+    Rules,
 }
 
 /// Full-screen panel shown over the game. While it isn't `None`, the cursor is free and
@@ -58,6 +60,8 @@ pub enum Overlay {
     ClassEditor,
     Pause,
     Settings,
+    /// The Custom Match Rules editor, opened from the Settings over the game.
+    Rules,
 }
 
 /// Requests that change what this process is doing; the flow owner reacts to them.

@@ -4,7 +4,7 @@ use avian3d::prelude::PhysicsLayer;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::data::GameModeId;
+use crate::data::{GameModeId, MatchRules};
 use crate::maps::MapId;
 
 /// Body posture; changes speed, eye height and hitbox height.
@@ -116,8 +116,11 @@ pub struct MatchState {
     pub mode: GameModeId,
     /// The Map being played; every process loads it (`maps`).
     pub map: MapId,
-    /// Name of the Match Rules preset in effect; clients look it up in their own `GameData`.
+    /// Name of the Match Rules set in effect (a built-in preset or a Host's custom set), for
+    /// display.
     pub rules: String,
+    /// The set's values themselves, so a client needs no file that defines a custom set.
+    pub rule_values: MatchRules,
     /// Team scores, indexed by `Team::index`.
     pub scores: [u32; 2],
     /// Points to win; in Search & Destroy, rounds.

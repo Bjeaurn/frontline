@@ -5,7 +5,6 @@ use lightyear::prelude::*;
 
 use super::health::PendingRespawn;
 use super::hitbox::{Hitboxes, set_hitboxes_enabled};
-use crate::data::GameData;
 use crate::net::LinkPlayer;
 use crate::net::protocol::ChooseTeam;
 use crate::shared::{Health, MatchState, PlayerName, PlayerTeam};
@@ -22,7 +21,6 @@ pub(super) fn choose_teams(
         Has<PendingRespawn>,
     )>,
     state: Single<&MatchState>,
-    data: Res<GameData>,
     time: Res<Time>,
     mut commands: Commands,
 ) {
@@ -53,7 +51,7 @@ pub(super) fn choose_teams(
                 .entity(player.0)
                 .insert(PendingRespawn::after_death(
                     time.elapsed(),
-                    data.rules(&state.rules),
+                    &state.rule_values,
                 ));
         }
     }

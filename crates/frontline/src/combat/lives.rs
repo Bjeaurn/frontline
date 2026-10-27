@@ -49,7 +49,7 @@ pub(super) fn apply_falls(
     time: Res<Time>,
     mut commands: Commands,
 ) {
-    let rules = data.rules(&state.rules);
+    let rules = &state.rule_values;
     for (player, mut receiver) in &mut links {
         for FallDamage { height } in receiver.receive() {
             let Ok((mut health, mut last_damaged, mut stats, name, team, pose, hitboxes)) =

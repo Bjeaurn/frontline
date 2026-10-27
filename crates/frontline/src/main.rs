@@ -19,6 +19,7 @@ mod player;
 mod profile;
 mod progression;
 mod rotation;
+mod rules;
 mod shared;
 mod ui;
 mod weapon;

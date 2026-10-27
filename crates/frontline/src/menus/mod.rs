@@ -1,11 +1,13 @@
-//! The game's own screens, built from `ui`: title, Host setup, Server Browser and Settings in the
-//! main menu; the 'Connecting' panel, Pause and Settings over the game. TeamSelect and Loadout live
-//! with their features (`match_hud`, `loadout`). Client/Host only.
+//! The game's own screens, built from `ui`: title, Host setup, Server Browser, Settings and the
+//! Match Rules editor in the main menu; the 'Connecting' panel, Pause, Settings and the Match
+//! Rules editor over the game. TeamSelect and Loadout live with their features (`match_hud`,
+//! `loadout`). Client/Host only.
 
 mod browser;
 mod connecting;
 mod host_setup;
 mod pause;
+mod rules_editor;
 mod settings;
 mod title;
 
@@ -23,8 +25,10 @@ impl Plugin for MenusPlugin {
             .add_systems(OnEnter(MenuScreen::HostSetup), host_setup::spawn_host_setup)
             .add_systems(OnEnter(MenuScreen::ServerBrowser), browser::spawn_browser)
             .add_systems(OnEnter(MenuScreen::Settings), settings::spawn_menu_settings)
+            .add_systems(OnEnter(MenuScreen::Rules), rules_editor::spawn_menu_rules)
             .add_systems(OnEnter(Overlay::Pause), pause::spawn_pause)
             .add_systems(OnEnter(Overlay::Settings), settings::spawn_overlay_settings)
+            .add_systems(OnEnter(Overlay::Rules), rules_editor::spawn_overlay_rules)
             .add_systems(
                 Update,
                 (
@@ -39,6 +43,14 @@ impl Plugin for MenusPlugin {
                         .chain()
                         .run_if(in_state(MenuScreen::HostSetup))
                         .run_if(resource_exists::<host_setup::Draft>),
+                    (
+                        rules_editor::refresh,
+                        rules_editor::read_sliders,
+                        rules_editor::esc_back,
+                    )
+                        .chain()
+                        .run_if(rules_editor_open)
+                        .run_if(resource_exists::<rules_editor::Editor>),
                     settings::show_readouts,
                     connecting::show_connecting.run_if(in_state(AppState::InGame)),
                 ),
@@ -46,14 +58,26 @@ impl Plugin for MenusPlugin {
     }
 }
 
-/// Esc on a main-menu page goes back to the title.
+/// Esc on a main-menu page goes back to the title (the rules editor steps back to where it
+/// was opened from instead).
 fn back_to_title(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<Bindings>,
     screen: Res<State<MenuScreen>>,
     mut next: ResMut<NextState<MenuScreen>>,
 ) {
-    if *screen.get() != MenuScreen::Title && bindings.pause.just_pressed(&keys) {
+    if !matches!(*screen.get(), MenuScreen::Title | MenuScreen::Rules)
+        && bindings.pause.just_pressed(&keys)
+    {
         next.set(MenuScreen::Title);
     }
+}
+
+/// The Match Rules editor is showing, over the main menu or over the game.
+fn rules_editor_open(
+    menu: Option<Res<State<MenuScreen>>>,
+    overlay: Option<Res<State<Overlay>>>,
+) -> bool {
+    menu.is_some_and(|screen| *screen.get() == MenuScreen::Rules)
+        || overlay.is_some_and(|screen| *screen.get() == Overlay::Rules)
 }

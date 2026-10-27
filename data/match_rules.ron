@@ -1,6 +1,8 @@
 // Match Rules presets (see CONTEXT.md). Read at startup from ./data/ (falls back to the copy
 // built into the binary). Health in HP, times in seconds. A server runs `default` unless
-// started with `--rules <preset>`; clients take the preset's `hud` block from their own copy.
+// started with `--rules <preset>`; the server sends the values to clients in the Match state.
+// Hosts add their own sets in the rules editor (`<config dir>/frontline/rules.ron`); these two
+// presets are the read-only starting points.
 // `respawn_delay_secs` is how long a dead player waits before respawning by themselves;
 // `min_respawn_secs` is how soon they may ask to respawn early (SPACE or click).
 // `fall_damage`: no damage up to `min_height` metres of fall (from the peak), then linear up to

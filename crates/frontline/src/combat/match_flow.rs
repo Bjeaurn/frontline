@@ -52,6 +52,7 @@ fn fresh_match(config: &ServerConfig, data: &GameData) -> MatchState {
         mode: entry.mode,
         map: entry.map.clone(),
         rules: entry.rules.clone(),
+        rule_values: data.rules(&entry.rules).clone(),
         scores: [0; 2],
         score_limit,
         time_limit_secs,

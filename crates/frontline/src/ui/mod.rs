@@ -7,8 +7,10 @@
 //! `commands.spawn(button(&fonts, "Host Game")).observe(|_: On<Activate>, ...| { ... })`
 //! (`bevy::ui_widgets::Activate`; also fires on Enter/Space when the button has focus).
 
+use bevy::asset::RenderAssetUsages;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::text::{EditableText, TextCursorStyle};
 use bevy::ui::Pressed;
 use bevy::ui_widgets::{
@@ -51,7 +53,13 @@ impl Plugin for UiPlugin {
         let bold = fonts.add(Font::from_bytes(
             include_bytes!("../../assets/fonts/Rajdhani-Bold.ttf").to_vec(),
         ));
+        let icon = ArrowIcon(
+            app.world_mut()
+                .resource_mut::<Assets<Image>>()
+                .add(arrow_image()),
+        );
         app.insert_resource(UiFonts { regular, bold })
+            .insert_resource(icon)
             .add_systems(
                 Update,
                 (style_buttons, place_slider_thumbs, banner::animate_banners),
@@ -142,6 +150,78 @@ pub fn compact_button(fonts: &UiFonts, text: &str, min_width: f32, size: f32) ->
             },
             TextColor(TEXT),
         )],
+    )
+}
+
+/// A white triangle pointing left, for the ◀ ▶ arrows of pickers: the menu font has no arrow
+/// glyphs, so they are drawn (and flipped for ▶) as images.
+#[derive(Resource, Clone)]
+pub struct ArrowIcon(Handle<Image>);
+
+/// A square arrow button, ◀ (or ▶ when `right`); styled like [`compact_button`].
+pub fn arrow_button(icon: &ArrowIcon, right: bool) -> impl Bundle {
+    (
+        MenuButton,
+        Button,
+        Hovered::default(),
+        Node {
+            width: px(30.0),
+            height: px(28.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        BackgroundColor(BUTTON),
+        BorderColor::all(Color::NONE),
+        children![(
+            ImageNode {
+                color: TEXT,
+                flip_x: right,
+                ..ImageNode::new(icon.0.clone())
+            },
+            Node {
+                width: px(12.0),
+                height: px(14.0),
+                ..default()
+            },
+        )],
+    )
+}
+
+/// The triangle of [`ArrowIcon`]: apex on the left, 32 x 32 px, edges anti-aliased by 4 x 4
+/// supersampling.
+fn arrow_image() -> Image {
+    const SIZE: u32 = 32;
+    const SAMPLES: u32 = 4;
+    let inside = |x: f32, y: f32| {
+        // Apex (3, 16), base from (29, 3) to (29, 29).
+        let along = (x - 3.0) / 26.0;
+        (0.0..=1.0).contains(&along) && (y - 16.0).abs() <= 13.0 * along
+    };
+    let mut pixels = Vec::with_capacity((SIZE * SIZE * 4) as usize);
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let hits = (0..SAMPLES * SAMPLES)
+                .filter(|s| {
+                    let sx = x as f32 + ((s % SAMPLES) as f32 + 0.5) / SAMPLES as f32;
+                    let sy = y as f32 + ((s / SAMPLES) as f32 + 0.5) / SAMPLES as f32;
+                    inside(sx, sy)
+                })
+                .count();
+            let alpha = (hits as f32 / (SAMPLES * SAMPLES) as f32 * 255.0).round() as u8;
+            pixels.extend_from_slice(&[255, 255, 255, alpha]);
+        }
+    }
+    Image::new(
+        Extent3d {
+            width: SIZE,
+            height: SIZE,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        pixels,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
     )
 }
 

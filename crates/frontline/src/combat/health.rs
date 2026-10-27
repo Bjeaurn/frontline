@@ -92,7 +92,7 @@ pub(super) fn end_life(
     if state.mode != GameModeId::SearchAndDestroy {
         commands.entity(entity).insert(PendingRespawn::after_death(
             time.elapsed(),
-            data.rules(&state.rules),
+            &state.rule_values,
         ));
     }
 }
@@ -158,7 +158,7 @@ pub(super) fn apply_hits(
     time: Res<Time>,
     mut commands: Commands,
 ) {
-    let rules = data.rules(&state.rules);
+    let rules = state.rule_values.clone();
     for hit in hits.read() {
         if !is_live(&state) {
             continue;
@@ -203,7 +203,7 @@ pub(super) fn apply_hits(
             &effects,
             hit.distance,
             hit.zone,
-            rules,
+            &rules,
         );
         let applied = amount.min(health.0);
         health.0 = (health.0 - amount).max(0.0);
@@ -309,10 +309,9 @@ pub(super) fn apply_hits(
 pub(super) fn regenerate(
     mut players: Query<(&mut Health, &LastDamaged)>,
     state: Single<&MatchState>,
-    data: Res<GameData>,
     time: Res<Time>,
 ) {
-    let rules = data.rules(&state.rules);
+    let rules = &state.rule_values;
     let delay = Duration::from_secs_f32(rules.regen_delay_secs);
     for (mut health, last_damaged) in &mut players {
         if health.is_dead()
@@ -351,7 +350,6 @@ pub(super) fn respawn_players(
     runtime: Res<ModeRuntime>,
     spatial: SpatialQuery,
     state: Single<&MatchState>,
-    data: Res<GameData>,
     time: Res<Time>,
     mut commands: Commands,
 ) {
@@ -414,7 +412,7 @@ pub(super) fn respawn_players(
         let Ok((_, mut health, mut pose, ..)) = players.get_mut(entity) else {
             continue;
         };
-        health.0 = data.rules(&state.rules).max_health;
+        health.0 = state.rule_values.max_health;
         // A new life: damage dealt to the old one no longer pays Assists.
         if let Ok(mut ledger) = ledgers.get_mut(entity) {
             ledger.clear();
