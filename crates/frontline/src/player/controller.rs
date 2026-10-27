@@ -1,6 +1,7 @@
 //! First-person kinematic controller for the `LocalPlayer`: mouse look, stances, sprint,
-//! move-and-slide against the loaded Map, landing slowdown, mantling, and server-ordered
-//! respawns. Movement tuning comes from `GameData::movement` (`data/movement.ron`).
+//! move-and-slide against the loaded Map, landing slowdown, mantling, dive to prone, and
+//! server-ordered respawns. Movement tuning comes from `GameData::movement`
+//! (`data/movement.ron`).
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use std::hash::{BuildHasher, RandomState};
@@ -47,6 +48,9 @@ const MANTLE_OVER_START: f32 = 0.35;
 pub const PITCH_LIMIT: f32 = FRAC_PI_2 - 0.01;
 /// How fast the eye height follows stance changes (exponential decay rate, 1/s).
 const EYE_HEIGHT_RATE: f32 = 12.0;
+/// Eye height follows the stance change of a dive at this slower rate (1/s), so the view drops
+/// with the body instead of snapping.
+const DIVE_EYE_HEIGHT_RATE: f32 = 7.0;
 /// Camera dip (metres) and roll (radians) at the middle of a mantle.
 const MANTLE_VIEW_DIP: f32 = 0.08;
 const MANTLE_VIEW_ROLL: f32 = 0.06;
@@ -70,6 +74,9 @@ pub struct Motor {
     /// Seconds since the latest touchdown.
     since_landing: f32,
     mantle: Option<Mantle>,
+    dive: Option<Dive>,
+    /// Seconds left after a dive's recovery during which stance changes stay blocked.
+    getup: f32,
 }
 
 impl Motor {
@@ -83,6 +90,8 @@ impl Motor {
             jump_requested: false,
             since_landing: f32::INFINITY,
             mantle: None,
+            dive: None,
+            getup: 0.0,
         }
     }
 
@@ -129,6 +138,27 @@ impl Motor {
     pub fn mantling(&self) -> bool {
         self.mantle.is_some()
     }
+
+    /// A dive is in progress (lunge or recovery): movement, firing and stance changes are
+    /// locked, the stance is prone, and the weapon should be lowered.
+    pub fn diving(&self) -> bool {
+        self.dive.is_some()
+    }
+
+    /// Starts a dive along the horizontal velocity (or `facing` when standing still): a lunge
+    /// at `dive_speed` with a small hop.
+    fn start_dive(&mut self, facing: Vec3, tuning: &MovementTuning) {
+        let horizontal = Vec3::new(self.velocity.x, 0.0, self.velocity.z);
+        let direction = horizontal.try_normalize().unwrap_or(facing);
+        self.dive = Some(Dive {
+            direction,
+            elapsed: 0.0,
+        });
+        self.sprinting = false;
+        self.grounded = false;
+        let hop = (2.0 * tuning.gravity * tuning.dive_hop_height).sqrt();
+        self.velocity = direction * tuning.dive_speed + Vec3::Y * hop;
+    }
 }
 
 /// An ongoing mantle: the feet travel from `from` up to the ledge height, then over it to `to`.
@@ -161,6 +191,30 @@ impl Mantle {
             horizontal.x,
             self.from.y + (self.to.y - self.from.y) * rise,
             horizontal.z,
+        )
+    }
+}
+
+/// An ongoing dive to prone: a lunge along `direction` (unit, horizontal), then a recovery.
+#[derive(Clone, Copy, Debug)]
+struct Dive {
+    direction: Vec3,
+    elapsed: f32,
+}
+
+impl Dive {
+    /// Advances by `dt`: the horizontal velocity to move at (zero in the recovery) and whether
+    /// the recovery is over.
+    fn advance(&mut self, dt: f32, tuning: &MovementTuning) -> (Vec3, bool) {
+        self.elapsed += dt;
+        let wish = if self.elapsed < tuning.dive_secs {
+            self.direction * tuning.dive_speed
+        } else {
+            Vec3::ZERO
+        };
+        (
+            wish,
+            self.elapsed >= tuning.dive_secs + tuning.dive_recover_secs,
         )
     }
 }
@@ -334,7 +388,9 @@ fn find_ledge(
         return None;
     }
     if let Ok((across, distance)) = Dir3::new_and_length(ledge - raised)
-        && shapes.sweep(spatial, stance, raised, across, distance).is_some()
+        && shapes
+            .sweep(spatial, stance, raised, across, distance)
+            .is_some()
     {
         return None;
     }
@@ -441,8 +497,8 @@ pub(super) fn apply_respawn(
         stance: Stance::Standing,
     };
     *motor = Motor::new(&data.movement);
-    *transform = Transform::from_translation(pose.position)
-        .with_rotation(Quat::from_rotation_y(pose.yaw));
+    *transform =
+        Transform::from_translation(pose.position).with_rotation(Quat::from_rotation_y(pose.yaw));
 }
 
 pub(super) fn mouse_look(
@@ -500,10 +556,12 @@ fn next_stance(
 }
 
 /// Applies stance keys. Taller stances need headroom; Space jumps only when already standing.
-/// Ignored while mantling.
+/// Prone while sprinting dives instead. Ignored while mantling, diving and getting up after a
+/// dive.
 pub(super) fn change_stance(
     captured: Res<MouseCaptured>,
     life: Res<LocalLife>,
+    data: Res<GameData>,
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<Bindings>,
     shapes: Res<StanceShapes>,
@@ -514,7 +572,7 @@ pub(super) fn change_stance(
         return;
     };
     motor.jump_requested = false;
-    if !captured.0 || life.is_dead() || motor.mantling() {
+    if !captured.0 || life.is_dead() || motor.mantling() || motor.diving() || motor.getup > 0.0 {
         return;
     }
 
@@ -530,6 +588,17 @@ pub(super) fn change_stance(
         StanceInput::None
     };
     motor.jump_requested = input == StanceInput::Jump && pose.stance == Stance::Standing;
+
+    if input == StanceInput::Prone
+        && pose.stance == Stance::Standing
+        && motor.sprinting
+        && motor.grounded
+    {
+        let facing = Quat::from_rotation_y(pose.yaw) * Vec3::NEG_Z;
+        motor.start_dive(facing, &data.movement);
+        pose.stance = Stance::Prone;
+        return;
+    }
 
     let position = pose.position;
     if let Some(next) = next_stance(pose.stance, input, motor.grounded, |stance| {
@@ -575,7 +644,10 @@ pub(super) fn move_player(
     }
     let tuning = &data.movement;
 
-    let active = captured.0 && !life.is_dead() && !motor.mantling() && !modifiers.frozen;
+    motor.getup = (motor.getup - dt).max(0.0);
+
+    let active =
+        captured.0 && !life.is_dead() && !motor.mantling() && !motor.diving() && !modifiers.frozen;
     let pressed = |binding: &Binding| active && binding.pressed(&keys);
     let (forward, back) = (pressed(&bindings.forward), pressed(&bindings.back));
     let input = Vec2::new(
@@ -617,6 +689,23 @@ pub(super) fn move_player(
             motor.ground_y = pose.position.y;
         }
         motor.tick_sprint(false, dt, tuning);
+    } else if let Some(dive) = motor.dive.as_mut() {
+        // Dive: the lunge keeps its momentum, the recovery stops dead; no input either way.
+        let (wish, finished) = dive.advance(dt, tuning);
+        slide(
+            &mut pose,
+            &mut motor,
+            wish,
+            &time,
+            &shapes,
+            &move_and_slide,
+            tuning,
+        );
+        if finished {
+            motor.dive = None;
+            motor.getup = tuning.dive_getup_secs;
+        }
+        motor.tick_sprint(false, dt, tuning);
     } else {
         // Sprint: forward only, standing only, limited by stamina.
         let wants_sprint = pressed(&bindings.sprint)
@@ -649,8 +738,8 @@ pub(super) fn move_player(
         pose.position = random_spawn(spawns.as_deref()).0 + Vec3::Y * HEADROOM_LIFT;
         *motor = Motor::new(tuning);
     }
-    *transform = Transform::from_translation(pose.position)
-        .with_rotation(Quat::from_rotation_y(pose.yaw));
+    *transform =
+        Transform::from_translation(pose.position).with_rotation(Quat::from_rotation_y(pose.yaw));
 }
 
 /// One frame of walking, jumping or falling towards horizontal velocity `wish`, sliding along
@@ -705,7 +794,11 @@ fn slide(
     let ground = if vertical > 0.0 {
         None
     } else {
-        let reach = if motor.grounded { GROUND_SNAP } else { GROUND_PROBE };
+        let reach = if motor.grounded {
+            GROUND_SNAP
+        } else {
+            GROUND_PROBE
+        };
         move_and_slide
             .spatial_query
             .cast_shape(
@@ -753,9 +846,14 @@ pub(super) fn update_eye(
     let mantle = motor
         .mantle
         .map_or(0.0, |mantle| (PI * mantle.progress()).sin());
+    let rate = if motor.diving() {
+        DIVE_EYE_HEIGHT_RATE
+    } else {
+        EYE_HEIGHT_RATE
+    };
     for (mut eye, mut transform) in &mut camera {
         eye.height
-            .smooth_nudge(&pose.stance.eye_height(), EYE_HEIGHT_RATE, time.delta_secs());
+            .smooth_nudge(&pose.stance.eye_height(), rate, time.delta_secs());
         transform.translation = Vec3::Y * (eye.height - MANTLE_VIEW_DIP * mantle);
         transform.rotation =
             Quat::from_rotation_x(pose.pitch) * Quat::from_rotation_z(MANTLE_VIEW_ROLL * mantle);
@@ -795,11 +893,26 @@ mod tests {
         let low_ceiling = |stance| stance != Standing;
         let crawlspace = |stance| stance == Prone;
 
-        assert_eq!(next_stance(Prone, StanceInput::Jump, true, all), Some(Standing));
-        assert_eq!(next_stance(Prone, StanceInput::Jump, true, low_ceiling), Some(Crouching));
-        assert_eq!(next_stance(Prone, StanceInput::Jump, true, crawlspace), None);
-        assert_eq!(next_stance(Crouching, StanceInput::Crouch, true, low_ceiling), None);
-        assert_eq!(next_stance(Prone, StanceInput::SprintForward, true, low_ceiling), None);
+        assert_eq!(
+            next_stance(Prone, StanceInput::Jump, true, all),
+            Some(Standing)
+        );
+        assert_eq!(
+            next_stance(Prone, StanceInput::Jump, true, low_ceiling),
+            Some(Crouching)
+        );
+        assert_eq!(
+            next_stance(Prone, StanceInput::Jump, true, crawlspace),
+            None
+        );
+        assert_eq!(
+            next_stance(Crouching, StanceInput::Crouch, true, low_ceiling),
+            None
+        );
+        assert_eq!(
+            next_stance(Prone, StanceInput::SprintForward, true, low_ceiling),
+            None
+        );
     }
 
     #[test]
@@ -807,15 +920,27 @@ mod tests {
         use Stance::*;
         let all = |_| true;
         assert_eq!(next_stance(Standing, StanceInput::Prone, false, all), None);
-        assert_eq!(next_stance(Crouching, StanceInput::Prone, true, all), Some(Prone));
-        assert_eq!(next_stance(Prone, StanceInput::SprintForward, false, all), None);
-        assert_eq!(next_stance(Prone, StanceInput::SprintForward, true, all), Some(Standing));
+        assert_eq!(
+            next_stance(Crouching, StanceInput::Prone, true, all),
+            Some(Prone)
+        );
+        assert_eq!(
+            next_stance(Prone, StanceInput::SprintForward, false, all),
+            None
+        );
+        assert_eq!(
+            next_stance(Prone, StanceInput::SprintForward, true, all),
+            Some(Standing)
+        );
     }
 
     #[test]
     fn full_stamina_lasts_sprint_stamina_seconds() {
         let tuning = MovementTuning::fixture();
-        let mut motor = Motor { grounded: true, ..Motor::new(&tuning) };
+        let mut motor = Motor {
+            grounded: true,
+            ..Motor::new(&tuning)
+        };
         let dt = 0.5;
         for _ in 0..(tuning.sprint_stamina_secs / dt) as usize {
             motor.tick_sprint(true, dt, &tuning);
@@ -829,7 +954,11 @@ mod tests {
     #[test]
     fn sprint_restarts_only_after_restart_threshold_regained() {
         let tuning = MovementTuning::fixture();
-        let mut motor = Motor { grounded: true, stamina: 0.0, ..Motor::new(&tuning) };
+        let mut motor = Motor {
+            grounded: true,
+            stamina: 0.0,
+            ..Motor::new(&tuning)
+        };
         let dt = tuning.sprint_restart_stamina / tuning.stamina_regen_per_sec / 2.0;
         motor.tick_sprint(true, dt, &tuning);
         assert!(!motor.sprinting);
@@ -840,12 +969,55 @@ mod tests {
         assert!(motor.sprinting);
 
         // Below the threshold an ongoing sprint continues, but a jump cannot start one.
-        let mut sprinting =
-            Motor { grounded: true, sprinting: true, stamina: 0.5, ..Motor::new(&tuning) };
+        let mut sprinting = Motor {
+            grounded: true,
+            sprinting: true,
+            stamina: 0.5,
+            ..Motor::new(&tuning)
+        };
         sprinting.tick_sprint(true, 0.1, &tuning);
         assert!(sprinting.sprinting);
         let mut airborne = Motor::new(&tuning);
         airborne.tick_sprint(true, 0.1, &tuning);
         assert!(!airborne.sprinting);
+    }
+
+    #[test]
+    fn dive_lunges_then_recovers_without_moving() {
+        let tuning = MovementTuning::fixture();
+        let mut dive = Dive {
+            direction: Vec3::X,
+            elapsed: 0.0,
+        };
+        let dt = 0.1;
+        let mut lunge_secs = 0.0;
+        loop {
+            let (wish, finished) = dive.advance(dt, &tuning);
+            if wish == Vec3::ZERO {
+                break;
+            }
+            assert_eq!(wish, Vec3::X * tuning.dive_speed);
+            assert!(!finished);
+            lunge_secs += dt;
+        }
+        assert!((lunge_secs - tuning.dive_secs).abs() <= dt);
+        let mut recover_secs = 0.0;
+        loop {
+            let (wish, finished) = dive.advance(dt, &tuning);
+            assert_eq!(wish, Vec3::ZERO);
+            recover_secs += dt;
+            if finished {
+                break;
+            }
+        }
+        assert!((recover_secs - tuning.dive_recover_secs).abs() <= dt * 2.0);
+    }
+
+    #[test]
+    fn dive_spam_is_slower_than_plain_sprinting() {
+        let tuning = MovementTuning::fixture();
+        let locked = tuning.dive_secs + tuning.dive_recover_secs + tuning.dive_getup_secs;
+        // Over the time a dive locks you out, sprinting covers more ground than the lunge.
+        assert!(tuning.sprint_speed * locked > tuning.dive_speed * tuning.dive_secs);
     }
 }

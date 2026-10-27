@@ -85,7 +85,7 @@ pub struct HeldWeapon {
     recoil: Vec2,
     /// The body is sprinting this frame.
     sprinting: bool,
-    /// The body is mantling this frame.
+    /// The body is mantling or diving this frame.
     mantling: bool,
     /// Seconds left of raising the weapon after a sprint ended.
     sprint_out: f32,
@@ -150,7 +150,7 @@ impl HeldWeapon {
         }
     }
 
-    /// Whether the weapon is up: not lowered for a sprint or mantle, nor still raising.
+    /// Whether the weapon is up: not lowered for a sprint, mantle or dive, nor still raising.
     fn ready(&self) -> bool {
         !self.sprinting && !self.mantling && self.sprint_out <= 0.0
     }
@@ -348,7 +348,7 @@ fn swap_loadout(
     }
 }
 
-/// Follows the body: sprint and mantle lower the weapon, a finished sprint starts raising it,
+/// Follows the body: sprint, mantle and dive lower the weapon, a finished sprint starts raising it,
 /// speed and air time bloom hip spread, and stance scales accuracy.
 fn track_body(
     time: Res<Time>,
@@ -367,7 +367,7 @@ fn track_body(
         (weapon.sprint_out - dt).max(0.0)
     };
     weapon.sprinting = motor.sprinting();
-    weapon.mantling = motor.mantling();
+    weapon.mantling = motor.mantling() || motor.diving();
 
     let velocity = motor.velocity();
     let speed = Vec2::new(velocity.x, velocity.z).length();

@@ -21,7 +21,7 @@ from __future__ import annotations
 import argparse
 import math
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont
@@ -677,6 +677,8 @@ def piece(pts, field_color, border_color, rng, border=8.0, cell=3):
     pts = resample(pts, 1.0)
     mask = mask_of(pts)
     cloth = fabric(field_color, rng, cell)
+    if border <= 0:  # cut edge: no merrow, just the woven field
+        return cloth, mask, pts
     bw = border * SS
     inner = erode(mask, bw)
     band = ImageChops.subtract(mask, inner)
@@ -724,30 +726,69 @@ def piece(pts, field_color, border_color, rng, border=8.0, cell=3):
     return out, mask, pts
 
 
-def tab_shape(kind):
-    """(patch outline, band outline or None, band kind) in final pixels."""
-    if kind == "A":  # shield with a straight tab below
+@dataclass
+class Shape:
+    """Patch silhouette: body outline, optional name tab outline, and where the name goes.
+
+    `name` is (target, kind, params): target "tab" or "body"; kind "rect" (params: one rect per
+    text line) or "arc" (params: cx, cy, r, mid_deg, outward, max_arc_deg, size)."""
+
+    body: list
+    tab: list | None
+    name: tuple
+
+
+def rosette(cx, cy, r, depth, bumps, n=360):
+    """A circle with scalloped edge: `bumps` round lobes `depth` deep."""
+    out = []
+    for i in range(n):
+        t = 2 * math.pi * i / n
+        rr = r - depth * (1 - abs(math.cos(bumps * t / 2)))
+        out.append((cx + rr * math.cos(t), cy + rr * math.sin(t)))
+    return out
+
+
+def shape_def(name):
+    if name == "shield":  # heater shield, straight tab below
         top = [(30, 14), (226, 14)]
         right = bezier((226, 14), (226, 108), (190, 164), (128, 190), 30)
         left = bezier((128, 190), (66, 164), (30, 108), (30, 14), 30)
-        shield = round_poly(top + right[1:] + left[1:-1], 5)
+        body = round_poly(top + right[1:] + left[1:-1], 5)
         tab = round_poly([(34, 198), (222, 198), (222, 240), (34, 240)], 7)
-        return shield, tab, "straight"
-    if kind == "B":  # circle with a curved rocker below
+        return Shape(body, tab, ("tab", "rect", [(44, 205, 212, 233)]))
+    if name == "circle":  # circle, curved rocker below
         circle = ellipse_pts(128, 100, 86, 86, 120)[:-1]
-        band = arc_band(128, 100, 98, 127, 32, 148, 60)
-        return circle, round_poly(band, 6), "arc_low"
-    # "C": badge outline with a curved rocker above
-    badge = [(36, 62), (220, 62), (220, 172), (128, 240), (36, 172)]
-    band = arc_band(128, 320, 262, 290, -112.5, -67.5, 60)
-    return round_poly(badge, 9), round_poly(band, 6), "arc_high"
+        band = round_poly(arc_band(128, 100, 98, 127, 32, 148, 60), 6)
+        return Shape(circle, band, ("tab", "arc", (128, 100, 112.5, 90, False, 104, 20)))
+    if name == "arrow":  # arrowhead pentagon pointing down, curved rocker above
+        body = round_poly([(36, 64), (220, 64), (220, 150), (128, 246), (36, 150)], 9)
+        band = round_poly(arc_band(128, 320, 262, 290, -112.5, -67.5, 60), 6)
+        return Shape(body, band, ("tab", "arc", (128, 320, 276, -90, True, 40, 21)))
+    if name == "diamond":  # diamond, wide straight tab below
+        body = round_poly([(128, 4), (232, 98), (128, 204), (24, 98)], 10)
+        tab = round_poly([(50, 212), (206, 212), (206, 246), (50, 246)], 7)
+        return Shape(body, tab, ("tab", "rect", [(58, 217, 198, 241)]))
+    if name == "banner":  # wide landscape rectangle, no tab, name inside beside the symbol
+        body = round_poly([(8, 48), (248, 48), (248, 198), (8, 198)], 10)
+        return Shape(body, None, ("body", "rect", [(142, 78, 238, 116), (142, 128, 238, 166)]))
+    if name == "octagon":  # chamfered portrait plate, name in a strip at the bottom
+        pts = [(64, 10), (192, 10), (236, 52), (236, 172), (192, 214), (64, 214), (20, 172), (20, 52)]
+        return Shape(round_poly(pts, 8), None, ("body", "rect", [(72, 180, 184, 202)]))
+    if name == "arch":  # tombstone arch, flat bottom
+        pts = ellipse_pts(128, 94, 90, 90, 48, 180, 360) + [(218, 236), (38, 236)]
+        return Shape(round_poly(pts, 10), None, ("body", "rect", [(60, 186, 196, 212)]))
+    if name == "rosette":  # scalloped sunburst, name on an arc inside
+        return Shape(rosette(128, 128, 100, 11, 10), None, ("body", "arc", (128, 128, 67, 90, False, 110, 17)))
+    # "swallowtail": tall pennant with a V cut in the bottom, name across the top
+    body = round_poly([(26, 8), (230, 8), (230, 238), (128, 198), (26, 238)], 6)
+    return Shape(body, None, ("body", "rect", [(50, 24, 206, 48)]))
 
 
 @dataclass
 class Spec:
     id: str
     text: str
-    kind: str
+    shape: str
     field: Rgb
     border: Rgb
     tab_field: Rgb
@@ -756,8 +797,11 @@ class Spec:
     symbol: object  # callable -> layers
     box: tuple = (128, 98, 118)
     seed: int = 1
-    inner_line: Rgb | None = None
-    extra: list = field(default_factory=list)
+    bw: float = 9.0  # merrow width in px; 0 = cut edge (no merrow)
+    tab_bw: float = 5.0
+    inner_line: Rgb | None = None  # second stitch line inside the border
+    inner_d: float = 15.0
+    dashed: bool = False  # inner line as a running stitch
 
 
 def text_mask_straight(text, rect, rng):
@@ -823,34 +867,47 @@ def text_mask_arc(text, cx, cy, r, mid_deg, outward, max_arc_deg, size_final):
     return m
 
 
+def name_mask(text, name):
+    _, kind, p = name
+    if kind == "arc":
+        return text_mask_arc(text.replace("\n", " "), *p)
+    lines = text.split("\n") if len(p) > 1 else [text.replace("\n", " ")]
+    m = blank()
+    for line_text, rect in zip(lines, p):
+        m = ImageChops.lighter(m, text_mask_straight(line_text, rect, None))
+    return m
+
+
 def build(spec: Spec, rng: random.Random):
-    patch_pts, tab_pts, tab_kind = tab_shape(spec.kind)
+    shape = shape_def(spec.shape)
     canvas = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+    tm = name_mask(spec.text, shape.name)
+    name_style = dict(angle=90, outline=shade(spec.text_color, 0.55), spacing=2.4, emboss=0.8)
+
     pieces = []
+    tab_piece = None
+    if shape.tab:
+        tab_rgb, tab_mask, tab_poly = piece(shape.tab, spec.tab_field, spec.tab_border, rng, border=spec.tab_bw)
+        tab_rgb = stitch(tab_rgb, tm, spec.text_color, rng, **name_style)
+        tab_piece = (tab_rgb, tab_mask, tab_poly, spec.tab_border)
 
-    tab_rgb, tab_mask, tab_poly = piece(tab_pts, spec.tab_field, spec.tab_border, rng, border=5.0)
-    # Name, embroidered on the tab.
-    if tab_kind == "straight":
-        tm = text_mask_straight(spec.text, (44, 205, 212, 233), rng)
-    elif tab_kind == "arc_low":
-        tm = text_mask_arc(spec.text, 128, 100, 112.5, 90, False, 104, 20)
-    else:
-        tm = text_mask_arc(spec.text, 128, 320, 276, -90, True, 40, 21)
-    tab_rgb = stitch(tab_rgb, tm, spec.text_color, rng, angle=90, outline=shade(spec.text_color, 0.55), spacing=2.4, emboss=0.8)
-
-    body_rgb, body_mask, body_poly = piece(patch_pts, spec.field, spec.border, rng, border=9.0)
+    body_rgb, body_mask, body_poly = piece(shape.body, spec.field, spec.border, rng, border=spec.bw)
     if spec.inner_line:
-        ring = ImageDraw.Draw(body_rgb)
-        pts = [(x * SS, y * SS) for x, y in inset(resample(body_poly, 1.5), 15)]
-        body_rgb = stitch(body_rgb, _stroke(pts, 1.6 * SS), spec.inner_line, rng, angle=0, outline=False, emboss=0.5)
+        pts = [(x * SS, y * SS) for x, y in inset(resample(body_poly, 1.5), spec.inner_d)]
+        ring = _dashed(pts, 1.8 * SS) if spec.dashed else _stroke(pts, 1.6 * SS)
+        body_rgb = stitch(body_rgb, ring, spec.inner_line, rng, angle=0, outline=False, emboss=0.5)
 
     box = Box(*spec.box)
     for layer in spec.symbol():
         tf = Absolute() if layer.absolute else box
         m = draw_prims(layer.prims, tf)
         body_rgb = stitch(body_rgb, m, layer.color, rng, layer.angle, layer.outline, layer.spacing)
+    if shape.name[0] == "body":
+        body_rgb = stitch(body_rgb, tm, spec.text_color, rng, **name_style)
 
-    pieces = [(body_rgb, body_mask, body_poly, spec.border), (tab_rgb, tab_mask, tab_poly, spec.tab_border)]
+    pieces = [(body_rgb, body_mask, body_poly, spec.border)]
+    if tab_piece:
+        pieces.append(tab_piece)
     for rgb, mask, pts, border in pieces:
         rgb = wear(rgb, mask, rng)
         alpha = fray(mask, rng)
@@ -873,6 +930,19 @@ def _stroke(pts, width):
     m = blank()
     d = ImageDraw.Draw(m)
     d.line(pts + [pts[0]], fill=255, width=max(1, round(width)), joint="curve")
+    return m
+
+
+def _dashed(pts, width, on=4, off=3):
+    """A running stitch along a closed polyline: `on` points drawn, `off` skipped."""
+    m = blank()
+    d = ImageDraw.Draw(m)
+    i = 0
+    while i < len(pts):
+        seg = pts[i : i + on + 1]
+        if len(seg) > 1:
+            d.line(seg, fill=255, width=max(1, round(width)))
+        i += on + off
     return m
 
 
@@ -937,136 +1007,189 @@ def loose_threads(pts, color, rng):
 
 # ---------------------------------------------------------------- the roster
 
-BONE = (200, 192, 170)
-
 SPECS = [
+    # TAN: heater shield + straight tab, thick dark merrow.
     Spec(
         "ranger",
         "TASK FORCE RANGER",
-        "A",
-        field=(150, 128, 88),
-        border=(78, 66, 44),
-        tab_field=(70, 72, 48),
-        tab_border=(150, 130, 92),
-        text_color=(205, 186, 140),
-        symbol=lambda: ranger_symbol((48, 40, 26)),
+        "shield",
+        field=(188, 166, 118),
+        border=(82, 62, 38),
+        tab_field=(70, 52, 32),
+        tab_border=(196, 174, 128),
+        text_color=(244, 228, 184),
+        symbol=lambda: ranger_symbol((60, 44, 26)),
         box=(128, 90, 112),
         seed=11,
-        inner_line=(96, 80, 52),
+        bw=10.0,
+        tab_bw=5.0,
     ),
+    # OCHRE: circle + rocker, thin merrow.
     Spec(
         "harmattan",
         "HARMATTAN LEGION",
-        "B",
-        field=(172, 132, 66),
-        border=(88, 58, 28),
-        tab_field=(98, 64, 32),
-        tab_border=(180, 140, 74),
-        text_color=(242, 226, 178),
-        symbol=lambda: harmattan_symbol((222, 206, 160), (66, 44, 28), (136, 98, 44), (210, 210, 200)),
+        "circle",
+        field=(212, 148, 34),
+        border=(104, 50, 22),
+        tab_field=(112, 52, 26),
+        tab_border=(224, 168, 62),
+        text_color=(250, 232, 184),
+        symbol=lambda: harmattan_symbol((244, 230, 186), (72, 40, 22), (160, 92, 22), (222, 222, 214)),
         box=(128, 100, 124),
         seed=22,
+        bw=4.0,
+        tab_bw=3.5,
     ),
+    # NAVY: arrowhead + rocker above, double stitch.
     Spec(
         "northern_sabre",
         "NORTHERN SABRE",
-        "C",
-        field=(62, 78, 98),
-        border=(176, 186, 196),
-        tab_field=(52, 64, 80),
-        tab_border=(160, 172, 184),
-        text_color=(214, 220, 224),
-        symbol=lambda: sabres((214, 220, 226), (150, 128, 80), (236, 232, 214)),
-        box=(128, 142, 112),
+        "arrow",
+        field=(30, 46, 86),
+        border=(190, 200, 210),
+        tab_field=(188, 200, 214),
+        tab_border=(30, 46, 86),
+        text_color=(26, 40, 78),
+        symbol=lambda: sabres((222, 228, 234), (214, 170, 74), (246, 244, 232)),
+        box=(128, 140, 112),
         seed=33,
+        bw=4.5,
+        tab_bw=4.0,
+        inner_line=(176, 188, 202),
+        inner_d=12.0,
     ),
+    # OLIVE: diamond + wide tab, thick red merrow.
     Spec(
         "volkov",
         "VOLKOV BATTALION",
-        "C",
-        field=(84, 90, 56),
-        border=(150, 38, 34),
-        tab_field=(120, 34, 30),
-        tab_border=(160, 156, 116),
-        text_color=(206, 200, 160),
-        symbol=lambda: volkov_symbol((152, 40, 36), (178, 170, 148), (40, 38, 30), (206, 198, 176)),
-        box=(128, 142, 118),
+        "diamond",
+        field=(100, 102, 50),
+        border=(170, 38, 32),
+        tab_field=(124, 32, 28),
+        tab_border=(100, 102, 50),
+        text_color=(226, 220, 176),
+        symbol=lambda: volkov_symbol((170, 38, 32), (190, 182, 158), (36, 34, 26), (216, 208, 184)),
+        box=(128, 106, 108),
         seed=44,
+        bw=8.0,
+        tab_bw=5.0,
     ),
+    # CRIMSON: wide rectangle, no tab, cut edge with a black running stitch.
+    Spec(
+        "crimson_vanguard",
+        "CRIMSON\nVANGUARD",
+        "banner",
+        field=(152, 28, 36),
+        border=(30, 26, 26),
+        tab_field=(152, 28, 36),
+        tab_border=(30, 26, 26),
+        text_color=(240, 226, 208),
+        symbol=lambda: fist_gear((26, 24, 24), (118, 24, 30), (226, 214, 196), (40, 28, 28)),
+        box=(78, 123, 116),
+        seed=99,
+        bw=0.0,
+        inner_line=(30, 26, 26),
+        inner_d=7.0,
+        dashed=True,
+    ),
+    # DARK GREEN: chamfered plate, thin white merrow.
     Spec(
         "baekho",
         "BAEKHO RECON",
-        "B",
-        field=(40, 70, 52),
-        border=(196, 198, 188),
-        tab_field=(30, 52, 40),
-        tab_border=(190, 192, 180),
-        text_color=(216, 218, 206),
-        symbol=lambda: tiger_head((214, 214, 202), (28, 32, 28), (150, 170, 176), (28, 32, 28)),
-        box=(128, 100, 116),
+        "octagon",
+        field=(24, 64, 46),
+        border=(214, 216, 204),
+        tab_field=(24, 64, 46),
+        tab_border=(214, 216, 204),
+        text_color=(228, 230, 218),
+        symbol=lambda: tiger_head((222, 222, 210), (24, 28, 24), (234, 150, 40), (24, 28, 24)),
+        box=(128, 96, 130),
         seed=55,
+        bw=4.0,
     ),
+    # SNOW WHITE: tombstone arch, red double stitch.
     Spec(
         "tianlang",
         "TIANLANG GROUP",
-        "C",
-        field=(58, 68, 84),
-        border=(160, 44, 40),
-        tab_field=(46, 54, 66),
-        tab_border=(154, 42, 38),
-        text_color=(210, 214, 218),
-        symbol=lambda: tianlang_symbol((158, 44, 40), (206, 210, 214), (40, 46, 54), (226, 226, 222), (88, 102, 120), (232, 236, 238)),
-        box=(128, 139, 110),
+        "arch",
+        field=(226, 228, 224),
+        border=(170, 40, 38),
+        tab_field=(226, 228, 224),
+        tab_border=(170, 40, 38),
+        text_color=(150, 36, 34),
+        symbol=lambda: tianlang_symbol((176, 42, 40), (64, 72, 88), (238, 240, 240), (132, 142, 156), (88, 104, 126), (236, 240, 242)),
+        box=(128, 106, 120),
         seed=66,
+        bw=4.5,
+        inner_line=(170, 40, 38),
+        inner_d=12.0,
     ),
+    # BLACK: scalloped rosette, thick gold merrow.
     Spec(
         "simba",
         "SIMBA BRIGADE",
-        "A",
-        field=(52, 86, 54),
-        border=(190, 154, 62),
-        tab_field=(36, 62, 40),
-        tab_border=(184, 150, 62),
-        text_color=(232, 200, 110),
-        symbol=lambda: lion_head((190, 150, 58), (206, 176, 108), (42, 34, 24), (170, 134, 60)),
-        box=(128, 92, 112),
+        "rosette",
+        field=(30, 28, 26),
+        border=(208, 164, 56),
+        tab_field=(30, 28, 26),
+        tab_border=(208, 164, 56),
+        text_color=(232, 196, 100),
+        symbol=lambda: lion_head((212, 160, 50), (230, 194, 112), (38, 28, 20), (178, 124, 40)),
+        box=(128, 112, 110),
         seed=77,
-        inner_line=(150, 120, 52),
+        bw=10.0,
     ),
+    # BROWN: swallowtail pennant, cut edge with a cream running stitch.
     Spec(
         "steppe_wolves",
         "STEPPE WOLVES",
-        "B",
-        field=(118, 90, 62),
-        border=(70, 50, 34),
-        tab_field=(84, 62, 42),
-        tab_border=(150, 120, 84),
-        text_color=(240, 220, 178),
-        symbol=lambda: howling_wolf((46, 36, 28), (170, 140, 100), (226, 214, 176)),
-        box=(128, 100, 118),
+        "swallowtail",
+        field=(138, 92, 56),
+        border=(70, 48, 30),
+        tab_field=(138, 92, 56),
+        tab_border=(70, 48, 30),
+        text_color=(52, 32, 20),
+        symbol=lambda: howling_wolf((34, 24, 18), (206, 176, 124), (238, 224, 184)),
+        box=(128, 128, 134),
         seed=88,
-    ),
-    Spec(
-        "crimson_vanguard",
-        "CRIMSON VANGUARD",
-        "C",
-        field=(36, 34, 34),
-        border=(150, 32, 40),
-        tab_field=(130, 28, 36),
-        tab_border=(30, 28, 28),
-        text_color=(226, 214, 200),
-        symbol=lambda: fist_gear((150, 32, 40), (38, 36, 36), (182, 52, 58), (34, 28, 28)),
-        box=(128, 144, 116),
-        seed=99,
+        bw=0.0,
+        inner_line=(236, 218, 176),
+        inner_d=8.0,
+        dashed=True,
     ),
 ]
+
+
+def contact_sheet(imgs, path):
+    """9-up sheet: 128 px row, 32 px row, 24 px row (score bar), 32 px row zoomed 3x (nearest)."""
+    pad, cell = 8, 136
+    bg = (30, 33, 36, 255)
+    n = len(imgs)
+    h = pad + 128 + pad + 32 + pad + 24 + pad + 96 + pad
+    sheet = Image.new("RGBA", (n * cell + pad, h), bg)
+
+    def shrink(img, s):
+        return img.convert("RGBa").resize((s, s), Image.LANCZOS).convert("RGBA")
+
+    y1 = pad
+    y2 = y1 + 128 + pad
+    y3 = y2 + 32 + pad
+    y4 = y3 + 24 + pad
+    for i, img in enumerate(imgs):
+        x = pad + i * cell
+        sheet.alpha_composite(shrink(img, 128), (x, y1))
+        s32 = shrink(img, 32)
+        sheet.alpha_composite(s32, (x, y2))
+        sheet.alpha_composite(shrink(img, 24), (x, y3))
+        sheet.alpha_composite(s32.resize((96, 96), Image.NEAREST), (x, y4))
+    sheet.convert("RGB").save(path)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("ids", nargs="*", help="Faction ids to render (default: all)")
     ap.add_argument("--out", type=Path, default=OUT_DIR)
-    ap.add_argument("--sheet", type=Path, help="also write a contact sheet (256 and 64 px)")
+    ap.add_argument("--sheet", type=Path, help="also write a 9-up contact sheet (128, 32, 24 px and 32 px zoomed)")
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     done = []
@@ -1078,16 +1201,7 @@ def main():
         print(f"{spec.id}.png")
         done.append(img)
     if args.sheet and done:
-        cols = 3
-        rows = (len(done) + cols - 1) // cols
-        sheet = Image.new("RGBA", (cols * 272, rows * 272 + 80), (30, 33, 36, 255))
-        for i, img in enumerate(done):
-            x, y = (i % cols) * 272 + 8, (i // cols) * 272 + 8
-            sheet.alpha_composite(img, (x, y))
-        small_row = rows * 272 + 8
-        for i, img in enumerate(done[:9]):
-            sheet.alpha_composite(img.resize((64, 64), Image.LANCZOS), (8 + i * 72, small_row))
-        sheet.convert("RGB").save(args.sheet)
+        contact_sheet(done, args.sheet)
 
 
 if __name__ == "__main__":

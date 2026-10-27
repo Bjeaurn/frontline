@@ -67,7 +67,7 @@ On joining, pick a Team (and then a Loadout). The mouse is grabbed while you pla
 | Jump / stand up | Space |
 | Mantle | Move into a ledge up to ~1.6 m (jumping helps) |
 | Crouch | C |
-| Prone | Left Ctrl or Z |
+| Prone (while sprinting: dive) | Left Ctrl or Z |
 | Fire (full auto, or one round per click for semi/bolt-action) | Left mouse |
 | Aim down sights | Right mouse (hold) |
 | Reload | R (sprinting cancels it) |

@@ -306,6 +306,15 @@ pub struct MovementTuning {
     /// How far ahead of the body a ledge is looked for.
     pub mantle_reach: f32,
     pub mantle_secs: f32,
+    /// Prone pressed mid-sprint dives: a lunge at `dive_speed` for `dive_secs`, with a hop of
+    /// `dive_hop_height`.
+    pub dive_speed: f32,
+    pub dive_secs: f32,
+    pub dive_hop_height: f32,
+    /// After the lunge: seconds of no movement, firing or standing, looking still allowed.
+    pub dive_recover_secs: f32,
+    /// After the recovery: seconds before the prone player may change stance (and so sprint).
+    pub dive_getup_secs: f32,
 }
 
 #[cfg(test)]
@@ -330,6 +339,11 @@ impl MovementTuning {
             mantle_max_height: 1.5,
             mantle_reach: 0.5,
             mantle_secs: 0.5,
+            dive_speed: 4.0,
+            dive_secs: 0.4,
+            dive_hop_height: 0.1,
+            dive_recover_secs: 0.5,
+            dive_getup_secs: 0.3,
         }
     }
 }

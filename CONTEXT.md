@@ -122,6 +122,10 @@ _Avoid_: Inspired map, clone
 Climbing onto a ledge up to about chest height by moving into it.
 _Avoid_: Vault, climb, ledge grab
 
+**Dive**:
+Pressing prone while sprinting: a short forward lunge into the prone stance, then a brief recovery with no moving, firing or standing.
+_Avoid_: Slide, roll
+
 ### Weapons
 
 **Weapon**:
