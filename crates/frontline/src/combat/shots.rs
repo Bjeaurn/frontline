@@ -71,6 +71,7 @@ pub(super) fn resolve_shots(
 
             let tracer = ShotTracer {
                 shooter: owner.0,
+                weapon: shot.weapon,
                 origin: shot.origin,
                 end: shot.origin + direction * distance,
             };

@@ -10,6 +10,8 @@
 // - fog_sun_color: colour of sunlight glowing through the fog towards the sun; alpha is strength.
 // - sun_illuminance: lux. sun_direction: the way the light travels (y down is negative).
 // - ambient_brightness: cd/m^2 of flat fill light. sky_color: the background.
+// - practical_lights: scale of the Map's lamps (light entities with targetname "practical"); 0 when
+//   omitted, so only night looks switch them on.
 // Colours are sRGB 0..1.
 {
     // Grey, overcast city: flat soft light, lifted ambient, heavy contrast, muted colour.
@@ -62,5 +64,41 @@
         ambient_color: (0.62, 0.68, 0.86),
         ambient_brightness: 160.0,
         sky_color: (0.42, 0.47, 0.56),
+    ),
+    // Humid jungle, daytime: bright filtered sun, lush saturated greens, soft green-white haze.
+    "jungle_humid": (
+        exposure: -0.1,
+        temperature: 0.0,
+        tint: -0.06,
+        saturation: 0.9,
+        contrast: 1.06,
+        fog_color: (0.56, 0.67, 0.56),
+        fog_visibility: 150.0,
+        fog_sun_color: (0.90, 1.0, 0.72, 0.28),
+        sun_color: (0.84, 1.0, 0.70),
+        sun_illuminance: 9500.0,
+        sun_direction: (-0.3, -1.0, -0.25),
+        ambient_color: (0.52, 0.72, 0.52),
+        ambient_brightness: 280.0,
+        sky_color: (0.58, 0.72, 0.70),
+    ),
+    // Moonlit night: a clear blue cast throughout (cold moon, blue fog and sky), lifted enough that
+    // players read against the ground at ~30 m, with the Map's warm practical lights on.
+    "night_ops": (
+        exposure: 0.15,
+        temperature: -0.1,
+        tint: 0.03,
+        saturation: 0.7,
+        contrast: 1.1,
+        fog_color: (0.07, 0.11, 0.22),
+        fog_visibility: 160.0,
+        fog_sun_color: (0.40, 0.55, 1.0, 0.25),
+        sun_color: (0.62, 0.72, 1.0),
+        sun_illuminance: 2800.0,
+        sun_direction: (-0.55, -0.7, -0.45),
+        ambient_color: (0.42, 0.52, 0.80),
+        ambient_brightness: 190.0,
+        sky_color: (0.05, 0.08, 0.17),
+        practical_lights: 1.0,
     ),
 }

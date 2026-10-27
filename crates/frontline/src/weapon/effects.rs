@@ -1,10 +1,6 @@
-//! Shot effects: the viewmodel muzzle flash, tracers for local and remote shots, and a
-//! synthesized gunshot sound (no asset files needed).
+//! Shot effects: the viewmodel muzzle flash and tracers for local and remote shots. Sounds are in
+//! `audio`.
 
-use std::sync::Arc;
-use std::time::Duration;
-
-use bevy::audio::{AddAudioSource, ChannelCount, SampleRate, Source, Volume};
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
@@ -20,23 +16,17 @@ const TRACER_WIDTH: f32 = 0.012;
 /// Shots ending closer than this to the muzzle draw no tracer.
 const MIN_TRACER_LENGTH: f32 = 0.5;
 
-const GUNSHOT_VOLUME: f32 = 0.35;
-const GUNSHOT_SAMPLE_RATE: u32 = 44_100;
-const GUNSHOT_SECS: f32 = 0.22;
-
 pub(super) struct EffectsPlugin;
 
 impl Plugin for EffectsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_audio_source::<Gunshot>()
-            .add_systems(Startup, load_effect_assets)
+        app.add_systems(Startup, load_effect_assets)
             .add_systems(
                 Update,
                 (
                     show_muzzle_flash,
                     spawn_local_tracers,
                     spawn_remote_tracers,
-                    play_gunshots,
                     fade_muzzle_flash,
                     fade_tracers,
                 )
@@ -60,15 +50,12 @@ struct Tracer {
 struct EffectAssets {
     tracer_mesh: Handle<Mesh>,
     tracer_material: Handle<StandardMaterial>,
-    gunshot: Handle<Gunshot>,
 }
 
 fn load_effect_assets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut sounds: ResMut<Assets<Gunshot>>,
-    mut rng: ResMut<WeaponRng>,
 ) {
     commands.insert_resource(EffectAssets {
         tracer_mesh: meshes.add(Cuboid::from_size(Vec3::ONE)),
@@ -78,7 +65,6 @@ fn load_effect_assets(
             alpha_mode: AlphaMode::Add,
             ..default()
         }),
-        gunshot: sounds.add(Gunshot::synthesize(&mut rng)),
     });
 }
 
@@ -163,87 +149,6 @@ fn fade_tracers(
             let width = TRACER_WIDTH * (1.0 - tracer.age / TRACER_SECS);
             transform.scale.x = width;
             transform.scale.y = width;
-        }
-    }
-}
-
-fn play_gunshots(
-    mut fired: MessageReader<ShotFired>,
-    assets: Res<EffectAssets>,
-    mut commands: Commands,
-) {
-    for _ in fired.read() {
-        commands.spawn((
-            AudioPlayer(assets.gunshot.clone()),
-            PlaybackSettings::DESPAWN.with_volume(Volume::Linear(GUNSHOT_VOLUME)),
-        ));
-    }
-}
-
-/// A short mono gunshot: a decaying noise crack over a low thump.
-#[derive(Asset, TypePath)]
-struct Gunshot {
-    samples: Arc<[f32]>,
-}
-
-impl Gunshot {
-    fn synthesize(rng: &mut WeaponRng) -> Self {
-        let rate = GUNSHOT_SAMPLE_RATE as f32;
-        let count = (GUNSHOT_SECS * rate) as usize;
-        let samples = (0..count)
-            .map(|i| {
-                let t = i as f32 / rate;
-                let crack = rng.signed() * (-t * 45.0).exp();
-                let thump = (std::f32::consts::TAU * 85.0 * t).sin() * (-t * 18.0).exp();
-                (0.7 * crack + 0.5 * thump).clamp(-1.0, 1.0)
-            })
-            .collect();
-        Self { samples }
-    }
-}
-
-struct GunshotDecoder {
-    samples: Arc<[f32]>,
-    next: usize,
-}
-
-impl Iterator for GunshotDecoder {
-    type Item = f32;
-
-    fn next(&mut self) -> Option<f32> {
-        let sample = self.samples.get(self.next).copied();
-        self.next += 1;
-        sample
-    }
-}
-
-impl Source for GunshotDecoder {
-    fn current_span_len(&self) -> Option<usize> {
-        None
-    }
-
-    fn channels(&self) -> ChannelCount {
-        ChannelCount::MIN
-    }
-
-    fn sample_rate(&self) -> SampleRate {
-        SampleRate::new(GUNSHOT_SAMPLE_RATE).expect("non-zero sample rate")
-    }
-
-    fn total_duration(&self) -> Option<Duration> {
-        Some(Duration::from_secs_f32(
-            self.samples.len() as f32 / GUNSHOT_SAMPLE_RATE as f32,
-        ))
-    }
-}
-
-impl bevy::audio::Decodable for Gunshot {
-    type Decoder = GunshotDecoder;
-
-    fn decoder(&self) -> GunshotDecoder {
-        GunshotDecoder {
-            samples: Arc::clone(&self.samples),
-            next: 0,
         }
     }
 }

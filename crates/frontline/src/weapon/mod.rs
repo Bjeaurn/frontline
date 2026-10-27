@@ -1,6 +1,7 @@
 //! The local player's Weapon: firing, ammo and reloads, aiming down sights and recoil, plus
 //! its viewmodel, effects and HUD. Client and Host only; the server decides what shots hit.
 
+mod audio;
 mod effects;
 mod hud;
 mod viewmodel;
@@ -37,6 +38,7 @@ impl Plugin for WeaponClientPlugin {
             .add_plugins((
                 viewmodel::ViewmodelPlugin,
                 effects::EffectsPlugin,
+                audio::WeaponAudioPlugin,
                 hud::WeaponHudPlugin,
             ))
             .add_systems(
@@ -241,6 +243,7 @@ impl HeldWeapon {
 /// `end` where the client-side ray met the World (or maximum range).
 #[derive(Message, Clone, Copy, Debug)]
 struct ShotFired {
+    weapon: WeaponId,
     muzzle: Vec3,
     end: Vec3,
 }
@@ -497,6 +500,7 @@ fn fire(
                 .with_rotation(aim)
                 .transform_point(gun.transform_point(Vec3::from(stats.muzzle_offset)));
             fired.write(ShotFired {
+                weapon: weapon.id,
                 muzzle,
                 end: origin + *direction * end,
             });

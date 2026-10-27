@@ -50,6 +50,9 @@ pub struct LookPreset {
     pub ambient_color: Rgb,
     pub ambient_brightness: f32,
     pub sky_color: Rgb,
+    /// Scale (0 by day, 1 at night) of the Map's practical lights: lamp posts and the like.
+    #[serde(default)]
+    pub practical_lights: f32,
 }
 
 fn srgb((r, g, b): Rgb) -> Color {
@@ -98,13 +101,33 @@ impl LookPreset {
 
 /// Every look preset by name, from `data/looks.ron`.
 #[derive(Resource, Debug)]
-struct Looks(HashMap<String, LookPreset>);
+pub struct Looks(HashMap<String, LookPreset>);
+
+impl Looks {
+    pub fn contains(&self, name: &str) -> bool {
+        self.0.contains_key(name)
+    }
+
+    /// Preset names in alphabetical order, for error messages.
+    pub fn known_names(&self) -> String {
+        let mut names: Vec<&str> = self.0.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        names.join(", ")
+    }
+}
+
+/// `--look`: a look preset that replaces every Map's own for this session.
+#[derive(Resource, Debug)]
+struct LookOverride(Option<String>);
 
 /// The look in effect; cameras spawned later pick it up.
 #[derive(Resource, Debug)]
 struct ActiveLook(LookPreset);
 
-pub struct AtmospherePlugin;
+pub struct AtmospherePlugin {
+    /// Look preset name from `--look`; checked against [`Looks`] by the caller.
+    pub look_override: Option<String>,
+}
 
 impl Plugin for AtmospherePlugin {
     fn build(&self, app: &mut App) {
@@ -113,9 +136,11 @@ impl Plugin for AtmospherePlugin {
             panic!("{LOOKS_FILE} must define the \"{DEFAULT_LOOK}\" look");
         };
         app.insert_resource(Looks(looks))
+            .insert_resource(LookOverride(self.look_override.clone()))
             .insert_resource(ActiveLook(default_look))
             .add_observer(add_atmosphere)
-            .add_observer(apply_map_look);
+            .add_observer(apply_map_look)
+            .add_systems(Update, scale_practical_lights);
     }
 }
 
@@ -153,6 +178,7 @@ fn apply_map_look(
     add: On<Add<MapReady>>,
     maps: Query<&MapReady>,
     looks: Res<Looks>,
+    look_override: Res<LookOverride>,
     mut active: ResMut<ActiveLook>,
     mut cameras: Query<(&mut ColorGrading, Option<&mut DistanceFog>), With<Camera3d>>,
     mut commands: Commands,
@@ -160,7 +186,11 @@ fn apply_map_look(
     let Ok(map) = maps.get(add.entity) else {
         return;
     };
-    let name = map.look.as_deref().unwrap_or(DEFAULT_LOOK);
+    let name = look_override
+        .0
+        .as_deref()
+        .or(map.look.as_deref())
+        .unwrap_or(DEFAULT_LOOK);
     let (name, look) = match looks.0.get(name) {
         Some(look) => (name, look),
         None => {
@@ -189,6 +219,37 @@ fn apply_map_look(
     }
 }
 
+/// Name bevy_trenchbroom gives a `light_point` whose `targetname` is `practical`.
+const PRACTICAL_LIGHT_NAME: &str = "light_point (practical)";
+
+/// A Map's practical light and the intensity it was authored with.
+#[derive(Component)]
+struct PracticalLight {
+    lumens: f32,
+}
+
+/// Scales the Map's practical point lights (`targetname` `practical`) by the look's
+/// `practical_lights`: they take it when they appear and again whenever the look changes.
+fn scale_practical_lights(
+    look: Res<ActiveLook>,
+    mut lights: Query<(Entity, &Name, &mut PointLight, Option<&PracticalLight>)>,
+    mut commands: Commands,
+) {
+    for (entity, name, mut light, practical) in &mut lights {
+        let lumens = match practical {
+            Some(practical) if look.is_changed() => practical.lumens,
+            Some(_) => continue,
+            None if name.as_str() == PRACTICAL_LIGHT_NAME => {
+                let lumens = light.intensity;
+                commands.entity(entity).insert(PracticalLight { lumens });
+                lumens
+            }
+            None => continue,
+        };
+        light.intensity = lumens * look.0.practical_lights;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,7 +257,14 @@ mod tests {
     #[test]
     fn shipped_looks_parse_and_include_the_presets() {
         let looks: HashMap<String, LookPreset> = ron::from_str(BUILTIN_LOOKS).unwrap();
-        for name in [DEFAULT_LOOK, "overcast_urban", "desert_dust", "dawn_cold"] {
+        for name in [
+            DEFAULT_LOOK,
+            "overcast_urban",
+            "desert_dust",
+            "dawn_cold",
+            "jungle_humid",
+            "night_ops",
+        ] {
             let look = &looks[name];
             assert!(
                 look.fog_visibility > 0.0 && look.sun_illuminance > 0.0,
@@ -206,6 +274,14 @@ mod tests {
                 Vec3::from(look.sun_direction).y < 0.0,
                 "{name}: sun must shine down"
             );
+        }
+    }
+
+    #[test]
+    fn only_night_looks_switch_the_practical_lights_on() {
+        let looks: HashMap<String, LookPreset> = ron::from_str(BUILTIN_LOOKS).unwrap();
+        for (name, look) in &looks {
+            assert_eq!(look.practical_lights > 0.0, name == "night_ops", "{name}");
         }
     }
 

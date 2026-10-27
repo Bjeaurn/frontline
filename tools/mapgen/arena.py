@@ -123,6 +123,39 @@ def build() -> Map:
     # Search & Destroy: both bomb sites on Bravo's half.
     for label, position in (("A", (-14.0, 0.0, 17.0)), ("B", (12.0, 0.0, 17.0))):
         arena.entities.append(point_entity("bomb_site", position, label=label))
+
+    # Practical lights: lamp posts, the building's interior, the containers, the HQ lanes and the
+    # outer Flags. `targetname` "practical" lets the game scale them by the look's
+    # `practical_lights` (off by day, on at night); only a few cast shadows.
+    for x, z in [(8.0, -8.0), (-8.0, 8.0), (-8.0, -8.0), (8.0, 8.0)]:
+        add(COVER, (0.3, 4.0, 0.3), (x, 2.0, z))
+    lamps = [
+        # (x, y, z, colour, lumens, range, shadows)
+        (8.0, 4.4, -8.0, "1 0.78 0.45", 500000, 22.0, True),
+        (-8.0, 4.4, 8.0, "1 0.78 0.45", 500000, 22.0, True),
+        (-8.0, 4.4, -8.0, "1 0.78 0.45", 500000, 22.0, False),
+        (8.0, 4.4, 8.0, "1 0.78 0.45", 500000, 22.0, False),
+        (0.0, 2.5, -3.0, "1 0.85 0.6", 260000, 10.0, True),
+        (0.0, 2.5, 3.0, "1 0.85 0.6", 260000, 10.0, False),
+        (-22.0, 3.6, 18.0, "1 0.6 0.3", 320000, 14.0, False),
+        (22.0, 3.6, -14.0, "1 0.6 0.3", 320000, 14.0, False),
+        (-23.0, 3.5, 0.0, "1 0.8 0.5", 380000, 16.0, False),
+        (23.0, 3.5, 0.0, "1 0.8 0.5", 380000, 16.0, False),
+        (0.0, 3.5, -19.0, "1 0.8 0.5", 380000, 16.0, False),
+        (0.0, 3.5, 19.0, "1 0.8 0.5", 380000, 16.0, False),
+    ]
+    for x, y, z, color, lumens, reach, shadows in lamps:
+        arena.entities.append(
+            point_entity(
+                "light_point",
+                (x, y, z),
+                targetname="practical",
+                color=color,
+                intensity=str(lumens),
+                range=f"{reach:.1f}",
+                shadows_enabled="true" if shadows else "false",
+            )
+        )
     return arena
 
 

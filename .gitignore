@@ -8,3 +8,4 @@
 # (into crates/frontline/assets/ with a CREDITS entry).
 /content/incoming/
 /content/assets/
+__pycache__/

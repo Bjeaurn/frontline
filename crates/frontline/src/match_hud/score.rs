@@ -1,4 +1,4 @@
-//! Top-centre score: `RANGERS [emblem][12] [m:ss] [7][emblem] BRIGADE`, each side with its
+//! Top-centre score: `RANGERS [emblem][12] [m:ss] [7][emblem] HARMATTAN`, each side with its
 //! Faction's short name and emblem, coloured friendly/enemy.
 
 use bevy::prelude::*;

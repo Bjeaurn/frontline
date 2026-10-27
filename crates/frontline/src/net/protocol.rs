@@ -70,6 +70,7 @@ pub struct FireShot {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ShotTracer {
     pub shooter: PeerId,
+    pub weapon: WeaponId,
     pub origin: Vec3,
     pub end: Vec3,
 }

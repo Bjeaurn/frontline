@@ -49,6 +49,11 @@ pub struct Cli {
     #[arg(long, default_value = DEFAULT_MAP, conflicts_with = "connect")]
     map: String,
 
+    /// Dev/test: look preset from `data/looks.ron` (e.g. `night_ops`) that replaces the Map's own
+    /// look for this session (when hosting or dedicated; only a window shows it).
+    #[arg(long, conflicts_with = "connect")]
+    look: Option<String>,
+
     /// Write TrenchBroom's game config for Frontline (FGD, texture folder) into TrenchBroom's
     /// user folder on startup. Also on when the `FRONTLINE_WRITE_TRENCHBROOM_CONFIG` environment
     /// variable is set.
@@ -100,6 +105,11 @@ impl Cli {
     /// The Map this process's server starts on.
     pub fn map(&self) -> MapId {
         MapId::new(self.map.clone())
+    }
+
+    /// The `--look` preset replacing every Map's look, if given.
+    pub fn look(&self) -> Option<&str> {
+        self.look.as_deref()
     }
 
     /// Whether to write TrenchBroom's game config on startup.

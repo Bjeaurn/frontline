@@ -12,6 +12,6 @@
         file: "maps/arena.map",
         look: Some("desert_dust"),
         modes: ["tdm", "dom", "hq", "sd"],
-        factions: ("ranger", "brigade"),
+        factions: ("ranger", "harmattan"),
     ),
 }

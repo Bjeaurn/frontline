@@ -121,6 +121,8 @@ pub struct WeaponStats {
     pub move_scale: f32,
     /// First-person model (body and sight type).
     pub model: GunModel,
+    /// Asset path of the gunshot recording, e.g. `embedded://frontline/sounds/shot_ar.ogg`.
+    pub shot_sound: String,
     /// Muzzle in gun space (metres, -Z forward): where the flash and tracers start.
     pub muzzle_offset: (f32, f32, f32),
     /// Centre of the sight in gun space: the red dot's glass, the rear aperture of iron
@@ -191,6 +193,7 @@ impl WeaponStats {
             sprint_out_secs: 0.0,
             move_scale: 1.0,
             model: GunModel::Rifle,
+            shot_sound: String::new(),
             bolt_action: false,
             muzzle_offset: (0.0, 0.0, -0.5),
             sight_point: (0.0, 0.08, 0.0),

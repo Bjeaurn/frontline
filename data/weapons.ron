@@ -32,6 +32,7 @@
         sprint_out_secs: 0.2,
         move_scale: 1.0,
         model: Rifle,
+        shot_sound: "embedded://frontline/sounds/shot_ar.ogg",
         // Gun-space points (metres, -Z forward); see WeaponStats.
         muzzle_offset: (0.0, 0.015, -0.48),
         sight_point: (0.0, 0.095, -0.02),
@@ -69,6 +70,7 @@
         sprint_out_secs: 0.15,
         move_scale: 1.05,
         model: Smg,
+        shot_sound: "embedded://frontline/sounds/shot_smg.ogg",
         // Gun-space points (metres, -Z forward); see WeaponStats.
         muzzle_offset: (0.0, 0.01, -0.30),
         sight_point: (0.0, 0.065, 0.09),
@@ -107,6 +109,7 @@
         sprint_out_secs: 0.3,
         move_scale: 0.9,
         model: Sniper,
+        shot_sound: "embedded://frontline/sounds/shot_sniper.ogg",
         // Gun-space points (metres, -Z forward); see WeaponStats.
         muzzle_offset: (0.0, 0.01, -0.86),
         sight_point: (0.0, 0.085, 0.18),

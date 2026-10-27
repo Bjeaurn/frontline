@@ -98,8 +98,18 @@ fn main() -> AppExit {
     app.insert_resource(combat::ServerRules(cli.rules().to_owned()))
         .insert_resource(combat::ServerMap(cli.map()));
     if windowed {
+        app.add_plugins(atmosphere::AtmospherePlugin {
+            look_override: cli.look().map(str::to_owned),
+        });
+        let looks = app.world().resource::<atmosphere::Looks>();
+        if let Some(look) = cli.look().filter(|look| !looks.contains(look)) {
+            error!(
+                "Unknown look \"{look}\" (--look); known: {}",
+                looks.known_names()
+            );
+            return AppExit::error();
+        }
         app.add_plugins((
-            atmosphere::AtmospherePlugin,
             flow::FlowPlugin,
             ui::UiPlugin,
             menus::MenusPlugin,

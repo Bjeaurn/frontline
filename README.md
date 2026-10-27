@@ -17,6 +17,7 @@ cargo run -- --connect 192.168.1.20:5000 --name Bob      # skip the menu and joi
 cargo run -- --dedicated --name "Bob's server"           # headless Dedicated Server
 cargo run -- --dedicated --rules hardcore                # Dedicated Server running the Hardcore preset
 cargo run -- --host --map arena                          # Host on a given Map (id from data/maps.ron)
+cargo run -- --host --look night_ops                     # Host with another look preset (dev/test)
 ```
 
 Servers listen on UDP 5000 (`--port <n>` changes it; it's also the port HOST GAME uses). Every server answers LAN discovery on UDP 5001; a second server on the same machine can't take that port, so it logs a warning and only shows up when joined by IP. `--name` sets your player name for this run (overriding Settings) or a Dedicated Server's name in the browser. `--rules <preset>` picks the Match Rules preset a server (Dedicated, or Host) runs, from `data/match_rules.ron`: `default` unless given, or `hardcore` (30 HP, no regen, friendly fire, no crosshair, hitmarkers or damage direction, kill feed 6 s late). An unknown name stops it at startup with the list of presets. Clients take the HUD settings of that preset from their own copy of the file. For faster rebuilds during development, add `--features dev` (dynamic linking).
@@ -24,6 +25,8 @@ Servers listen on UDP 5000 (`--port <n>` changes it; it's also the port HOST GAM
 Settings (name, mouse sensitivity, field of view, master volume) are saved to `<config dir>/frontline/settings.ron`: `~/Library/Application Support/` on macOS, `~/.config/` on Linux, `%APPDATA%` on Windows.
 
 `--map <id>` picks the Map a server (Dedicated, or Host) starts on: `arena` unless given. It's also the Map behind the main menu. An unknown id stops it at startup with the list of Maps. Clients load whatever Map the server names, so they need the same Map files (a client without a Homage Map leaves with an explanation).
+
+`--look <preset>` (dev/test) replaces the Map's own look with a preset from `data/looks.ron` for that run: `overcast_urban`, `desert_dust`, `dawn_cold`, `jungle_humid` or `night_ops`. It applies to the window of a Host; a Dedicated Server accepts it but has nothing to render, and it can't be combined with `--connect`. An unknown preset stops a windowed run at startup with the list.
 
 A shipped build needs its `assets/` folder (maps, models, fonts) next to the executable; only the surface textures and faction emblems are compiled in. Under `cargo run` the assets come from `crates/frontline/assets/`.
 
@@ -74,7 +77,7 @@ Brushes in worldspawn or any brush entity (`func_group`, `func_generic`) become 
 | `hq_site` | | Headquarters site |
 | `bomb_site` | `label` (A, B) | Search & Destroy bomb site |
 | `prop` | `model` (glTF asset path), `collider` (none, box, convex) | A model; `box` collides as one box around it, `convex` as a hull per mesh |
-| `light_point`, `light_spot`, `light_directional` | Bevy light settings | Extra lights (the sun, sky and fog come from the look) |
+| `light_point`, `light_spot`, `light_directional` | Bevy light settings | Extra lights (the sun, sky and fog come from the look). A `light_point` with `targetname` `practical` is a lamp: its intensity is scaled by the look's `practical_lights` (night looks switch it on, day looks leave it dark) |
 
 ### Generated maps
 
