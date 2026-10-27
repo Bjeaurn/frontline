@@ -11,9 +11,11 @@ use super::damage::{HitZone, shot_damage};
 use super::hitbox::{Hitboxes, set_hitboxes_enabled, spawn_hitboxes};
 use super::match_flow::is_live;
 use super::mode_systems::{ModeRuntime, UseHeld};
+use super::packs::drop_ammo_pack;
 use super::shots::PlayerHit;
 use super::spawn::{bias_toward, choose_spawn};
 use crate::data::{GameData, GameModeId};
+use crate::gear::EquippedPerks;
 use crate::maps::{MapSpawn, MapSpawns};
 use crate::net::protocol::{Damaged, EventChannel, HitConfirm, KillFeed, PlayerOwner, Respawn};
 use crate::shared::{
@@ -91,6 +93,8 @@ pub(super) fn apply_hits(
     mut damaged: Query<&mut MessageSender<Damaged>>,
     mut kill_feeds: Query<&mut MessageSender<KillFeed>, (With<ClientOf>, With<Connected>)>,
     data: Res<GameData>,
+    perks: Query<&EquippedPerks>,
+    poses: Query<&PlayerPose>,
     time: Res<Time>,
     mut commands: Commands,
 ) {
@@ -129,13 +133,24 @@ pub(super) fn apply_hits(
             continue;
         }
         let headshot = hit.zone == HitZone::Head;
-        let amount = shot_damage(data.weapon(hit.weapon), hit.distance, hit.zone, rules);
+        let effects = perks
+            .get(hit.shooter)
+            .map(|perks| data.perk_effects(&perks.0))
+            .unwrap_or_default();
+        let amount = shot_damage(
+            data.weapon(hit.weapon),
+            &data.attachment_mods(hit.attachments),
+            &effects,
+            hit.distance,
+            hit.zone,
+            rules,
+        );
         health.0 = (health.0 - amount).max(0.0);
         last_damaged.0 = time.elapsed();
         let kill = health.is_dead();
         info!(
-            "{shooter_name} hit {} in the {} for {amount:.1} ({:?}, {:.1} m), health {:.1}",
-            victim_name.0, hit.zone, hit.weapon, hit.distance, health.0
+            "{shooter_name} hit {} in the {} for {amount:.1} ({:?}, {:.1} m, Perks x{:.2} damage), health {:.1}",
+            victim_name.0, hit.zone, hit.weapon, hit.distance, effects.damage_mul, health.0
         );
         if let Ok(mut sender) = damaged.get_mut(victim_link.owner) {
             sender.send::<EventChannel>(Damaged {
@@ -150,6 +165,9 @@ pub(super) fn apply_hits(
             continue;
         }
 
+        if let Ok(pose) = poses.get(hit.victim) {
+            drop_ammo_pack(&mut commands, &data, &time, pose.position);
+        }
         stats.deaths += 1;
         set_hitboxes_enabled(&mut commands, hitboxes, false);
         // Search & Destroy has no respawns: the dead wait for the next round, which sends

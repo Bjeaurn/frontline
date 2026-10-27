@@ -1,11 +1,33 @@
-// Default Loadouts offered on the Loadout screen, in order.
+// Loadouts. Read at startup from ./data/ (falls back to the copy built into the binary).
 (
     // A Loadout picked within this many seconds of spawning swaps the held Weapon at once;
     // later picks apply on the next spawn.
     swap_window_secs: 5.0,
+    // Switching between Primary and Secondary: lowering one and raising the other takes this long.
+    weapon_switch_secs: 0.4,
+    // The Default Loadouts, offered read-only on the Loadout screen. Names are at most 16
+    // characters; a Weapon, Attachment or Perk that doesn't fit its place stops the game at startup.
     defaults: [
-        (name: "Assault", primary: AssaultRifle),
-        (name: "Close Quarters", primary: Smg),
-        (name: "Marksman", primary: SniperRifle),
+        (
+            name: "Assault",
+            primary: AssaultRifle,
+            attachments: (optic: Some(RedDot), muzzle: None),
+            secondary: Pistol,
+            perks: (SleightOfHand, StoppingPower, Marathon),
+        ),
+        (
+            name: "Close Quarters",
+            primary: Smg,
+            attachments: (optic: None, muzzle: None),
+            secondary: Pistol,
+            perks: (Scavenger, Lightweight, Ninja),
+        ),
+        (
+            name: "Marksman",
+            primary: SniperRifle,
+            attachments: (optic: None, muzzle: None),
+            secondary: Pistol,
+            perks: (SleightOfHand, StoppingPower, Ninja),
+        ),
     ],
 )

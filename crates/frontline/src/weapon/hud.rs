@@ -7,7 +7,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::window::PrimaryWindow;
 
 use super::{HeldWeapon, WeaponSystems};
-use crate::data::{ActiveRules, GameData};
+use crate::data::ActiveRules;
 use crate::flow::AppState;
 use crate::net::protocol::HitConfirm;
 use crate::player::{EyeCamera, LocalLife};
@@ -366,7 +366,6 @@ fn spawn_weapon_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 /// Opens the arms to the hip spread cone's edge on screen and fades them out with the sights.
 /// Hidden throughout when the Match Rules have no crosshair.
 fn update_crosshair(
-    data: Res<GameData>,
     rules: ActiveRules,
     life: Res<LocalLife>,
     weapons: Query<&HeldWeapon, With<LocalPlayer>>,
@@ -389,7 +388,7 @@ fn update_crosshair(
             Visibility::Inherited
         },
     );
-    let spread = weapon.hip_spread_deg(data.weapon(weapon.id)).to_radians();
+    let spread = weapon.hip_spread_deg(&weapon.stats).to_radians();
     let gap = (spread.tan() / (projection.fov / 2.0).tan() * window.height() / 2.0)
         .max(CROSSHAIR_MIN_GAP);
     let offset = gap + ARM_LENGTH / 2.0;
@@ -444,7 +443,6 @@ fn fade_hitmarker(time: Res<Time>, mut marker: Single<(&mut Hitmarker, &mut Visi
 
 /// Rewrites the counter only when the Weapon, rounds or reload state shown actually change.
 fn update_ammo(
-    data: Res<GameData>,
     weapons: Query<&HeldWeapon, With<LocalPlayer>>,
     mut shown: Local<Option<(crate::data::WeaponId, u32, bool)>>,
     mut count: Single<(&mut Text, &mut TextColor), (With<AmmoCount>, Without<WeaponLabel>)>,
@@ -465,7 +463,7 @@ fn update_ammo(
     } else {
         AMMO_COLOR
     };
-    let name = &data.weapon(weapon.id).name;
+    let name = &weapon.stats.name;
     label.0 = if state.2 {
         format!("{name}  reloading")
     } else {
@@ -475,14 +473,13 @@ fn update_ammo(
 
 /// Shows the scope mask while a scoped Weapon is aimed far enough in.
 fn update_scope(
-    data: Res<GameData>,
     life: Res<LocalLife>,
     weapons: Query<&HeldWeapon, With<LocalPlayer>>,
     mut scope: Single<&mut Visibility, With<ScopeOverlay>>,
 ) {
     let scoped = weapons
         .single()
-        .is_ok_and(|weapon| !life.is_dead() && weapon.scoped(data.weapon(weapon.id)));
+        .is_ok_and(|weapon| !life.is_dead() && weapon.scoped(&weapon.stats));
     scope.set_if_neq(if scoped {
         Visibility::Inherited
     } else {

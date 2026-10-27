@@ -1,0 +1,53 @@
+// Perks: three Perk Slots, two Perks each. Read at startup from ./data/ (falls back to the copy
+// built into the binary). `effects` are multipliers (1 changes nothing) or flags:
+//   reload_time_mul     scales every Weapon's reload time
+//   damage_mul          scales bullet damage (applied by the server)
+//   move_speed_mul      scales movement speed
+//   sprint_stamina_mul  scales how long a sprint lasts
+//   silent_footsteps    other players don't hear this player's footsteps
+//   scavenger           walking over a dead player's ammo pack refills ammo
+(
+    perks: {
+        SleightOfHand: (
+            name: "Sleight of Hand",
+            description: "Reload 40% faster.",
+            slot: 1,
+            effects: (reload_time_mul: 0.6),
+        ),
+        Scavenger: (
+            name: "Scavenger",
+            description: "Walk over a dead player's ammo pack to refill your ammo.",
+            slot: 1,
+            effects: (scavenger: true),
+        ),
+        StoppingPower: (
+            name: "Stopping Power",
+            description: "Bullets deal 25% more damage.",
+            slot: 2,
+            effects: (damage_mul: 1.25),
+        ),
+        Lightweight: (
+            name: "Lightweight",
+            description: "Move 10% faster.",
+            slot: 2,
+            effects: (move_speed_mul: 1.1),
+        ),
+        Marathon: (
+            name: "Marathon",
+            description: "Sprint 2.5x as long.",
+            slot: 3,
+            effects: (sprint_stamina_mul: 2.5),
+        ),
+        Ninja: (
+            name: "Ninja",
+            description: "Your footsteps make no sound.",
+            slot: 3,
+            effects: (silent_footsteps: true),
+        ),
+    },
+    // Ammo packs a dead player drops, for Scavenger.
+    ammo_pack: (
+        pickup_radius: 1.5,
+        lifetime_secs: 45.0,
+    ),
+)

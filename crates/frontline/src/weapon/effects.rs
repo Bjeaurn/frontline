@@ -20,18 +20,17 @@ pub(super) struct EffectsPlugin;
 
 impl Plugin for EffectsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, load_effect_assets)
-            .add_systems(
-                Update,
-                (
-                    show_muzzle_flash,
-                    spawn_local_tracers,
-                    spawn_remote_tracers,
-                    fade_muzzle_flash,
-                    fade_tracers,
-                )
-                    .after(WeaponSystems),
-            );
+        app.add_systems(Startup, load_effect_assets).add_systems(
+            Update,
+            (
+                show_muzzle_flash,
+                spawn_local_tracers,
+                spawn_remote_tracers,
+                fade_muzzle_flash,
+                fade_tracers,
+            )
+                .after(WeaponSystems),
+        );
     }
 }
 
@@ -73,7 +72,7 @@ fn show_muzzle_flash(
     mut rng: ResMut<WeaponRng>,
     mut flash: Query<(&mut MuzzleFlash, &mut Transform, &mut Visibility)>,
 ) {
-    if fired.read().count() == 0 {
+    if fired.read().all(|shot| shot.silenced) {
         return;
     }
     for (mut flash, mut transform, mut visibility) in &mut flash {

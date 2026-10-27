@@ -1,24 +1,24 @@
-//! The Loadout screen (`Overlay::Loadout`): Default Loadouts on the left, the selected one's
-//! Weapon and stat bars on the right. CHOOSE confirms, Esc goes back. B opens it in game.
+//! The Loadout screen (`Overlay::Loadout`): the Default Loadouts (read-only) and the Profile's
+//! custom ones on the left, the selected one's Weapons, Perks and stat bars on the right.
+//! CHOOSE confirms, CREATE A CLASS opens the editor, Esc goes back. B opens it in game.
 
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 
-use super::{ChosenLoadout, SpawnClock};
-use crate::data::{FireMode, GameData, WeaponStats};
-use crate::flow::{Overlay, Settings};
+use super::SpawnClock;
+use super::editor::Draft;
+use super::stats::{self, StatFill};
+use crate::data::GameData;
+use crate::flow::Overlay;
+use crate::gear::{Loadout, PerkEffects};
 use crate::player::LocalLife;
+use crate::profile::{LoadoutChoice, Profile};
 use crate::shared::LocalPlayer;
 use crate::ui::{self, UiFonts};
-use crate::weapon::HeldWeapon;
+use crate::weapon::Kit;
 
 /// Opens the Loadout screen during play.
 const OPEN_KEY: KeyCode = KeyCode::KeyB;
-/// Shortest stat bar, so the weakest Weapon still shows a sliver.
-const MIN_BAR: f32 = 0.12;
-const BAR_WIDTH: f32 = 260.0;
-const BAR_HEIGHT: f32 = 10.0;
-const BAR_TRACK: Color = Color::srgba(1.0, 1.0, 1.0, 0.12);
 
 pub(super) struct LoadoutScreenPlugin;
 
@@ -39,97 +39,65 @@ impl Plugin for LoadoutScreenPlugin {
     }
 }
 
-/// The Loadout highlighted on the screen, confirmed with CHOOSE.
-#[derive(Resource, Default, Debug)]
-struct Preview(usize);
+/// The Loadout highlighted on the screen, confirmed with CHOOSE. The editor starts on its
+/// custom slot.
+#[derive(Resource, Debug)]
+pub(super) struct Preview(pub LoadoutChoice);
+
+impl Default for Preview {
+    fn default() -> Self {
+        Self(LoadoutChoice::Default(0))
+    }
+}
 
 /// The overlay the screen was opened from; Esc returns there.
 #[derive(Resource, Default, Debug)]
 struct ReturnTo(Overlay);
 
 #[derive(Component)]
-struct LoadoutButton(usize);
+struct LoadoutButton(LoadoutChoice);
 
 /// The Weapon name inside a `LoadoutButton`.
 #[derive(Component)]
 struct ButtonWeaponName;
 
 #[derive(Component)]
-struct WeaponName;
+struct ClassName;
+
+/// The Weapons, Attachments and Perks of the previewed Loadout, one per line.
+#[derive(Component)]
+struct ClassLines;
 
 #[derive(Component)]
 struct FireModeText;
 
 #[derive(Component)]
-struct StatFill(Stat);
-
-#[derive(Component)]
 struct NextSpawnNote;
 
-/// A stat bar on the screen, normalised across all Weapons.
-#[derive(Clone, Copy, Debug)]
-enum Stat {
-    Damage,
-    FireRate,
-    Range,
-    Mobility,
-    Accuracy,
-}
-
-impl Stat {
-    const ALL: [Stat; 5] = [
-        Stat::Damage,
-        Stat::FireRate,
-        Stat::Range,
-        Stat::Mobility,
-        Stat::Accuracy,
-    ];
-
-    fn label(self) -> &'static str {
-        match self {
-            Stat::Damage => "Damage",
-            Stat::FireRate => "Fire Rate",
-            Stat::Range => "Range",
-            Stat::Mobility => "Mobility",
-            Stat::Accuracy => "Accuracy",
-        }
-    }
-
-    /// The underlying number; bigger is better.
-    fn raw(self, stats: &WeaponStats) -> f32 {
-        match self {
-            Stat::Damage => stats.damage_near,
-            Stat::FireRate => stats.rpm,
-            // Where damage stops falling off: the distance the gun is built for.
-            Stat::Range => stats.falloff_end,
-            Stat::Mobility => stats.move_scale,
-            // Aimed spread; tighter is better.
-            Stat::Accuracy => -stats.ads_spread_deg,
-        }
-    }
-
-    /// Bar length from `MIN_BAR` (worst Weapon) to 1 (best Weapon).
-    fn bar(self, data: &GameData, stats: &WeaponStats) -> f32 {
-        let (min, max) = data
-            .weapons
-            .values()
-            .map(|weapon| self.raw(weapon))
-            .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), v| {
-                (lo.min(v), hi.max(v))
-            });
-        if max - min <= f32::EPSILON {
-            return 1.0;
-        }
-        MIN_BAR + (1.0 - MIN_BAR) * (self.raw(stats) - min) / (max - min)
-    }
-}
-
-fn fire_mode_text(stats: &WeaponStats) -> &'static str {
-    match stats.fire_mode {
-        FireMode::Auto => "Full auto",
-        FireMode::Semi if stats.bolt_action => "Bolt action",
-        FireMode::Semi => "Semi-auto",
-    }
+/// What a Loadout holds, one line each, for the details panel and tooltips.
+pub(super) fn describe(loadout: &Loadout, data: &GameData) -> String {
+    let primary = &data.weapon(loadout.primary).name;
+    let fitted: Vec<&str> = loadout
+        .attachments
+        .iter()
+        .map(|id| data.attachment(id).name.as_str())
+        .collect();
+    let fitted = if fitted.is_empty() {
+        String::new()
+    } else {
+        format!("  +  {}", fitted.join(", "))
+    };
+    let perks: Vec<String> = loadout
+        .perks
+        .iter()
+        .enumerate()
+        .map(|(slot, perk)| format!("PERK {}  {}", slot + 1, data.perk(*perk).name))
+        .collect();
+    format!(
+        "PRIMARY  {primary}{fitted}\nSECONDARY  {}\n{}",
+        data.weapon(loadout.secondary).name,
+        perks.join("\n")
+    )
 }
 
 fn open_with_key(keys: Res<ButtonInput<KeyCode>>, mut overlay: ResMut<NextState<Overlay>>) {
@@ -138,12 +106,16 @@ fn open_with_key(keys: Res<ButtonInput<KeyCode>>, mut overlay: ResMut<NextState<
     }
 }
 
+/// Remembers where the screen was opened from. Coming back from the editor changes nothing.
 fn remember_origin(
     mut transitions: MessageReader<StateTransitionEvent<Overlay>>,
     mut return_to: ResMut<ReturnTo>,
 ) {
     for transition in transitions.read() {
-        if transition.entered == Some(Overlay::Loadout) && transition.exited != transition.entered {
+        if transition.entered == Some(Overlay::Loadout)
+            && transition.exited != transition.entered
+            && transition.exited != Some(Overlay::ClassEditor)
+        {
             return_to.0 = transition.exited.unwrap_or_default();
         }
     }
@@ -159,14 +131,47 @@ fn back_on_esc(
     }
 }
 
+/// One selectable Loadout in the list.
+fn class_button(
+    commands: &mut Commands,
+    fonts: &UiFonts,
+    list: Entity,
+    choice: LoadoutChoice,
+    loadout: &Loadout,
+    data: &GameData,
+) {
+    commands
+        .spawn((
+            ui::button(fonts, &loadout.name),
+            LoadoutButton(choice),
+            ChildOf(list),
+        ))
+        .with_child((
+            ButtonWeaponName,
+            ui::label(
+                fonts,
+                &data.weapon(loadout.primary).name,
+                18.0,
+                ui::TEXT_DIM,
+            ),
+            Node {
+                margin: UiRect::left(px(28.0)),
+                ..default()
+            },
+        ))
+        .observe(move |_: On<Activate>, mut preview: ResMut<Preview>| {
+            preview.0 = choice;
+        });
+}
+
 fn spawn_screen(
     mut commands: Commands,
     fonts: Res<UiFonts>,
     data: Res<GameData>,
-    chosen: Res<ChosenLoadout>,
+    profile: Res<Profile>,
     mut preview: ResMut<Preview>,
 ) {
-    preview.0 = chosen.0.min(data.default_loadouts.len() - 1);
+    preview.0 = profile.chosen;
     let root = commands
         .spawn((
             Name::new("LoadoutScreen"),
@@ -189,25 +194,37 @@ fn spawn_screen(
         .id();
 
     let list = commands.spawn((ui::panel(), ChildOf(columns))).id();
+    commands.spawn((
+        ui::label(&fonts, "DEFAULT CLASSES", 18.0, ui::TEXT_DIM),
+        ChildOf(list),
+    ));
     for (index, loadout) in data.default_loadouts.iter().enumerate() {
-        let weapon = &data.weapon(loadout.primary).name;
-        commands
-            .spawn((
-                ui::button(&fonts, &loadout.name),
-                LoadoutButton(index),
-                ChildOf(list),
-            ))
-            .with_child((
-                ButtonWeaponName,
-                ui::label(&fonts, weapon, 18.0, ui::TEXT_DIM),
-                Node {
-                    margin: UiRect::left(px(28.0)),
-                    ..default()
-                },
-            ))
-            .observe(move |_: On<Activate>, mut preview: ResMut<Preview>| {
-                preview.0 = index;
-            });
+        class_button(
+            &mut commands,
+            &fonts,
+            list,
+            LoadoutChoice::Default(index),
+            loadout,
+            &data,
+        );
+    }
+    commands.spawn((
+        ui::label(&fonts, "CUSTOM CLASSES", 18.0, ui::TEXT_DIM),
+        Node {
+            margin: UiRect::top(px(10.0)),
+            ..default()
+        },
+        ChildOf(list),
+    ));
+    for (slot, loadout) in profile.custom.iter().enumerate() {
+        class_button(
+            &mut commands,
+            &fonts,
+            list,
+            LoadoutChoice::Custom(slot),
+            loadout,
+            &data,
+        );
     }
 
     let details = commands
@@ -217,53 +234,22 @@ fn spawn_screen(
             padding: UiRect::all(px(24.0)),
             row_gap: px(12.0),
             border: UiRect::all(px(1.0)),
-            min_width: px(440.0),
+            min_width: px(500.0),
             ..default()
         })
         .id();
-    commands.spawn((WeaponName, ui::title(&fonts, "", 34.0), ChildOf(details)));
+    commands.spawn((ClassName, ui::title(&fonts, "", 34.0), ChildOf(details)));
+    commands.spawn((
+        ClassLines,
+        ui::label(&fonts, "", 20.0, ui::TEXT),
+        ChildOf(details),
+    ));
     commands.spawn((
         FireModeText,
         ui::label(&fonts, "", 20.0, ui::TEXT_DIM),
         ChildOf(details),
     ));
-    for stat in Stat::ALL {
-        commands.spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: px(16.0),
-                ..default()
-            },
-            ChildOf(details),
-            children![
-                (
-                    ui::label(&fonts, &stat.label().to_uppercase(), 20.0, ui::TEXT),
-                    Node {
-                        width: px(110.0),
-                        ..default()
-                    },
-                ),
-                (
-                    Node {
-                        width: px(BAR_WIDTH),
-                        height: px(BAR_HEIGHT),
-                        ..default()
-                    },
-                    BackgroundColor(BAR_TRACK),
-                    children![(
-                        StatFill(stat),
-                        Node {
-                            height: percent(100.0),
-                            width: percent(0.0),
-                            ..default()
-                        },
-                        BackgroundColor(ui::ACCENT),
-                    )],
-                ),
-            ],
-        ));
-    }
+    stats::spawn_bars(&mut commands, &fonts, details);
 
     commands.spawn((
         NextSpawnNote,
@@ -290,47 +276,57 @@ fn spawn_screen(
             },
         );
     commands
+        .spawn((ui::button(&fonts, "Create a Class"), ChildOf(actions)))
+        .observe(
+            |_: On<Activate>,
+             preview: Res<Preview>,
+             profile: Res<Profile>,
+             mut commands: Commands,
+             mut overlay: ResMut<NextState<Overlay>>| {
+                commands.insert_resource(Draft::opening(&preview, &profile));
+                overlay.set(Overlay::ClassEditor);
+            },
+        );
+    commands
         .spawn((ui::button(&fonts, "Choose"), ChildOf(actions)))
         .observe(choose);
 }
 
-/// Confirms the previewed Loadout, saves it with the settings and returns to the game.
+/// Confirms the previewed Loadout, saving the choice in the Profile, and returns to the game.
 fn choose(
     _: On<Activate>,
     preview: Res<Preview>,
     data: Res<GameData>,
-    mut chosen: ResMut<ChosenLoadout>,
-    settings: Option<ResMut<Settings>>,
+    mut profile: ResMut<Profile>,
     mut overlay: ResMut<NextState<Overlay>>,
 ) {
-    chosen.set_if_neq(ChosenLoadout(preview.0));
-    if let Some(mut settings) = settings
-        && settings.loadout != preview.0
-    {
-        settings.loadout = preview.0;
+    if profile.chosen != preview.0 {
+        profile.chosen = preview.0;
     }
-    info!("Loadout chosen: {}", chosen.get(&data).name);
+    info!("Loadout chosen: {}", profile.loadout(&data).name);
     overlay.set(Overlay::None);
 }
 
-/// Highlights the previewed Loadout and shows its Weapon, stats and whether it applies now.
+/// Highlights the previewed Loadout and shows its Weapons, Perks, stats and whether it
+/// applies now.
 #[allow(clippy::too_many_arguments)]
 fn refresh(
     time: Res<Time>,
     data: Res<GameData>,
     preview: Res<Preview>,
+    profile: Res<Profile>,
     clock: Res<SpawnClock>,
     life: Res<LocalLife>,
-    held: Query<&HeldWeapon, With<LocalPlayer>>,
+    kit: Query<&Kit, With<LocalPlayer>>,
     buttons: Query<(&LoadoutButton, &Children)>,
     mut texts: Query<(&mut TextColor, Has<ButtonWeaponName>)>,
-    mut name: Single<&mut Text, (With<WeaponName>, Without<FireModeText>)>,
-    mut fire_mode: Single<&mut Text, (With<FireModeText>, Without<WeaponName>)>,
+    mut name: Single<&mut Text, (With<ClassName>, Without<ClassLines>, Without<FireModeText>)>,
+    mut lines: Single<&mut Text, (With<ClassLines>, Without<ClassName>, Without<FireModeText>)>,
+    mut fire_mode: Single<&mut Text, (With<FireModeText>, Without<ClassName>, Without<ClassLines>)>,
     mut fills: Query<(&StatFill, &mut Node)>,
     mut note: Single<&mut Visibility, With<NextSpawnNote>>,
 ) {
-    let loadout = &data.default_loadouts[preview.0];
-    let stats = data.weapon(loadout.primary);
+    let loadout = profile.get(preview.0, &data);
 
     for (button, children) in &buttons {
         let selected = button.0 == preview.0;
@@ -346,24 +342,19 @@ fn refresh(
         }
     }
 
-    let title = stats.name.to_uppercase();
-    if name.0 != title {
-        name.0 = title;
-    }
-    let mode = fire_mode_text(stats);
-    if fire_mode.0 != mode {
-        fire_mode.0 = mode.to_owned();
-    }
-    for (fill, mut node) in &mut fills {
-        let width = percent(fill.0.bar(&data, stats) * 100.0);
-        if node.width != width {
-            node.width = width;
-        }
+    if preview.is_changed() || profile.is_changed() || name.is_added() {
+        let stats = data.effective_weapon(
+            loadout.primary,
+            loadout.attachments,
+            &PerkEffects::default(),
+        );
+        name.0 = loadout.name.to_uppercase();
+        lines.0 = describe(loadout, &data);
+        fire_mode.0 = stats::fire_mode_text(&stats).to_owned();
+        stats::update_bars(&mut fills, &data, &stats);
     }
 
-    let equipped = held
-        .single()
-        .is_ok_and(|weapon| weapon.id() == loadout.primary);
+    let equipped = kit.single().is_ok_and(|kit| kit.loadout() == loadout);
     let deferred = !equipped && !clock.swap_open(time.elapsed_secs_f64(), &life, &data);
     note.set_if_neq(if deferred {
         Visibility::Inherited

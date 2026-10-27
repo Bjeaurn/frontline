@@ -18,3 +18,5 @@ required (its README); the files may be committed as part of a project but not r
 their own, which the embedded game assets are not.
 
 Which Weapon plays which shot is `shot_sound` in `data/weapons.ron`.
+
+The M9 Pistol reuses `shot_smg.ogg`. A Silencer plays a shot quieter and at a lower speed (`data/attachments.ron`). Remote players' footsteps are `impact.ogg` at a low pitch and volume (there is no footstep recording yet).

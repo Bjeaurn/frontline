@@ -17,8 +17,9 @@ use bevy::render::render_resource::BlendState;
 use super::effects::MuzzleFlash;
 use super::{HeldWeapon, ShotFired, WeaponSystems, ease};
 use crate::atmosphere;
-use crate::data::{GameData, GunModel, WeaponId, WeaponStats};
+use crate::data::{GunModel, SightKind, WeaponId, WeaponStats};
 use crate::flow::AppState;
+use crate::gear::Attachments;
 use crate::player::{ControllerSystems, EyeCamera, LocalLife, Motor, MouseCaptured};
 use crate::shared::LocalPlayer;
 
@@ -71,6 +72,9 @@ const SPRINT_IN_RATE: f32 = 12.0;
 const MANTLE_DROP: f32 = 0.2;
 const MANTLE_TILT: f32 = 0.5;
 const MANTLE_RATE: f32 = 14.0;
+/// Switching Weapons at its lowest point: drop and tilt down.
+const SWITCH_DROP: f32 = 0.28;
+const SWITCH_TILT: f32 = 0.9;
 
 /// Light for the viewmodel layer; world lights only reach the world layer.
 const VIEWMODEL_LIGHT_LUX: f32 = 9_000.0;
@@ -105,8 +109,8 @@ pub struct ViewmodelCamera;
 /// The gun root under the viewmodel camera, with its procedural animation state.
 #[derive(Component, Debug, Default)]
 pub(super) struct ViewmodelGun {
-    /// The Weapon whose model is currently built under it.
-    weapon: Option<WeaponId>,
+    /// The Weapon (and Attachments) whose model is currently built under it.
+    weapon: Option<(WeaponId, Attachments)>,
     bob_phase: f32,
     bob_amount: f32,
     sway: Vec2,
@@ -153,20 +157,8 @@ struct GunShape {
     barrel_start: f32,
     /// Top of the receiver, where sight mounts stand.
     body_top: f32,
-    sight: Sight,
     /// Bolt handle box (size, centre), if the model has one to work.
     bolt: Option<(Vec3, Vec3)>,
-}
-
-/// Kind of sight, built around `WeaponStats::sight_point`.
-enum Sight {
-    /// A thin open frame around a glass window with a red dot at its centre.
-    RedDot,
-    /// A rear aperture ring at the sight point and a front post at `front_z`, its tip on
-    /// the ring's axis.
-    Irons { front_z: f32 },
-    /// A scope tube whose eyepiece ends at the sight point.
-    Scope,
 }
 
 /// Red dot window (width, height), frame bar thickness and housing depth.
@@ -174,6 +166,13 @@ const RED_DOT_WINDOW: Vec2 = Vec2::new(0.036, 0.028);
 const RED_DOT_FRAME: f32 = 0.0015;
 const RED_DOT_DEPTH: f32 = 0.012;
 const RED_DOT_RADIUS: f32 = 0.0009;
+/// ACOG window, frame bar thickness, housing length and reticle dot radius.
+const ACOG_WINDOW: Vec2 = Vec2::new(0.026, 0.024);
+const ACOG_FRAME: f32 = 0.007;
+const ACOG_DEPTH: f32 = 0.09;
+const ACOG_RADIUS: f32 = 0.0007;
+/// Silencer girth relative to the barrel.
+const SUPPRESSOR_RADIUS_SCALE: f32 = 1.9;
 /// Rear aperture ring radii (hole, outside), front post width and height.
 const APERTURE: (f32, f32) = (0.005, 0.0075);
 const FRONT_POST: Vec2 = Vec2::new(0.0025, 0.042);
@@ -229,7 +228,6 @@ const RIFLE: GunShape = GunShape {
     barrel_radius: 0.012,
     barrel_start: -0.30,
     body_top: 0.0455,
-    sight: Sight::RedDot,
     bolt: None,
 };
 
@@ -275,7 +273,6 @@ const SMG: GunShape = GunShape {
     barrel_radius: 0.011,
     barrel_start: -0.23,
     body_top: 0.035,
-    sight: Sight::Irons { front_z: -0.20 },
     bolt: None,
 };
 
@@ -316,8 +313,47 @@ const SNIPER: GunShape = GunShape {
     barrel_radius: 0.011,
     barrel_start: -0.50,
     body_top: 0.0325,
-    sight: Sight::Scope,
     bolt: Some((Vec3::new(0.07, 0.014, 0.014), Vec3::new(0.045, 0.012, 0.10))),
+};
+
+/// Compact: a slide over a short grip frame with a trigger guard and a thin magazine base.
+const PISTOL: GunShape = GunShape {
+    boxes: &[
+        // Slide.
+        (
+            Vec3::new(0.03, 0.036, 0.20),
+            Vec3::new(0.0, 0.0, -0.025),
+            Furniture::Metal,
+        ),
+        // Frame under the slide, running forward as the dust cover.
+        (
+            Vec3::new(0.028, 0.022, 0.16),
+            Vec3::new(0.0, -0.029, -0.045),
+            Furniture::Polymer,
+        ),
+        // Grip.
+        (
+            Vec3::new(0.032, 0.105, 0.05),
+            Vec3::new(0.0, -0.088, 0.055),
+            Furniture::Polymer,
+        ),
+        // Trigger guard.
+        (
+            Vec3::new(0.014, 0.008, 0.05),
+            Vec3::new(0.0, -0.046, -0.01),
+            Furniture::Metal,
+        ),
+        // Magazine base.
+        (
+            Vec3::new(0.034, 0.012, 0.055),
+            Vec3::new(0.0, -0.146, 0.055),
+            Furniture::Metal,
+        ),
+    ],
+    barrel_radius: 0.008,
+    barrel_start: -0.125,
+    body_top: 0.018,
+    bolt: None,
 };
 
 fn shape(model: GunModel) -> &'static GunShape {
@@ -325,6 +361,7 @@ fn shape(model: GunModel) -> &'static GunShape {
         GunModel::Rifle => &RIFLE,
         GunModel::Smg => &SMG,
         GunModel::Sniper => &SNIPER,
+        GunModel::Pistol => &PISTOL,
     }
 }
 
@@ -396,8 +433,51 @@ fn create_gun_materials(mut commands: Commands, mut materials: ResMut<Assets<Sta
     ));
 }
 
-/// Meshes of a sight built around `sight` (the sight point), as (mesh, finish, transform).
-fn sight_parts(shape: &GunShape, sight: Vec3) -> Vec<(Mesh, Furniture, Transform)> {
+/// A rectangular optic around `sight`: four frame bars of thickness `frame` and length `depth`
+/// (centred `shift` towards the eye) around a glass `window`, with a dot of `dot` radius at its
+/// centre.
+fn optic_parts(
+    sight: Vec3,
+    window: Vec2,
+    frame: f32,
+    depth: f32,
+    shift: f32,
+    dot: f32,
+) -> Vec<(Mesh, Furniture, Transform)> {
+    let block = |size: Vec3, centre: Vec3| {
+        (
+            Mesh::from(Cuboid::from_size(size)),
+            Furniture::Sight,
+            Transform::from_translation(centre),
+        )
+    };
+    let (w, h, t) = (window.x, window.y, frame);
+    let centre = sight + Vec3::Z * shift;
+    let side = Vec3::new(t, h + 2.0 * t, depth);
+    let bar = Vec3::new(w + 2.0 * t, t, depth);
+    vec![
+        block(side, centre + Vec3::X * (w + t) / 2.0),
+        block(side, centre - Vec3::X * (w + t) / 2.0),
+        block(bar, centre + Vec3::Y * (h + t) / 2.0),
+        block(bar, centre - Vec3::Y * (h + t) / 2.0),
+        (
+            Mesh::from(Rectangle::from_size(window)),
+            Furniture::Glass,
+            Transform::from_translation(sight),
+        ),
+        // Just in front of the glass towards the eye, so it never z-fights it.
+        (
+            Mesh::from(Circle::new(dot)),
+            Furniture::Reticle,
+            Transform::from_translation(sight + Vec3::Z * 0.001),
+        ),
+    ]
+}
+
+/// Meshes of the Weapon's sight (`stats.sight`) built around its sight point, as
+/// (mesh, finish, transform).
+fn sight_parts(shape: &GunShape, stats: &WeaponStats) -> Vec<(Mesh, Furniture, Transform)> {
+    let sight = Vec3::from(stats.sight_point);
     let block = |size: Vec3, centre: Vec3| {
         (
             Mesh::from(Cuboid::from_size(size)),
@@ -414,31 +494,31 @@ fn sight_parts(shape: &GunShape, sight: Vec3) -> Vec<(Mesh, Furniture, Transform
         )
     };
     let along_axis = Quat::from_rotation_x(FRAC_PI_2);
-    match shape.sight {
-        Sight::RedDot => {
-            let (w, h, t) = (RED_DOT_WINDOW.x, RED_DOT_WINDOW.y, RED_DOT_FRAME);
-            let side = Vec3::new(t, h + 2.0 * t, RED_DOT_DEPTH);
-            let bar = Vec3::new(w + 2.0 * t, t, RED_DOT_DEPTH);
-            vec![
-                block(side, sight + Vec3::X * (w + t) / 2.0),
-                block(side, sight - Vec3::X * (w + t) / 2.0),
-                block(bar, sight + Vec3::Y * (h + t) / 2.0),
-                block(bar, sight - Vec3::Y * (h + t) / 2.0),
-                mount(sight.y - h / 2.0 - t, sight.z, 0.012, 0.03),
-                (
-                    Mesh::from(Rectangle::from_size(RED_DOT_WINDOW)),
-                    Furniture::Glass,
-                    Transform::from_translation(sight),
-                ),
-                // Just in front of the glass towards the eye, so it never z-fights it.
-                (
-                    Mesh::from(Circle::new(RED_DOT_RADIUS)),
-                    Furniture::Reticle,
-                    Transform::from_translation(sight + Vec3::Z * 0.001),
-                ),
-            ]
+    match stats.sight {
+        SightKind::RedDot => {
+            let (window, t) = (RED_DOT_WINDOW, RED_DOT_FRAME);
+            let mut parts = optic_parts(sight, window, t, RED_DOT_DEPTH, 0.0, RED_DOT_RADIUS);
+            parts.push(mount(sight.y - window.y / 2.0 - t, sight.z, 0.012, 0.03));
+            parts
         }
-        Sight::Irons { front_z } => {
+        SightKind::Acog => {
+            let (window, t) = (ACOG_WINDOW, ACOG_FRAME);
+            // The housing runs forward from the eyepiece; a rail block sits on its top.
+            let shift = -ACOG_DEPTH / 2.0 + 0.005;
+            let mut parts = optic_parts(sight, window, t, ACOG_DEPTH, shift, ACOG_RADIUS);
+            parts.push(block(
+                Vec3::new(window.x + 2.0 * t, 0.012, ACOG_DEPTH),
+                sight + Vec3::new(0.0, (window.y + 2.0 * t + 0.012) / 2.0 + t / 2.0, shift),
+            ));
+            parts.push(mount(
+                sight.y - window.y / 2.0 - t,
+                sight.z + shift,
+                0.024,
+                0.06,
+            ));
+            parts
+        }
+        SightKind::Irons => {
             let (hole, outside) = APERTURE;
             let post = Vec3::new(FRONT_POST.x, FRONT_POST.y, 0.003);
             vec![
@@ -448,10 +528,13 @@ fn sight_parts(shape: &GunShape, sight: Vec3) -> Vec<(Mesh, Furniture, Transform
                     Transform::from_translation(sight).with_rotation(along_axis),
                 ),
                 mount(sight.y - outside + 0.001, sight.z, 0.006, 0.008),
-                block(post, Vec3::new(sight.x, sight.y - post.y / 2.0, front_z)),
+                block(
+                    post,
+                    Vec3::new(sight.x, sight.y - post.y / 2.0, stats.iron_front_z),
+                ),
             ]
         }
-        Sight::Scope => SCOPE_TUBES
+        SightKind::Scope => SCOPE_TUBES
             .iter()
             .map(|&(radius, from, to)| {
                 (
@@ -547,10 +630,10 @@ fn attach_viewmodel(
     ));
 }
 
-/// Swaps the gun model when the held Weapon changes, moving the flash to its muzzle.
+/// Swaps the gun model when the held Weapon (or what is fitted to it) changes, moving the flash
+/// to its muzzle.
 fn build_gun(
     mut commands: Commands,
-    data: Res<GameData>,
     materials: Res<GunMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
     player: Query<&HeldWeapon, With<LocalPlayer>>,
@@ -561,17 +644,20 @@ fn build_gun(
     let (Ok(weapon), Ok((gun, mut anim, children))) = (player.single(), gun.single_mut()) else {
         return;
     };
-    if anim.weapon == Some(weapon.id) {
+    let built = (weapon.id, weapon.attachments);
+    if anim.weapon == Some(built) {
         return;
     }
-    anim.weapon = Some(weapon.id);
+    anim.weapon = Some(built);
     for child in children.iter().filter(|child| parts.contains(*child)) {
         commands.entity(child).despawn();
     }
 
-    let stats = data.weapon(weapon.id);
+    let stats = &*weapon.stats;
     let shape = shape(stats.model);
     let muzzle = Vec3::from(stats.muzzle_offset);
+    // Where the barrel itself ends: a Silencer carries on from there to the muzzle.
+    let barrel_end = muzzle.z + stats.muzzle_length;
     let mut part = |mesh: Mesh, furniture: Furniture, transform: Transform| {
         commands
             .spawn((
@@ -592,14 +678,25 @@ fn build_gun(
             Transform::from_translation(centre),
         );
     }
-    let barrel_length = shape.barrel_start - muzzle.z;
     part(
-        Cylinder::new(shape.barrel_radius, barrel_length).into(),
+        Cylinder::new(shape.barrel_radius, shape.barrel_start - barrel_end).into(),
         Furniture::Metal,
-        Transform::from_xyz(muzzle.x, muzzle.y, (shape.barrel_start + muzzle.z) / 2.0)
+        Transform::from_xyz(muzzle.x, muzzle.y, (shape.barrel_start + barrel_end) / 2.0)
             .with_rotation(Quat::from_rotation_x(FRAC_PI_2)),
     );
-    for (mesh, furniture, transform) in sight_parts(shape, Vec3::from(stats.sight_point)) {
+    if stats.muzzle_length > 0.0 {
+        part(
+            Cylinder::new(
+                shape.barrel_radius * SUPPRESSOR_RADIUS_SCALE,
+                stats.muzzle_length,
+            )
+            .into(),
+            Furniture::Sight,
+            Transform::from_xyz(muzzle.x, muzzle.y, (barrel_end + muzzle.z) / 2.0)
+                .with_rotation(Quat::from_rotation_x(FRAC_PI_2)),
+        );
+    }
+    for (mesh, furniture, transform) in sight_parts(shape, stats) {
         part(mesh, furniture, transform);
     }
     if let Some((size, centre)) = shape.bolt {
@@ -636,7 +733,6 @@ fn match_eye_fov(
 #[allow(clippy::too_many_arguments)]
 fn animate_viewmodel(
     time: Res<Time>,
-    data: Res<GameData>,
     life: Res<LocalLife>,
     captured: Res<MouseCaptured>,
     motion: Res<AccumulatedMouseMotion>,
@@ -652,7 +748,7 @@ fn animate_viewmodel(
     let Ok((mut anim, mut transform, mut visibility)) = gun.single_mut() else {
         return;
     };
-    let stats = data.weapon(weapon.id);
+    let stats = &*weapon.stats;
     visibility.set_if_neq(if life.is_dead() || weapon.scoped(stats) {
         Visibility::Hidden
     } else {
@@ -660,7 +756,7 @@ fn animate_viewmodel(
     });
     let dt = time.delta_secs();
     let ads = weapon.ads_eased();
-    let motion_scale = 1.0_f32.lerp(ADS_MOTION_SCALE, ads);
+    let motion_scale = 1.0_f32.lerp(ADS_MOTION_SCALE * stats.ads_sway_scale, ads);
 
     let velocity = motor.velocity();
     let speed = Vec2::new(velocity.x, velocity.z).length();
@@ -704,6 +800,7 @@ fn animate_viewmodel(
     anim.mantle.smooth_nudge(&mantle_target, MANTLE_RATE, dt);
     let mantle = ease(anim.mantle);
 
+    let switching = weapon.switch_lowering();
     let ads_offset = ads_offset(stats);
     let wobble = (bob + anim.sway) * motion_scale;
     transform.translation = HIP_OFFSET.lerp(ads_offset, ads)
@@ -711,7 +808,7 @@ fn animate_viewmodel(
         + BOLT_SHIFT * bolt
         + Vec3::new(
             wobble.x,
-            wobble.y - RELOAD_DROP * dip - MANTLE_DROP * mantle,
+            wobble.y - RELOAD_DROP * dip - MANTLE_DROP * mantle - SWITCH_DROP * switching,
             KICK_BACK * kick,
         );
     transform.rotation = Quat::from_euler(
@@ -721,7 +818,8 @@ fn animate_viewmodel(
             + anim.sway.y * SWAY_TILT * motion_scale
             + SPRINT_PITCH * sprint
             - MANTLE_TILT * mantle
-            + BOLT_TILT * bolt,
+            + BOLT_TILT * bolt
+            - SWITCH_TILT * switching,
         RELOAD_ROLL * dip + SPRINT_ROLL * sprint + BOLT_ROLL * bolt,
     );
 }

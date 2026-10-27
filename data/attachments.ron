@@ -1,0 +1,34 @@
+// Attachments. Read at startup from ./data/ (falls back to the copy built into the binary).
+// Each fits one Attachment Slot (Optic or Muzzle) on a Primary; the server applies the same
+// `mods` for damage falloff as the client does for everything else. `mods` are multipliers:
+//   falloff_mul        scales both falloff distances (below 1: damage drops off sooner)
+//   ads_secs_mul       scales the time to aim down sights (above 1: slower)
+//   ads_fov_scale_mul  scales the ADS field of view factor (below 1: zooms in further)
+//   ads_sway_mul       scales the gun motion that remains when aimed (above 1: swayier)
+// `sight` is what an Optic draws and aims through; `silenced` removes the muzzle flash, and
+// `shot_volume` / `shot_pitch` scale the gunshot's volume and playback speed.
+{
+    RedDot: (
+        name: "Red Dot",
+        description: "Clear dot sight. No handling penalty.",
+        slot: Optic,
+        sight: RedDot,
+    ),
+    Acog: (
+        name: "ACOG",
+        description: "About 4x zoom. Slower to aim and swayier.",
+        slot: Optic,
+        sight: Acog,
+        mods: (ads_fov_scale_mul: 0.55, ads_secs_mul: 1.3, ads_sway_mul: 1.4),
+    ),
+    Silencer: (
+        name: "Silencer",
+        description: "No muzzle flash and a quiet report. Damage falls off sooner.",
+        slot: Muzzle,
+        mods: (falloff_mul: 0.75),
+        silenced: true,
+        shot_volume: 0.35,
+        shot_pitch: 0.8,
+        muzzle_length: 0.16,
+    ),
+}

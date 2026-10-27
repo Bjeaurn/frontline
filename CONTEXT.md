@@ -166,6 +166,14 @@ _Avoid_: Skill, trait, buff
 One of three positions in a **Loadout**, each holding exactly one **Perk** from that slot's own set.
 _Avoid_: Perk tier
 
+**Create a Class**:
+The editor, opened from the Loadout screen, where a player fills one of the **Profile**'s custom **Loadouts**: **Primary** with its **Attachments**, **Secondary**, one **Perk** per **Perk Slot** and a name.
+_Avoid_: Class builder, loadout editor (as the in-game name)
+
+**Ammo Pack**:
+A pickup a player drops on dying; walking over it refills the ammo of a player with the Scavenger **Perk**.
+_Avoid_: Ammo crate, drop
+
 **Killstreak**:
 A reward a player earns for consecutive kills without dying; the count resets on death.
 _Avoid_: Scorestreak, streak reward
@@ -213,9 +221,10 @@ _Avoid_: Combo, double/triple (as the general term)
 - **Headquarters** needs at least one HQ site on the **Map**; **Search & Destroy** needs two **Bomb Sites** (A, B)
 - A **Rotation entry** only names a **Game Mode** its **Map** supports
 - A **Loadout** has one **Primary**, one **Secondary**, and one **Perk** per **Perk Slot**
-- A **Weapon** has an Optic and a Muzzle **Attachment Slot**, each optionally filled
+- A **Primary** has an Optic and a Muzzle **Attachment Slot**, each optionally filled; a scoped Primary (the sniper rifle) has no Optic slot, and a **Secondary** has no Attachment Slots
 - A **Profile** belongs to one player and is independent of any **Host**
-- A **Profile** holds three custom and three default **Loadouts**
+- A **Profile** holds three custom and three default **Loadouts**; the default ones are read-only and the custom ones are edited through **Create a Class**
+- A dead player drops an **Ammo Pack** that a player with the Scavenger **Perk** picks up by walking over it
 
 ## Flagged ambiguities
 

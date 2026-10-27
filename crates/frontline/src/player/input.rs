@@ -43,6 +43,9 @@ pub struct Bindings {
     /// Hold to aim down sights.
     pub aim: MouseButton,
     pub reload: Binding,
+    /// Take the Primary / the Secondary (the mouse wheel switches to the other Weapon).
+    pub primary_weapon: Binding,
+    pub secondary_weapon: Binding,
     /// Open the team select screen.
     pub team_menu: Binding,
     /// Hold to show the Scoreboard.
@@ -67,6 +70,8 @@ impl Default for Bindings {
             fire: MouseButton::Left,
             aim: MouseButton::Right,
             reload: Binding::keys(&[KeyCode::KeyR]),
+            primary_weapon: Binding::keys(&[KeyCode::Digit1]),
+            secondary_weapon: Binding::keys(&[KeyCode::Digit2]),
             team_menu: Binding::keys(&[KeyCode::KeyT]),
             scoreboard: Binding::keys(&[KeyCode::Tab]),
             use_objective: Binding::keys(&[KeyCode::KeyF]),

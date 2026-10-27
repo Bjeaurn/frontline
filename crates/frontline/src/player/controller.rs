@@ -69,6 +69,8 @@ pub struct Motor {
     /// height is measured from here.
     ground_y: f32,
     stamina: f32,
+    /// Seconds of sprint a full tank holds.
+    tank: f32,
     sprinting: bool,
     jump_requested: bool,
     /// Seconds since the latest touchdown.
@@ -86,6 +88,7 @@ impl Motor {
             grounded: false,
             ground_y: f32::INFINITY,
             stamina: tuning.sprint_stamina_secs,
+            tank: tuning.sprint_stamina_secs,
             sprinting: false,
             jump_requested: false,
             since_landing: f32::INFINITY,
@@ -107,8 +110,17 @@ impl Motor {
         self.stamina = if self.sprinting {
             (self.stamina - dt).max(0.0)
         } else {
-            (self.stamina + tuning.stamina_regen_per_sec * dt).min(tuning.sprint_stamina_secs)
+            (self.stamina + tuning.stamina_regen_per_sec * dt).min(self.tank)
         };
+    }
+
+    /// Resizes the stamina tank to `tank` seconds (a Perk can change it), keeping it as full as
+    /// it was.
+    fn set_tank(&mut self, tank: f32) {
+        if tank != self.tank {
+            self.stamina = self.stamina / self.tank.max(f32::EPSILON) * tank;
+            self.tank = tank;
+        }
     }
 
     /// Speed multiplier of the post-landing slowdown: `landing_slow_scale` at touchdown, back
@@ -227,6 +239,8 @@ pub struct ControllerModifiers {
     pub move_scale: f32,
     /// Multiplies the horizontal field of view.
     pub fov_scale: f32,
+    /// Multiplies the sprint stamina tank.
+    pub stamina_scale: f32,
     /// Sprinting is not allowed (and an ongoing sprint stops).
     pub sprint_blocked: bool,
     /// Movement is locked (planting or defusing the bomb).
@@ -238,6 +252,7 @@ impl Default for ControllerModifiers {
         Self {
             move_scale: 1.0,
             fov_scale: 1.0,
+            stamina_scale: 1.0,
             sprint_blocked: false,
             frozen: false,
         }
@@ -646,6 +661,8 @@ pub(super) fn move_player(
 
     motor.getup = (motor.getup - dt).max(0.0);
 
+    motor.set_tank(tuning.sprint_stamina_secs * modifiers.stamina_scale);
+
     let active =
         captured.0 && !life.is_dead() && !motor.mantling() && !motor.diving() && !modifiers.frozen;
     let pressed = |binding: &Binding| active && binding.pressed(&keys);
@@ -949,6 +966,28 @@ mod tests {
         assert_eq!(motor.stamina, 0.0);
         motor.tick_sprint(true, dt, &tuning);
         assert!(!motor.sprinting);
+    }
+
+    #[test]
+    fn a_bigger_tank_lasts_proportionally_longer() {
+        let tuning = MovementTuning::fixture();
+        let mut motor = Motor {
+            grounded: true,
+            ..Motor::new(&tuning)
+        };
+        // Marathon-style: 2.5x the tank, and the fill fraction carries over.
+        motor.set_tank(tuning.sprint_stamina_secs * 2.5);
+        assert_eq!(motor.stamina, tuning.sprint_stamina_secs * 2.5);
+        let dt = 0.5;
+        let mut lasted = 0.0;
+        loop {
+            motor.tick_sprint(true, dt, &tuning);
+            if !motor.sprinting {
+                break;
+            }
+            lasted += dt;
+        }
+        assert!((lasted - tuning.sprint_stamina_secs * 2.5).abs() <= dt);
     }
 
     #[test]

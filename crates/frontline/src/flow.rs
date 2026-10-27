@@ -17,9 +17,11 @@ use crate::cli::Mode;
 use crate::data::GameModeId;
 use crate::match_hud::PendingTeam;
 use crate::player::input::Bindings;
-use crate::rotation::HostSetup;
 use crate::player::{ControllerSystems, MenuOpen};
+use crate::rotation::HostSetup;
 use crate::shared::{LocalPlayerReplica, PlayerTeam};
+
+const SETTINGS_FILE: &str = "settings.ron";
 
 /// Top-level screen.
 #[derive(States, Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -52,6 +54,8 @@ pub enum Overlay {
     None,
     TeamSelect,
     Loadout,
+    /// Create a Class: edits one of the Profile's custom Loadouts. Opened from `Loadout`.
+    ClassEditor,
     Pause,
     Settings,
 }
@@ -103,8 +107,9 @@ pub struct Settings {
     pub fov_deg: f32,
     /// 0..1.
     pub master_volume: f32,
-    /// Chosen Default Loadout, an index into `GameData::default_loadouts`.
-    #[serde(default)]
+    /// The Default Loadout chosen before Profiles existed (an index into
+    /// `GameData::default_loadouts`). Only read to seed a new Profile; never written back.
+    #[serde(default, skip_serializing)]
     pub loadout: usize,
     /// The Host setup screen's choices.
     #[serde(default)]
@@ -174,40 +179,43 @@ impl Plugin for FlowPlugin {
     }
 }
 
-/// `<config dir>/frontline/settings.ron`.
-fn settings_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|dir| dir.join("frontline").join("settings.ron"))
+/// `<config dir>/frontline/<file>`: where the Settings and the Profile live.
+fn config_path(file: &str) -> Option<PathBuf> {
+    dirs::config_dir().map(|dir| dir.join("frontline").join(file))
 }
 
-fn load_settings() -> Settings {
-    let Some(path) = settings_path() else {
-        warn!("No user config directory; using default settings");
-        return Settings::default();
+/// Reads the RON config file `file`; `None` when it is absent, unreadable or not valid (all but
+/// absent are logged).
+pub fn load_config<T: serde::de::DeserializeOwned>(file: &str) -> Option<T> {
+    let Some(path) = config_path(file) else {
+        warn!("No user config directory; not loading {file}");
+        return None;
     };
     match std::fs::read_to_string(&path) {
         Ok(text) => match ron::from_str(&text) {
-            Ok(settings) => {
-                info!("Loaded settings from {}", path.display());
-                settings
+            Ok(value) => {
+                info!("Loaded {}", path.display());
+                Some(value)
             }
             Err(err) => {
                 warn!("Ignoring {}: {err}", path.display());
-                Settings::default()
+                None
             }
         },
-        Err(err) if err.kind() == ErrorKind::NotFound => Settings::default(),
+        Err(err) if err.kind() == ErrorKind::NotFound => None,
         Err(err) => {
             warn!("Can't read {}: {err}", path.display());
-            Settings::default()
+            None
         }
     }
 }
 
-fn save_settings(settings: Res<Settings>) {
-    let Some(path) = settings_path() else {
+/// Writes `value` to the RON config file `file`, logging instead of failing.
+pub fn save_config<T: Serialize>(file: &str, value: &T) {
+    let Some(path) = config_path(file) else {
         return;
     };
-    let saved = ron::ser::to_string_pretty(&*settings, ron::ser::PrettyConfig::default())
+    let saved = ron::ser::to_string_pretty(value, ron::ser::PrettyConfig::default())
         .map_err(|err| err.to_string())
         .and_then(|text| {
             if let Some(dir) = path.parent() {
@@ -216,9 +224,17 @@ fn save_settings(settings: Res<Settings>) {
             std::fs::write(&path, text).map_err(|err| err.to_string())
         });
     match saved {
-        Ok(()) => info!("Saved settings to {}", path.display()),
-        Err(err) => warn!("Can't save settings to {}: {err}", path.display()),
+        Ok(()) => info!("Saved {}", path.display()),
+        Err(err) => warn!("Can't save {}: {err}", path.display()),
     }
+}
+
+fn load_settings() -> Settings {
+    load_config(SETTINGS_FILE).unwrap_or_default()
+}
+
+fn save_settings(settings: Res<Settings>) {
+    save_config(SETTINGS_FILE, &*settings);
 }
 
 fn apply_volume(settings: Res<Settings>, mut volume: ResMut<GlobalVolume>) {

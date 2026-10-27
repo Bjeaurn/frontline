@@ -192,11 +192,11 @@ fn play_local_shots(
     mut commands: Commands,
 ) {
     for shot in fired.read() {
-        let speed = pitch(&mut rng);
+        let speed = pitch(&mut rng) * shot.pitch;
         play(
             &mut commands,
             &sounds.shots[&shot.weapon],
-            LOCAL_SHOT_VOLUME,
+            LOCAL_SHOT_VOLUME * shot.volume,
             speed,
             None,
         );
@@ -215,11 +215,12 @@ fn play_remote_shots(
     mut commands: Commands,
 ) {
     for FromServer(tracer) in tracers.read() {
-        let speed = pitch(&mut rng);
+        let (volume, shot_pitch) = data.shot_sound(tracer.attachments);
+        let speed = pitch(&mut rng) * shot_pitch;
         play(
             &mut commands,
             &sounds.shots[&tracer.weapon],
-            REMOTE_SHOT_VOLUME,
+            REMOTE_SHOT_VOLUME * volume,
             speed,
             Some(tracer.origin),
         );
@@ -241,7 +242,6 @@ struct ReloadWatch {
 /// going in part-way through.
 fn play_reload_sounds(
     player: Query<&HeldWeapon, With<LocalPlayer>>,
-    data: Res<GameData>,
     sounds: Res<WeaponSounds>,
     mut watch: Local<ReloadWatch>,
     mut commands: Commands,
@@ -250,7 +250,7 @@ fn play_reload_sounds(
         *watch = ReloadWatch::default();
         return;
     };
-    let Some(progress) = weapon.reload_progress(data.weapon(weapon.id)) else {
+    let Some(progress) = weapon.reload_progress(&weapon.stats) else {
         *watch = ReloadWatch::default();
         return;
     };

@@ -10,6 +10,7 @@ use super::damage::HitZone;
 use super::hitbox::{Hitbox, HitboxOf, Hitboxes};
 use super::match_flow::is_live;
 use crate::data::{GameData, WeaponId};
+use crate::gear::Attachments;
 use crate::net::LinkPlayer;
 use crate::net::protocol::{EffectChannel, FireShot, PlayerOwner, ShotTracer};
 use crate::shared::{GameLayer, Health, MatchState};
@@ -20,6 +21,8 @@ pub struct PlayerHit {
     pub shooter: Entity,
     pub victim: Entity,
     pub weapon: WeaponId,
+    /// The Attachments fitted to it.
+    pub attachments: Attachments,
     pub zone: HitZone,
     /// Distance the bullet travelled, for damage falloff.
     pub distance: f32,
@@ -32,7 +35,10 @@ pub(super) fn resolve_shots(
     mut links: Query<(Entity, &LinkPlayer, &mut MessageReceiver<FireShot>)>,
     shooters: Query<(&Health, &PlayerOwner, &Hitboxes)>,
     hitboxes: Query<(&Hitbox, &HitboxOf)>,
-    mut tracer_senders: Query<(Entity, &mut MessageSender<ShotTracer>), (With<ClientOf>, With<Connected>)>,
+    mut tracer_senders: Query<
+        (Entity, &mut MessageSender<ShotTracer>),
+        (With<ClientOf>, With<Connected>),
+    >,
     state: Single<&MatchState>,
     spatial: SpatialQuery,
     data: Res<GameData>,
@@ -63,6 +69,7 @@ pub(super) fn resolve_shots(
                     shooter: player.0,
                     victim: *victim,
                     weapon: shot.weapon,
+                    attachments: shot.attachments,
                     zone: hitbox.zone,
                     distance,
                     origin: shot.origin,
@@ -72,6 +79,7 @@ pub(super) fn resolve_shots(
             let tracer = ShotTracer {
                 shooter: owner.0,
                 weapon: shot.weapon,
+                attachments: shot.attachments,
                 origin: shot.origin,
                 end: shot.origin + direction * distance,
             };

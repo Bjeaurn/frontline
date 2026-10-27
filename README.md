@@ -24,7 +24,7 @@ cargo run -- --host --look night_ops                     # Host with another loo
 
 Servers listen on UDP 5000 (`--port <n>` changes it; it's also the port HOST GAME uses). Every server answers LAN discovery on UDP 5001; a second server on the same machine can't take that port, so it logs a warning and only shows up when joined by IP. `--name` sets your player name for this run (overriding Settings) or a Dedicated Server's name in the browser. `--rules <preset>` picks the Match Rules preset a server (Dedicated, or Host) runs, from `data/match_rules.ron`: `default` unless given, or `hardcore` (30 HP, no regen, friendly fire, no crosshair, hitmarkers or damage direction, kill feed 6 s late). An unknown name stops it at startup with the list of presets. Clients take the HUD settings of that preset from their own copy of the file. For faster rebuilds during development, add `--features dev` (dynamic linking).
 
-Settings (name, mouse sensitivity, field of view, master volume) are saved to `<config dir>/frontline/settings.ron`: `~/Library/Application Support/` on macOS, `~/.config/` on Linux, `%APPDATA%` on Windows.
+Settings (name, mouse sensitivity, field of view, master volume) are saved to `<config dir>/frontline/settings.ron`: `~/Library/Application Support/` on macOS, `~/.config/` on Linux, `%APPDATA%` on Windows. The Profile (custom Loadouts and the chosen Loadout) is saved next to it as `profile.ron`.
 
 `--mode <key>` picks the Game Mode of a single-entry game: `tdm` (Team Deathmatch, the default), `dom` (Domination), `hq` (Headquarters) or `sd` (Search & Destroy). The Map must support it (`modes` in `data/maps.ron`; an unsupported pair stops at startup with the list). `--rotation <file.ron>` replaces `--map`, `--mode` and `--rules` with a Rotation: a RON list of entries that the server plays in order, one per Match, then repeats, e.g.
 
@@ -75,9 +75,28 @@ On joining, pick a Team (and then a Loadout). The mouse is grabbed while you pla
 | Plant / defuse the bomb (Search & Destroy; hold) | F |
 | Switch Team | T (dying counts as a switch, no credit to anyone) |
 | Change Loadout (applies on next spawn, or at once within 5 s of spawning) | B |
+| Primary / Secondary (lowers one and raises the other, about 0.4 s) | 1 / 2, or the mouse wheel |
 | Pause menu (Resume, Change Team, Change Loadout, Settings, Leave Game) | Esc; Esc again steps back |
 
-Tuning lives in `data/`: `weapons.ron` (including per-Weapon Hit Zone damage multipliers), `loadouts.ron` (Default Loadouts and the instant-swap window), `movement.ron`, `match_rules.ron` (presets, each with its HUD block), `game_modes.ron` (score and time limits, capture, HQ and bomb tuning of every Game Mode), `factions.ron`, `maps.ron` (every built-in Map: file, look, Game Modes, and the two Factions its theater plays), `looks.ron` (per-Map look presets: grade, fog, sun, ambient, sky) and `presentation.ron` (how long bodies stay and how many at once). The game reads them at startup from `./data/` (relative to where you launch it), so edit and restart to retune. Without that folder it uses the copies built into the binary. Both machines should use the same files: damage and score are decided on the server, but movement, recoil, spread and fire rate come from each client's own copy.
+Tuning lives in `data/`: `weapons.ron` (including per-Weapon Hit Zone damage multipliers), `attachments.ron` (Optics and Muzzles as stat modifiers), `perks.ron` (the six Perks and the ammo pack), `loadouts.ron` (Default Loadouts, the instant-swap window and the Weapon switch time), `movement.ron`, `match_rules.ron` (presets, each with its HUD block), `game_modes.ron` (score and time limits, capture, HQ and bomb tuning of every Game Mode), `factions.ron`, `maps.ron` (every built-in Map: file, look, Game Modes, and the two Factions its theater plays), `looks.ron` (per-Map look presets: grade, fog, sun, ambient, sky) and `presentation.ron` (how long bodies stay and how many at once). The game reads them at startup from `./data/` (relative to where you launch it), so edit and restart to retune. Without that folder it uses the copies built into the binary. Both machines should use the same files: damage and score are decided on the server, but movement, recoil, spread and fire rate come from each client's own copy.
+
+## Loadouts
+
+A Loadout is a Primary (AR, SMG or Sniper) with an Optic and a Muzzle Attachment, a Secondary (the M9 pistol), one Perk per Perk Slot and a reserved camo field (`none`). It applies on your next spawn, or at once within 5 s of spawning. The Loadout screen (B, or Change Loadout in the pause menu) lists three read-only Default Loadouts and the three custom ones in your Profile; CHOOSE picks one.
+
+**Create a Class** (button on the Loadout screen) edits one of the three custom slots: pick the slot, type a name, then cycle the Primary, Optic, Muzzle, Secondary and Perks 1 to 3 with the arrows. The stat bars follow the Attachments (an Optic or Muzzle the Primary can't take, like an Optic on the Sniper's built-in scope, shows as unavailable). SAVE writes the class into the Profile and returns to the Loadout screen on it; BACK or Esc discards.
+
+The Profile is a client-local file, `<config dir>/frontline/profile.ron`, next to `settings.ron`: the custom classes, the chosen Loadout and room for XP and Levels later. The first run starts with the Default Loadout your old Settings had chosen. It follows you to any server you join.
+
+| Slot | Choices |
+|---|---|
+| Optic | none (iron sights), Red Dot, ACOG (about 4x zoom, slower to aim, swayier; not on the Sniper) |
+| Muzzle | none, Silencer (no muzzle flash, a quieter and duller shot, damage falls off at 0.75x the distance) |
+| Perk 1 | Sleight of Hand (reload 40% faster), Scavenger (walk over a dead player's ammo pack to refill ammo) |
+| Perk 2 | Stopping Power (+25% bullet damage), Lightweight (+10% move speed) |
+| Perk 3 | Marathon (sprint 2.5x as long), Ninja (your footsteps make no sound) |
+
+Other players' footsteps are heard as a quiet thud while they walk or run; crouched and prone players, and Ninja, are silent. The server applies the Attachments' falloff and the Perks' damage; clients tell it their Attachments with every shot and their Perks when they spawn (clients are trusted on a LAN, docs/adr/0002). Fire Pings and the Minimap don't exist yet, so the Silencer only changes the flash, the sound and the damage range.
 
 ## Maps
 
@@ -141,7 +160,9 @@ The kit has no vehicles, barriers or lamp posts, so the generators build those a
 - `crates/frontline/src/net/`: lightyear protocol, server, client, Host/Join/Leave sessions, LAN discovery
 - `crates/frontline/src/player/`: first-person controller, input bindings, damage/kill-feed/death HUD, remote player visuals and their bodies
 - `crates/frontline/src/weapon/`: local Weapon (firing, ammo, aiming, recoil, bolt cycle), per-weapon viewmodels, shot effects, crosshair/hitmarker/ammo/scope HUD
-- `crates/frontline/src/loadout/`: chosen Loadout (saved with Settings), CoD swap rule, Loadout screen
+- `crates/frontline/src/gear.rs`: Attachments, Perks and the Loadout, and the pure rules that turn them into effective Weapon stats and Perk effects (unit-tested)
+- `crates/frontline/src/profile.rs`: the Profile file (`profile.ron`): custom Loadouts and the chosen one
+- `crates/frontline/src/loadout/`: the Loadout screen, the Create a Class editor, stat bars, the CoD swap rule
 - `crates/frontline/src/maps/`: Map registry (`data/maps.ron`, private Maps), TrenchBroom loading (units, textures, colliders, entity classes), loading the Match's Map and swapping it (`ChangeMap`), spawn points
 - `crates/frontline/src/world.rs`: physics
 - `crates/frontline/src/materials.rs`: material library (one tinted material per `SurfaceKind` texture set)

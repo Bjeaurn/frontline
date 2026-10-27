@@ -2,9 +2,11 @@
 
 mod controller;
 mod corpse;
+mod footsteps;
 mod hud;
 pub mod input;
 mod life;
+mod packs;
 mod remote;
 
 use bevy::prelude::*;
@@ -99,8 +101,17 @@ pub struct RemotePlayerVisualsPlugin;
 impl Plugin for RemotePlayerVisualsPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<remote::RemoteDeath>()
-            .add_systems(Startup, remote::load_remote_assets)
+            .add_systems(
+                Startup,
+                (
+                    remote::load_remote_assets,
+                    footsteps::load_footstep_sound,
+                    packs::load_pack_assets,
+                ),
+            )
             .add_observer(remote::attach_remote_visuals)
+            .add_observer(footsteps::attach_stride)
+            .add_observer(packs::show_pack)
             .add_systems(
                 Update,
                 (
@@ -109,6 +120,7 @@ impl Plugin for RemotePlayerVisualsPlugin {
                     corpse::animate_corpses,
                 )
                     .chain(),
-            );
+            )
+            .add_systems(Update, (footsteps::play_footsteps, packs::spin_packs));
     }
 }

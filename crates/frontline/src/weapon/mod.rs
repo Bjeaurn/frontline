@@ -9,17 +9,21 @@ mod viewmodel;
 pub use viewmodel::ViewmodelCamera;
 
 use std::hash::{BuildHasher, RandomState};
+use std::sync::Arc;
 
 use avian3d::prelude::*;
+use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::prelude::*;
 
-use crate::data::{FireMode, GameData, WeaponId, WeaponStats};
-use crate::loadout::{ChosenLoadout, SpawnClock};
-use crate::net::protocol::{FireShot, Respawn};
+use crate::data::{FireMode, GameData, WeaponClass, WeaponId, WeaponStats};
+use crate::gear::{Attachments, Loadout, PerkEffects, PerkSet};
+use crate::loadout::SpawnClock;
+use crate::net::protocol::{AmmoRefill, FireShot, Respawn};
 use crate::player::input::Bindings;
 use crate::player::{
     ControllerModifiers, ControllerSystems, EyeCamera, LocalLife, Motor, MouseCaptured, PITCH_LIMIT,
 };
+use crate::profile::Profile;
 use crate::shared::{FromServer, GameLayer, LocalPlayer, PlayerPose, Stance, ToServer};
 
 /// Part of a bolt cycle (as a fraction of the fire-rate cooldown) spent working the bolt;
@@ -46,6 +50,8 @@ impl Plugin for WeaponClientPlugin {
                 (
                     equip_on_respawn,
                     swap_loadout,
+                    refill_ammo,
+                    switch_weapon,
                     track_body,
                     aim,
                     reload,
@@ -68,6 +74,10 @@ struct WeaponSystems;
 #[derive(Component, Debug)]
 pub struct HeldWeapon {
     id: WeaponId,
+    /// Fitted to this Weapon.
+    attachments: Attachments,
+    /// With the Attachments and the carrier's Perks applied.
+    stats: Arc<WeaponStats>,
     rounds: u32,
     /// Seconds left of the reload in progress.
     reload_left: Option<f32>,
@@ -93,13 +103,76 @@ pub struct HeldWeapon {
     bloom: f32,
     /// Spread and recoil multiplier of the current stance.
     accuracy: f32,
+    /// Switching to the other Weapon.
+    switch: Option<WeaponSwitch>,
+}
+
+/// A Primary/Secondary switch under way: the held Weapon lowers, the two exchange half-way
+/// and the other raises.
+#[derive(Clone, Copy, Debug)]
+struct WeaponSwitch {
+    left: f32,
+    total: f32,
+    /// The exchange has happened.
+    swapped: bool,
+}
+
+impl WeaponSwitch {
+    /// Fraction done, 0 to 1.
+    fn progress(&self) -> f32 {
+        if self.total > 0.0 {
+            (1.0 - self.left / self.total).clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
+    }
+}
+
+/// The Weapon on the player's back: the other of Primary and Secondary.
+#[derive(Component, Debug)]
+pub struct Stowed {
+    id: WeaponId,
+    attachments: Attachments,
+    stats: Arc<WeaponStats>,
+    rounds: u32,
+}
+
+impl Stowed {
+    fn new(id: WeaponId, stats: Arc<WeaponStats>) -> Self {
+        Self {
+            id,
+            attachments: Attachments::default(),
+            rounds: stats.magazine,
+            stats,
+        }
+    }
+}
+
+/// The Loadout in effect on the local player and what its Perks do.
+#[derive(Component, Clone, Debug)]
+pub struct Kit {
+    loadout: Loadout,
+    effects: PerkEffects,
+}
+
+impl Kit {
+    pub fn loadout(&self) -> &Loadout {
+        &self.loadout
+    }
+
+    /// The Perks in effect, as the server needs to know them.
+    pub fn perks(&self) -> PerkSet {
+        self.loadout.perks
+    }
 }
 
 impl HeldWeapon {
-    fn new(id: WeaponId, stats: &WeaponStats) -> Self {
+    fn new(id: WeaponId, attachments: Attachments, stats: Arc<WeaponStats>) -> Self {
         Self {
             id,
+            attachments,
             rounds: stats.magazine,
+            stats,
             reload_left: None,
             cooldown: 0.0,
             trigger: false,
@@ -112,16 +185,16 @@ impl HeldWeapon {
             sprint_out: 0.0,
             bloom: 0.0,
             accuracy: 1.0,
+            switch: None,
         }
-    }
-
-    pub fn id(&self) -> WeaponId {
-        self.id
     }
 
     fn start_reload(&mut self, stats: &WeaponStats) {
         if self.reload_left.is_none() && self.rounds < stats.magazine {
-            info!("Reloading ({} rounds left)", self.rounds);
+            info!(
+                "Reloading ({} rounds left, {:.2} s)",
+                self.rounds, stats.reload_secs
+            );
             self.reload_left = Some(stats.reload_secs);
             self.bolt = None;
         }
@@ -152,7 +225,28 @@ impl HeldWeapon {
 
     /// Whether the weapon is up: not lowered for a sprint, mantle or dive, nor still raising.
     fn ready(&self) -> bool {
-        !self.sprinting && !self.mantling && self.sprint_out <= 0.0
+        !self.sprinting && !self.mantling && self.sprint_out <= 0.0 && self.switch.is_none()
+    }
+
+    /// How far the Weapon is lowered by a switch in progress: 0 up, 1 fully down.
+    fn switch_lowering(&self) -> f32 {
+        self.switch.map_or(0.0, |switch| {
+            (switch.progress() * std::f32::consts::PI).sin()
+        })
+    }
+
+    /// Exchanges the held Weapon with the stowed one, leaving the new one idle and settled.
+    fn exchange(&mut self, stowed: &mut Stowed) {
+        std::mem::swap(&mut self.id, &mut stowed.id);
+        std::mem::swap(&mut self.attachments, &mut stowed.attachments);
+        std::mem::swap(&mut self.stats, &mut stowed.stats);
+        std::mem::swap(&mut self.rounds, &mut stowed.rounds);
+        self.reload_left = None;
+        self.cooldown = 0.0;
+        self.pull_spent = false;
+        self.bolt = None;
+        self.ads = 0.0;
+        info!("Switched to {}", self.stats.name);
     }
 
     /// Runs the trigger for a frame of `dt` seconds and returns how many rounds leave the
@@ -246,6 +340,10 @@ struct ShotFired {
     weapon: WeaponId,
     muzzle: Vec3,
     end: Vec3,
+    /// A Silencer is fitted: no muzzle flash, and the gunshot's volume and pitch below.
+    silenced: bool,
+    volume: f32,
+    pitch: f32,
 }
 
 /// Small xorshift generator for spread, recoil and cosmetic jitter.
@@ -287,64 +385,158 @@ fn ease(t: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Builds the Weapons and Perk effects of `loadout`: the Primary with its Attachments in hand,
+/// the Secondary stowed, both with full magazines.
+fn equip(loadout: &Loadout, data: &GameData) -> (HeldWeapon, Stowed, Kit) {
+    let effects = data.perk_effects(&loadout.perks);
+    let primary = Arc::new(data.effective_weapon(loadout.primary, loadout.attachments, &effects));
+    let secondary =
+        Arc::new(data.effective_weapon(loadout.secondary, Attachments::default(), &effects));
+    info!(
+        "Loadout \"{}\": {} {:?}, {}; Perks {:?}; effective: reload {:.2} s, damage x{:.2}, \
+         move x{:.2}, sprint stamina {:.1} s, falloff {:.0}-{:.0} m",
+        loadout.name,
+        primary.name,
+        loadout.attachments,
+        secondary.name,
+        loadout.perks,
+        primary.reload_secs,
+        effects.damage_mul,
+        primary.move_scale,
+        data.movement.sprint_stamina_secs * effects.sprint_stamina_mul,
+        primary.falloff_start,
+        primary.falloff_end,
+    );
+    (
+        HeldWeapon::new(loadout.primary, loadout.attachments, primary),
+        Stowed::new(loadout.secondary, secondary),
+        Kit {
+            loadout: loadout.clone(),
+            effects,
+        },
+    )
+}
+
 fn equip_local_player(
     add: On<Add<LocalPlayer>>,
     data: Res<GameData>,
-    chosen: Res<ChosenLoadout>,
+    profile: Res<Profile>,
     mut commands: Commands,
 ) {
-    let id = chosen.get(&data).primary;
     commands
         .entity(add.entity)
-        .insert(HeldWeapon::new(id, data.weapon(id)));
+        .insert(equip(profile.loadout(&data), &data));
 }
 
-/// A respawn hands out the chosen Loadout's primary with a fresh magazine and a settled aim.
+/// A respawn hands out the chosen Loadout with fresh magazines and a settled aim.
 fn equip_on_respawn(
     mut respawns: MessageReader<FromServer<Respawn>>,
     data: Res<GameData>,
-    chosen: Res<ChosenLoadout>,
-    mut weapons: Query<&mut HeldWeapon, With<LocalPlayer>>,
+    profile: Res<Profile>,
+    mut player: Query<(&mut HeldWeapon, &mut Stowed, &mut Kit), With<LocalPlayer>>,
 ) {
     if respawns.read().count() == 0 {
         return;
     }
-    let loadout = chosen.get(&data);
-    for mut weapon in &mut weapons {
-        *weapon = HeldWeapon::new(loadout.primary, data.weapon(loadout.primary));
-        info!(
-            "Spawned with Loadout \"{}\" ({})",
-            loadout.name,
-            data.weapon(loadout.primary).name
-        );
+    let loadout = profile.loadout(&data);
+    for (mut weapon, mut stowed, mut kit) in &mut player {
+        (*weapon, *stowed, *kit) = equip(loadout, &data);
+        info!("Spawned with Loadout \"{}\"", loadout.name);
     }
 }
 
-/// A Loadout chosen within the swap window of spawning replaces the held Weapon at once;
-/// otherwise it waits for the next spawn.
+/// A Loadout chosen (or edited) within the swap window of spawning replaces the carried
+/// Weapons and Perks at once; otherwise it waits for the next spawn.
 fn swap_loadout(
     time: Res<Time>,
     data: Res<GameData>,
-    chosen: Res<ChosenLoadout>,
+    profile: Res<Profile>,
     clock: Res<SpawnClock>,
     life: Res<LocalLife>,
-    mut weapons: Query<&mut HeldWeapon, With<LocalPlayer>>,
+    mut player: Query<(&mut HeldWeapon, &mut Stowed, &mut Kit), With<LocalPlayer>>,
 ) {
-    if !chosen.is_changed() || chosen.is_added() {
+    if !profile.is_changed() || profile.is_added() {
         return;
     }
-    let loadout = chosen.get(&data);
+    let loadout = profile.loadout(&data);
     let open = clock.swap_open(time.elapsed_secs_f64(), &life, &data);
-    for mut weapon in &mut weapons {
-        if weapon.id == loadout.primary {
+    for (mut weapon, mut stowed, mut kit) in &mut player {
+        if kit.loadout == *loadout {
             continue;
         }
         if open {
-            *weapon = HeldWeapon::new(loadout.primary, data.weapon(loadout.primary));
+            (*weapon, *stowed, *kit) = equip(loadout, &data);
             info!("Loadout \"{}\" applied now", loadout.name);
         } else {
             info!("Loadout \"{}\" applies on next spawn", loadout.name);
         }
+    }
+}
+
+/// An ammo pack picked up with Scavenger refills both magazines.
+fn refill_ammo(
+    mut refills: MessageReader<FromServer<AmmoRefill>>,
+    mut player: Query<(&mut HeldWeapon, &mut Stowed), With<LocalPlayer>>,
+) {
+    if refills.read().count() == 0 {
+        return;
+    }
+    for (mut weapon, mut stowed) in &mut player {
+        weapon.rounds = weapon.stats.magazine;
+        stowed.rounds = stowed.stats.magazine;
+        info!("Ammo refilled from a pack");
+    }
+}
+
+/// `1` takes the Primary, `2` the Secondary and the mouse wheel the other Weapon. The switch
+/// lowers the held Weapon, exchanges the two half-way and raises the other, taking
+/// `weapon_switch_secs` in all; nothing fires or aims meanwhile.
+fn switch_weapon(
+    time: Res<Time>,
+    data: Res<GameData>,
+    keys: Res<ButtonInput<KeyCode>>,
+    scroll: Res<AccumulatedMouseScroll>,
+    bindings: Res<Bindings>,
+    captured: Res<MouseCaptured>,
+    life: Res<LocalLife>,
+    mut player: Query<(&mut HeldWeapon, &mut Stowed), With<LocalPlayer>>,
+) {
+    let Ok((mut weapon, mut stowed)) = player.single_mut() else {
+        return;
+    };
+    let weapon = &mut *weapon;
+    if life.is_dead() {
+        weapon.switch = None;
+        return;
+    }
+    if let Some(mut switch) = weapon.switch {
+        switch.left -= time.delta_secs();
+        if !switch.swapped && switch.progress() >= 0.5 {
+            weapon.exchange(&mut stowed);
+            switch.swapped = true;
+        }
+        weapon.switch = (switch.left > 0.0).then_some(switch);
+        return;
+    }
+    if !captured.active() || weapon.mantling {
+        return;
+    }
+    let holding_primary = weapon.stats.class == WeaponClass::Primary;
+    let wheel = scroll.delta.y != 0.0;
+    let wants = if holding_primary {
+        bindings.secondary_weapon.just_pressed(&keys)
+    } else {
+        bindings.primary_weapon.just_pressed(&keys)
+    };
+    if wants || wheel {
+        weapon.reload_left = None;
+        weapon.trigger = false;
+        weapon.bolt = None;
+        weapon.switch = Some(WeaponSwitch {
+            left: data.weapon_switch_secs,
+            total: data.weapon_switch_secs,
+            swapped: false,
+        });
     }
 }
 
@@ -358,7 +550,7 @@ fn track_body(
     let Ok((mut weapon, motor, pose)) = player.single_mut() else {
         return;
     };
-    let stats = data.weapon(weapon.id);
+    let stats = Arc::clone(&weapon.stats);
     let dt = time.delta_secs();
 
     weapon.sprint_out = if weapon.sprinting && !motor.sprinting() {
@@ -390,21 +582,20 @@ fn track_body(
 }
 
 /// Blends toward the sights while the aim button is held and the weapon is up (a bolt being
-/// worked takes it off them), and feeds the controller hooks: aiming zooms and slows, and
-/// aiming or firing stops a sprint.
+/// worked takes it off them), and feeds the controller hooks: aiming zooms and slows, aiming
+/// or firing stops a sprint, and the Perks scale the sprint tank.
 fn aim(
     time: Res<Time>,
-    data: Res<GameData>,
     mouse: Res<ButtonInput<MouseButton>>,
     bindings: Res<Bindings>,
     captured: Res<MouseCaptured>,
     life: Res<LocalLife>,
-    mut player: Query<(&mut HeldWeapon, &mut ControllerModifiers), With<LocalPlayer>>,
+    mut player: Query<(&mut HeldWeapon, &mut ControllerModifiers, &Kit), With<LocalPlayer>>,
 ) {
-    let Ok((mut weapon, mut modifiers)) = player.single_mut() else {
+    let Ok((mut weapon, mut modifiers, kit)) = player.single_mut() else {
         return;
     };
-    let stats = data.weapon(weapon.id);
+    let stats = Arc::clone(&weapon.stats);
     let in_control = captured.active() && !life.is_dead();
     let wants = in_control && mouse.pressed(bindings.aim) && weapon.reload_left.is_none();
     let step = time.delta_secs() / stats.ads_secs.max(f32::EPSILON);
@@ -416,13 +607,13 @@ fn aim(
     let t = weapon.ads_eased();
     modifiers.fov_scale = 1.0_f32.lerp(stats.ads_fov_scale, t);
     modifiers.move_scale = stats.move_scale * 1.0_f32.lerp(stats.ads_move_scale, t);
+    modifiers.stamina_scale = kit.effects.sprint_stamina_mul;
     modifiers.sprint_blocked = wants || (in_control && mouse.pressed(bindings.fire));
 }
 
 /// R reloads; sprinting cancels a reload in progress.
 fn reload(
     time: Res<Time>,
-    data: Res<GameData>,
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<Bindings>,
     captured: Res<MouseCaptured>,
@@ -435,11 +626,11 @@ fn reload(
     if life.is_dead() {
         return;
     }
-    let stats = data.weapon(weapon.id);
-    if captured.active() && bindings.reload.just_pressed(&keys) {
-        weapon.start_reload(stats);
+    let stats = Arc::clone(&weapon.stats);
+    if captured.active() && bindings.reload.just_pressed(&keys) && weapon.switch.is_none() {
+        weapon.start_reload(&stats);
     }
-    weapon.tick_reload(stats, time.delta_secs(), motor.sprinting());
+    weapon.tick_reload(&stats, time.delta_secs(), motor.sprinting());
 }
 
 /// Fires the Weapon at its rpm (blending to its ADS rpm with the sights) once it is up: held
@@ -447,7 +638,6 @@ fn reload(
 /// the current recoil already applied, then kicks the view.
 fn fire(
     time: Res<Time>,
-    data: Res<GameData>,
     mouse: Res<ButtonInput<MouseButton>>,
     bindings: Res<Bindings>,
     captured: Res<MouseCaptured>,
@@ -463,12 +653,12 @@ fn fire(
     let Ok((mut pose, mut weapon)) = player.single_mut() else {
         return;
     };
-    let stats = data.weapon(weapon.id);
+    let stats = Arc::clone(&weapon.stats);
     let held = captured.active() && mouse.pressed(bindings.fire);
     let pulled = mouse.just_pressed(bindings.fire) && !captured.is_changed();
     weapon.trigger = held && !life.is_dead() && (weapon.trigger || pulled);
 
-    let rounds = weapon.rounds_to_fire(stats, time.delta_secs());
+    let rounds = weapon.rounds_to_fire(&stats, time.delta_secs());
     if rounds > 0 {
         let eye_height = eye
             .single()
@@ -476,8 +666,8 @@ fn fire(
         let origin = pose.position + Vec3::Y * eye_height;
         let gun = gun.single().copied().unwrap_or_default();
         let filter = SpatialQueryFilter::from_mask(GameLayer::World);
-        let spread = weapon.spread_deg(stats).to_radians();
-        let kick = weapon.recoil_scale(stats);
+        let spread = weapon.spread_deg(&stats).to_radians();
+        let kick = weapon.recoil_scale(&stats);
         for _ in 0..rounds {
             let aim = aim_rotation(pose.yaw, pose.pitch);
             let (angle, radius) = (
@@ -490,6 +680,7 @@ fn fire(
 
             shots.write(ToServer(FireShot {
                 weapon: weapon.id,
+                attachments: weapon.attachments,
                 origin,
                 direction: *direction,
             }));
@@ -503,6 +694,9 @@ fn fire(
                 weapon: weapon.id,
                 muzzle,
                 end: origin + *direction * end,
+                silenced: stats.silenced,
+                volume: stats.shot_volume,
+                pitch: stats.shot_pitch,
             });
 
             let pitch_kick = stats.recoil_pitch_deg.to_radians() * kick;
@@ -518,7 +712,6 @@ fn fire(
 /// Returns the view toward where the player was aiming before the kicks.
 fn recover_recoil(
     time: Res<Time>,
-    data: Res<GameData>,
     mut player: Query<(&mut PlayerPose, &mut HeldWeapon), With<LocalPlayer>>,
 ) {
     let Ok((mut pose, mut weapon)) = player.single_mut() else {
@@ -527,7 +720,7 @@ fn recover_recoil(
     if weapon.recoil == Vec2::ZERO {
         return;
     }
-    let rate = data.weapon(weapon.id).recoil_recovery_per_sec;
+    let rate = weapon.stats.recoil_recovery_per_sec;
     let mut step = weapon.recoil * (1.0 - (-rate * time.delta_secs()).exp());
     if weapon.recoil.length_squared() < 1e-10 {
         step = weapon.recoil;
@@ -541,10 +734,63 @@ fn recover_recoil(
 mod tests {
     use super::*;
 
+    fn held(id: WeaponId, stats: &WeaponStats) -> HeldWeapon {
+        HeldWeapon::new(id, Attachments::default(), Arc::new(stats.clone()))
+    }
+
     /// One frame of `reload` then `fire`, as the systems are chained; returns rounds fired.
     fn frame(weapon: &mut HeldWeapon, stats: &WeaponStats, dt: f32) -> u32 {
         weapon.tick_reload(stats, dt, false);
         weapon.rounds_to_fire(stats, dt)
+    }
+
+    #[test]
+    fn exchanging_swaps_the_guns_and_leaves_the_new_one_idle() {
+        let rifle = WeaponStats::fixture();
+        let pistol = WeaponStats {
+            name: "Test Pistol".into(),
+            class: WeaponClass::Secondary,
+            magazine: 15,
+            ..WeaponStats::fixture()
+        };
+        let mut weapon = held(WeaponId::AssaultRifle, &rifle);
+        weapon.rounds = 7;
+        weapon.ads = 1.0;
+        weapon.reload_left = Some(0.5);
+        let mut stowed = Stowed::new(WeaponId::Pistol, Arc::new(pistol));
+        stowed.rounds = 11;
+
+        weapon.exchange(&mut stowed);
+        assert_eq!((weapon.id, weapon.rounds), (WeaponId::Pistol, 11));
+        assert_eq!((stowed.id, stowed.rounds), (WeaponId::AssaultRifle, 7));
+        assert_eq!(weapon.stats.class, WeaponClass::Secondary);
+        assert_eq!((weapon.ads, weapon.reload_left), (0.0, None));
+    }
+
+    #[test]
+    fn a_switch_lowers_then_raises_and_blocks_firing() {
+        let stats = WeaponStats::fixture();
+        let mut weapon = held(WeaponId::AssaultRifle, &stats);
+        assert!(weapon.ready() && weapon.switch_lowering() == 0.0);
+        weapon.switch = Some(WeaponSwitch {
+            left: 0.4,
+            total: 0.4,
+            swapped: false,
+        });
+        assert!(!weapon.ready());
+        weapon.trigger = true;
+        assert_eq!(frame(&mut weapon, &stats, 0.1), 0, "no rounds mid-switch");
+        let mut at = |left| {
+            weapon.switch = Some(WeaponSwitch {
+                left,
+                total: 0.4,
+                swapped: false,
+            });
+            weapon.switch_lowering()
+        };
+        assert!(at(0.4) < 1e-6, "starts up");
+        assert!((at(0.2) - 1.0).abs() < 1e-6, "fully down half-way");
+        assert!(at(0.0) < 1e-6, "ends up");
     }
 
     #[test]
@@ -557,22 +803,22 @@ mod tests {
             ..WeaponStats::fixture()
         };
 
-        let mut low_fps = HeldWeapon::new(WeaponId::AssaultRifle, &stats);
+        let mut low_fps = held(WeaponId::AssaultRifle, &stats);
         low_fps.trigger = true;
         let fired: u32 = (0..4).map(|_| frame(&mut low_fps, &stats, 0.25)).sum();
         assert_eq!(fired, 9);
 
-        let mut hitch = HeldWeapon::new(WeaponId::AssaultRifle, &stats);
+        let mut hitch = held(WeaponId::AssaultRifle, &stats);
         hitch.trigger = true;
         assert_eq!(frame(&mut hitch, &stats, 1.0), 9);
 
         // A second with the trigger released doesn't let the next pull fire faster.
-        let mut idle = HeldWeapon::new(WeaponId::AssaultRifle, &stats);
+        let mut idle = held(WeaponId::AssaultRifle, &stats);
         assert_eq!(frame(&mut idle, &stats, 1.0), 0);
         idle.trigger = true;
         assert_eq!(frame(&mut idle, &stats, 0.25), 3);
 
-        let mut aimed = HeldWeapon::new(WeaponId::AssaultRifle, &stats);
+        let mut aimed = held(WeaponId::AssaultRifle, &stats);
         aimed.ads = 1.0;
         aimed.trigger = true;
         let fired: u32 = (0..4).map(|_| frame(&mut aimed, &stats, 0.25)).sum();
@@ -587,7 +833,7 @@ mod tests {
             bolt_action: true,
             ..WeaponStats::fixture()
         };
-        let mut bolt = HeldWeapon::new(WeaponId::SniperRifle, &semi);
+        let mut bolt = held(WeaponId::SniperRifle, &semi);
         bolt.trigger = true;
         let held: u32 = (0..30).map(|_| frame(&mut bolt, &semi, 0.1)).sum();
         assert_eq!(held, 1, "holding fires once");
@@ -620,7 +866,7 @@ mod tests {
             magazine: 3,
             ..WeaponStats::fixture()
         };
-        let mut weapon = HeldWeapon::new(WeaponId::AssaultRifle, &stats);
+        let mut weapon = held(WeaponId::AssaultRifle, &stats);
         weapon.trigger = true;
 
         assert_eq!(frame(&mut weapon, &stats, 1.0), 3);

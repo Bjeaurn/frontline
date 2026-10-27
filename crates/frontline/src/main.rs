@@ -7,6 +7,7 @@ mod cli;
 mod combat;
 mod data;
 mod flow;
+mod gear;
 mod loadout;
 mod maps;
 mod match_hud;
@@ -15,6 +16,7 @@ mod menus;
 mod modes;
 mod net;
 mod player;
+mod profile;
 mod rotation;
 mod shared;
 mod ui;
@@ -125,6 +127,7 @@ fn main() -> AppExit {
             match_hud::MatchHudPlugin,
             modes::ModeVisualsPlugin,
             loadout::LoadoutPlugin,
+            profile::ProfilePlugin,
         ));
     }
     app.add_plugins((combat::CombatServerPlugin, net::NetPlugin));

@@ -7,6 +7,7 @@ use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::data::WeaponId;
+use crate::gear::{AmmoPack, Attachments, EquippedPerks, PerkSet};
 use crate::modes::ModeView;
 use crate::shared::{
     Health, MatchState, PlayerName, PlayerPose, PlayerStats, PlayerTeam, TELEPORT_DISTANCE, Team,
@@ -48,6 +49,11 @@ pub struct ChooseTeam(pub Team);
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ObjectiveHold(pub bool);
 
+/// Client -> server (`ControlChannel`): the Perks of the Loadout now in effect. The server
+/// keeps them as the player's `EquippedPerks`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EquipPerks(pub PerkSet);
+
 /// Server -> all clients: the Search & Destroy bomb went off at `position`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BombExploded {
@@ -71,9 +77,12 @@ pub struct EffectChannel;
 
 /// Client -> server: the local player fired one round. `direction` already includes spread
 /// and recoil (clients are trusted, docs/adr/0002); the server decides what it hit.
+/// `attachments` are the ones fitted to the Weapon fired; the server applies the same stat
+/// modifiers as the client.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FireShot {
     pub weapon: WeaponId,
+    pub attachments: Attachments,
     pub origin: Vec3,
     pub direction: Vec3,
 }
@@ -83,6 +92,7 @@ pub struct FireShot {
 pub struct ShotTracer {
     pub shooter: PeerId,
     pub weapon: WeaponId,
+    pub attachments: Attachments,
     pub origin: Vec3,
     pub end: Vec3,
 }
@@ -117,6 +127,10 @@ pub struct Respawn {
     pub yaw: f32,
 }
 
+/// Server -> the player who walked over an ammo pack with Scavenger: refill your ammo.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AmmoRefill;
+
 pub(super) fn register(app: &mut App) {
     app.component::<PlayerPose>()
         .replicate()
@@ -128,6 +142,8 @@ pub(super) fn register(app: &mut App) {
     app.component::<PlayerTeam>().replicate();
     app.component::<MatchState>().replicate();
     app.component::<ModeView>().replicate();
+    app.component::<EquippedPerks>().replicate();
+    app.component::<AmmoPack>().replicate();
 
     app.add_channel::<PoseChannel>(ChannelSettings {
         mode: ChannelMode::SequencedUnreliable,
@@ -147,6 +163,8 @@ pub(super) fn register(app: &mut App) {
     app.register_message::<ChooseTeam>()
         .add_direction(NetworkDirection::ClientToServer);
     app.register_message::<ObjectiveHold>()
+        .add_direction(NetworkDirection::ClientToServer);
+    app.register_message::<EquipPerks>()
         .add_direction(NetworkDirection::ClientToServer);
 
     app.add_channel::<ShotChannel>(ChannelSettings {
@@ -176,6 +194,8 @@ pub(super) fn register(app: &mut App) {
     app.register_message::<KillFeed>()
         .add_direction(NetworkDirection::ServerToClient);
     app.register_message::<Respawn>()
+        .add_direction(NetworkDirection::ServerToClient);
+    app.register_message::<AmmoRefill>()
         .add_direction(NetworkDirection::ServerToClient);
     app.register_message::<BombExploded>()
         .add_direction(NetworkDirection::ServerToClient);

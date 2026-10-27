@@ -13,6 +13,7 @@ use super::protocol::PlayerOwner;
 use super::{client, server};
 use crate::cli::Mode;
 use crate::flow::{AppState, ConnectionError, FlowCommand, MenuScreen, Settings};
+use crate::gear::AmmoPack;
 use crate::rotation::ServerConfig;
 use crate::shared::MatchState;
 
@@ -191,7 +192,15 @@ fn finish_teardown(
 /// Players (with their hitboxes) and Match on a Host. In-game UI and the local player go by
 /// `DespawnOnExit(AppState::InGame)`.
 fn despawn_session_entities(
-    leftovers: Query<Entity, Or<(With<Remote>, With<PlayerOwner>, With<MatchState>)>>,
+    leftovers: Query<
+        Entity,
+        Or<(
+            With<Remote>,
+            With<PlayerOwner>,
+            With<MatchState>,
+            With<AmmoPack>,
+        )>,
+    >,
     mut commands: Commands,
 ) {
     for entity in &leftovers {

@@ -11,6 +11,7 @@ mod health;
 mod hitbox;
 mod match_flow;
 mod mode_systems;
+mod packs;
 mod shots;
 mod spawn;
 mod teams;
@@ -45,6 +46,7 @@ impl Plugin for CombatServerPlugin {
                     ),
                     mode_systems::publish_view,
                     health::respawn_players.run_if(match_map_ready),
+                    packs::tick_packs,
                     hitbox::sync_hitboxes,
                 )
                     .chain()

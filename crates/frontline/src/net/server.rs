@@ -8,10 +8,11 @@ use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
 use super::protocol::{
-    CONNECTION_TIMEOUT_SECS, Hello, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseUpdate,
+    CONNECTION_TIMEOUT_SECS, EquipPerks, Hello, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseUpdate,
 };
 use super::server_running;
 use crate::combat::PoseGate;
+use crate::gear::EquippedPerks;
 use crate::shared::{Health, PlayerName, PlayerPose, PlayerStats, PlayerTeam};
 
 pub(super) struct ServerNetPlugin;
@@ -24,7 +25,7 @@ impl Plugin for ServerNetPlugin {
             .add_observer(log_disconnect)
             .add_systems(
                 Update,
-                (receive_hello, receive_poses).run_if(server_running),
+                (receive_hello, receive_perks, receive_poses).run_if(server_running),
             );
     }
 }
@@ -156,6 +157,20 @@ fn receive_hello(
             if let Ok(mut name) = names.get_mut(player.0) {
                 name.0 = hello.name;
             }
+        }
+    }
+}
+
+/// Keeps the Perks each client reports as its Player's `EquippedPerks`, replicated to everyone.
+/// Clients are trusted (docs/adr/0002).
+fn receive_perks(
+    mut links: Query<(&RemoteId, &LinkPlayer, &mut MessageReceiver<EquipPerks>)>,
+    mut commands: Commands,
+) {
+    for (RemoteId(peer), player, mut receiver) in &mut links {
+        for EquipPerks(perks) in receiver.receive() {
+            info!("Client {peer} equipped Perks {perks:?}");
+            commands.entity(player.0).insert(EquippedPerks(perks));
         }
     }
 }

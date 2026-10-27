@@ -1,5 +1,5 @@
-//! Tunable game data (Weapons, Match Rules, movement, presentation, Game Modes, Factions,
-//! Loadouts), loaded once at startup.
+//! Tunable game data (Weapons, Attachments, Perks, Match Rules, movement, presentation, Game
+//! Modes, Factions, Loadouts), loaded once at startup.
 //!
 //! Each file is read from `./data/<file>` relative to the working directory, so it can be
 //! edited and picked up on restart without recompiling. When the file isn't there (e.g. the
@@ -12,6 +12,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::gear::{AmmoPackTuning, Attachment, AttachmentId, Loadout, PERK_SLOTS, Perk, PerkId};
 use crate::shared::MatchState;
 
 const WEAPONS_FILE: &str = "weapons.ron";
@@ -21,6 +22,8 @@ const PRESENTATION_FILE: &str = "presentation.ron";
 const GAME_MODES_FILE: &str = "game_modes.ron";
 const FACTIONS_FILE: &str = "factions.ron";
 const LOADOUTS_FILE: &str = "loadouts.ron";
+const ATTACHMENTS_FILE: &str = "attachments.ron";
+const PERKS_FILE: &str = "perks.ron";
 const BUILTIN_WEAPONS: &str = include_str!("../../../data/weapons.ron");
 const BUILTIN_MATCH_RULES: &str = include_str!("../../../data/match_rules.ron");
 const BUILTIN_MOVEMENT: &str = include_str!("../../../data/movement.ron");
@@ -28,6 +31,8 @@ const BUILTIN_PRESENTATION: &str = include_str!("../../../data/presentation.ron"
 const BUILTIN_GAME_MODES: &str = include_str!("../../../data/game_modes.ron");
 const BUILTIN_FACTIONS: &str = include_str!("../../../data/factions.ron");
 const BUILTIN_LOADOUTS: &str = include_str!("../../../data/loadouts.ron");
+const BUILTIN_ATTACHMENTS: &str = include_str!("../../../data/attachments.ron");
+const BUILTIN_PERKS: &str = include_str!("../../../data/perks.ron");
 
 /// The Match Rules preset a server runs when `--rules` isn't given, and the one clients fall back
 /// to for a preset their own data lacks.
@@ -38,6 +43,17 @@ pub enum WeaponId {
     AssaultRifle,
     Smg,
     SniperRifle,
+    Pistol,
+}
+
+impl WeaponId {
+    /// Every Weapon, in the order menus list them.
+    pub const ALL: [WeaponId; 4] = [
+        WeaponId::AssaultRifle,
+        WeaponId::Smg,
+        WeaponId::SniperRifle,
+        WeaponId::Pistol,
+    ];
 }
 
 /// How the trigger works: `Auto` fires while held; `Semi` fires once per pull (bolt-action
@@ -48,12 +64,36 @@ pub enum FireMode {
     Semi,
 }
 
-/// Which first-person gun body and sight type a Weapon is drawn with.
+/// Which first-person gun body a Weapon is drawn with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 pub enum GunModel {
     Rifle,
     Smg,
     Sniper,
+    Pistol,
+}
+
+/// The Loadout slot a Weapon goes in (CONTEXT.md: Primary, Secondary).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+pub enum WeaponClass {
+    Primary,
+    Secondary,
+}
+
+/// The sight a Weapon is aimed through.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+pub enum SightKind {
+    /// Rear aperture and front post.
+    #[default]
+    Irons,
+    RedDot,
+    Acog,
+    /// A scope tube; aiming looks through its mask.
+    Scope,
+}
+
+fn one() -> f32 {
+    1.0
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]
@@ -171,6 +211,32 @@ pub struct WeaponStats {
     pub bolt_action: bool,
     /// Aiming down sights looks through a scope (black mask, viewmodel hidden).
     pub scope: bool,
+    /// Which Weapons a Loadout can put in which slot.
+    pub class: WeaponClass,
+    /// The iron sights, used when no Optic is fitted: like `sight_point` and
+    /// `sight_eye_relief` (which describe where an Optic sits), plus the front post's z.
+    pub iron_point: (f32, f32, f32),
+    pub iron_eye_relief: f32,
+    pub iron_front_z: f32,
+    /// Set by the fitted Attachments (`GameData::effective_weapon`), not by the data file.
+    /// The sight in use; `sight_point` and `sight_eye_relief` then describe it.
+    #[serde(skip_deserializing)]
+    pub sight: SightKind,
+    /// Multiplies the gun motion that remains when aimed.
+    #[serde(skip_deserializing, default = "one")]
+    pub ads_sway_scale: f32,
+    /// A Silencer is fitted: no muzzle flash.
+    #[serde(skip_deserializing)]
+    pub silenced: bool,
+    /// Gunshot volume and playback speed multipliers (a Silencer lowers both).
+    #[serde(skip_deserializing, default = "one")]
+    pub shot_volume: f32,
+    #[serde(skip_deserializing, default = "one")]
+    pub shot_pitch: f32,
+    /// How far a Silencer extends the muzzle beyond the barrel, in metres (already included
+    /// in `muzzle_offset`).
+    #[serde(skip_deserializing)]
+    pub muzzle_length: f32,
 }
 
 impl WeaponStats {
@@ -235,6 +301,16 @@ impl WeaponStats {
             sight_point: (0.0, 0.08, 0.0),
             sight_eye_relief: 0.15,
             scope: false,
+            class: WeaponClass::Primary,
+            iron_point: (0.0, 0.06, 0.05),
+            iron_eye_relief: 0.1,
+            iron_front_z: -0.3,
+            sight: SightKind::Irons,
+            ads_sway_scale: 1.0,
+            silenced: false,
+            shot_volume: 1.0,
+            shot_pitch: 1.0,
+            muzzle_length: 0.0,
         }
     }
 }
@@ -436,33 +512,40 @@ pub struct Faction {
     pub color: (f32, f32, f32),
 }
 
-/// A ready-made Loadout offered on the Loadout screen (CONTEXT.md: Loadout).
-#[derive(Clone, Debug, Deserialize)]
-pub struct DefaultLoadout {
-    pub name: String,
-    pub primary: WeaponId,
-}
-
 /// Layout of `loadouts.ron`.
 #[derive(Deserialize)]
 struct LoadoutsFile {
     swap_window_secs: f32,
-    defaults: Vec<DefaultLoadout>,
+    weapon_switch_secs: f32,
+    defaults: Vec<Loadout>,
+}
+
+/// Layout of `perks.ron`.
+#[derive(Deserialize)]
+struct PerksFile {
+    perks: HashMap<PerkId, Perk>,
+    ammo_pack: AmmoPackTuning,
 }
 
 #[derive(Resource, Debug)]
 pub struct GameData {
     pub weapons: HashMap<WeaponId, WeaponStats>,
+    pub attachments: HashMap<AttachmentId, Attachment>,
+    pub perks: HashMap<PerkId, Perk>,
+    pub ammo_pack: AmmoPackTuning,
     pub match_rules: HashMap<String, MatchRules>,
     pub movement: MovementTuning,
     pub presentation: PresentationTuning,
     pub game_modes: HashMap<GameModeId, GameModeSettings>,
     /// In file order, so menus list them predictably.
     pub factions: Vec<Faction>,
-    pub default_loadouts: Vec<DefaultLoadout>,
+    /// The Default Loadouts, in file order.
+    pub default_loadouts: Vec<Loadout>,
     /// A Loadout chosen within this many seconds of spawning applies at once; later, on
     /// the next spawn.
     pub loadout_swap_secs: f32,
+    /// Seconds to lower one Weapon and raise the other.
+    pub weapon_switch_secs: f32,
 }
 
 impl GameData {
@@ -545,9 +628,21 @@ pub struct DataPlugin;
 
 impl Plugin for DataPlugin {
     fn build(&self, app: &mut App) {
+        app.insert_resource(GameData::load());
+    }
+}
+
+impl GameData {
+    /// Reads every data file (see the module docs) and checks they agree with each other. A
+    /// file that is broken or inconsistent stops the game at startup.
+    pub fn load() -> GameData {
         let loadouts: LoadoutsFile = load(LOADOUTS_FILE, BUILTIN_LOADOUTS);
+        let perks: PerksFile = load(PERKS_FILE, BUILTIN_PERKS);
         let data = GameData {
             weapons: load(WEAPONS_FILE, BUILTIN_WEAPONS),
+            attachments: load(ATTACHMENTS_FILE, BUILTIN_ATTACHMENTS),
+            perks: perks.perks,
+            ammo_pack: perks.ammo_pack,
             match_rules: load(MATCH_RULES_FILE, BUILTIN_MATCH_RULES),
             movement: load(MOVEMENT_FILE, BUILTIN_MOVEMENT),
             presentation: load(PRESENTATION_FILE, BUILTIN_PRESENTATION),
@@ -555,6 +650,7 @@ impl Plugin for DataPlugin {
             factions: load(FACTIONS_FILE, BUILTIN_FACTIONS),
             default_loadouts: loadouts.defaults,
             loadout_swap_secs: loadouts.swap_window_secs,
+            weapon_switch_secs: loadouts.weapon_switch_secs,
         };
         assert!(
             data.match_rules.contains_key(DEFAULT_MATCH_RULES),
@@ -581,19 +677,56 @@ impl Plugin for DataPlugin {
                 "{GAME_MODES_FILE}: {mode:?} is missing its tuning block"
             );
         }
+        for id in WeaponId::ALL {
+            assert!(
+                data.weapons.contains_key(&id),
+                "{WEAPONS_FILE} must define {id:?}"
+            );
+        }
+        for class in [WeaponClass::Primary, WeaponClass::Secondary] {
+            assert!(
+                WeaponId::ALL
+                    .into_iter()
+                    .any(|id| data.weapon(id).class == class),
+                "{WEAPONS_FILE} must define a {class:?} Weapon"
+            );
+        }
+        for id in AttachmentId::ALL {
+            assert!(
+                data.attachments.contains_key(&id),
+                "{ATTACHMENTS_FILE} must define {id:?}"
+            );
+        }
+        for id in PerkId::ALL {
+            assert!(
+                data.perks.contains_key(&id),
+                "{PERKS_FILE} must define {id:?}"
+            );
+        }
+        for slot in 1..=PERK_SLOTS {
+            assert!(
+                data.perks_in_slot(slot).next().is_some(),
+                "{PERKS_FILE} must define a Perk for Perk Slot {slot}"
+            );
+        }
+        assert!(
+            data.perks
+                .values()
+                .all(|perk| (1..=PERK_SLOTS).contains(&perk.slot)),
+            "{PERKS_FILE}: a Perk's slot is 1 to {PERK_SLOTS}"
+        );
         assert!(
             !data.default_loadouts.is_empty(),
             "{LOADOUTS_FILE} must list at least one Loadout"
         );
         for loadout in &data.default_loadouts {
             assert!(
-                data.weapons.contains_key(&loadout.primary),
-                "{LOADOUTS_FILE}: \"{}\" uses {:?}, missing from {WEAPONS_FILE}",
-                loadout.name,
-                loadout.primary
+                *loadout == loadout.clone().validated(&data),
+                "{LOADOUTS_FILE}: \"{}\" has a Weapon, Attachment or Perk that doesn't fit its place",
+                loadout.name
             );
         }
-        app.insert_resource(data);
+        data
     }
 }
 

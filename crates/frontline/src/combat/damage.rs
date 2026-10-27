@@ -1,6 +1,7 @@
 //! Damage of a single shot.
 
 use crate::data::{MatchRules, WeaponStats};
+use crate::gear::{PerkEffects, StatMods};
 
 /// Which Hit Zone a shot struck (CONTEXT.md: Hit Zone).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,13 +27,23 @@ impl std::fmt::Display for HitZone {
 /// Damage dealt by one shot of `stats` that travelled `distance` metres and struck `zone`.
 ///
 /// Base damage is `damage_near` up to `falloff_start`, `damage_far` from `falloff_end` on and
-/// linear in between; the Weapon's multiplier for `zone` and the Match Rules' `damage_scale`
+/// linear in between, with the falloff distances scaled by the shooter's Attachments (`mods`);
+/// the Weapon's multiplier for `zone`, the shooter's Perks and the Match Rules' `damage_scale`
 /// apply on top.
-pub fn shot_damage(stats: &WeaponStats, distance: f32, zone: HitZone, rules: &MatchRules) -> f32 {
-    let span = stats.falloff_end - stats.falloff_start;
+pub fn shot_damage(
+    stats: &WeaponStats,
+    mods: &StatMods,
+    perks: &PerkEffects,
+    distance: f32,
+    zone: HitZone,
+    rules: &MatchRules,
+) -> f32 {
+    let falloff_start = stats.falloff_start * mods.falloff_mul;
+    let falloff_end = stats.falloff_end * mods.falloff_mul;
+    let span = falloff_end - falloff_start;
     let falloff = if span > 0.0 {
-        ((distance - stats.falloff_start) / span).clamp(0.0, 1.0)
-    } else if distance >= stats.falloff_end {
+        ((distance - falloff_start) / span).clamp(0.0, 1.0)
+    } else if distance >= falloff_end {
         1.0
     } else {
         0.0
@@ -45,7 +56,7 @@ pub fn shot_damage(stats: &WeaponStats, distance: f32, zone: HitZone, rules: &Ma
         HitZone::LowerTorso => multipliers.lower_torso,
         HitZone::Limbs => multipliers.limbs,
     };
-    base * zone_scale * rules.damage_scale
+    base * zone_scale * perks.damage_mul * rules.damage_scale
 }
 
 #[cfg(test)]
@@ -73,11 +84,23 @@ mod tests {
         }
     }
 
+    /// Damage with no Attachments, no Perks and the given Match Rules.
+    fn plain(stats: &WeaponStats, distance: f32, zone: HitZone, rules: &MatchRules) -> f32 {
+        shot_damage(
+            stats,
+            &StatMods::default(),
+            &PerkEffects::default(),
+            distance,
+            zone,
+            rules,
+        )
+    }
+
     #[test]
     fn falloff_is_flat_then_linear_then_clamped() {
         // Near 30 up to 10 m, far 20 from 30 m on; upper torso is 1x.
         let stats = WeaponStats::fixture();
-        let chest = |distance| shot_damage(&stats, distance, HitZone::UpperTorso, &rules(1.0));
+        let chest = |distance| plain(&stats, distance, HitZone::UpperTorso, &rules(1.0));
         assert_eq!(chest(0.0), 30.0);
         assert_eq!(chest(10.0), 30.0);
         assert_eq!(chest(20.0), 25.0);
@@ -89,21 +112,15 @@ mod tests {
             falloff_end: 10.0,
             ..WeaponStats::fixture()
         };
-        assert_eq!(
-            shot_damage(&step, 9.9, HitZone::UpperTorso, &rules(1.0)),
-            30.0
-        );
-        assert_eq!(
-            shot_damage(&step, 10.0, HitZone::UpperTorso, &rules(1.0)),
-            20.0
-        );
+        assert_eq!(plain(&step, 9.9, HitZone::UpperTorso, &rules(1.0)), 30.0);
+        assert_eq!(plain(&step, 10.0, HitZone::UpperTorso, &rules(1.0)), 20.0);
     }
 
     #[test]
     fn each_zone_applies_its_own_multiplier() {
         // Fixture multipliers: head 2.0, upper 1.0, lower 0.9, limbs 0.5; 25 base at 20 m.
         let stats = WeaponStats::fixture();
-        let at = |zone| shot_damage(&stats, 20.0, zone, &rules(1.0));
+        let at = |zone| plain(&stats, 20.0, zone, &rules(1.0));
         assert_eq!(at(HitZone::Head), 50.0);
         assert_eq!(at(HitZone::UpperTorso), 25.0);
         assert_eq!(at(HitZone::LowerTorso), 22.5);
@@ -113,10 +130,37 @@ mod tests {
     #[test]
     fn match_scale_multiplies_zone_damage() {
         let stats = WeaponStats::fixture();
-        assert_eq!(shot_damage(&stats, 20.0, HitZone::Head, &rules(0.5)), 25.0);
-        assert_eq!(
-            shot_damage(&stats, 20.0, HitZone::UpperTorso, &rules(0.5)),
-            12.5
-        );
+        assert_eq!(plain(&stats, 20.0, HitZone::Head, &rules(0.5)), 25.0);
+        assert_eq!(plain(&stats, 20.0, HitZone::UpperTorso, &rules(0.5)), 12.5);
+    }
+
+    #[test]
+    fn attachments_move_the_falloff_and_perks_scale_the_damage() {
+        // Falloff x0.5: 5 m to 15 m, so 10 m is halfway (25) where it was still full (30).
+        let stats = WeaponStats::fixture();
+        let mods = StatMods {
+            falloff_mul: 0.5,
+            ..StatMods::default()
+        };
+        let none = PerkEffects::default();
+        let plain_mods = StatMods::default();
+        let chest = |mods: &StatMods, perks: &PerkEffects, distance| {
+            shot_damage(
+                &stats,
+                mods,
+                perks,
+                distance,
+                HitZone::UpperTorso,
+                &rules(1.0),
+            )
+        };
+        assert_eq!(chest(&mods, &none, 10.0), 25.0);
+        assert_eq!(chest(&plain_mods, &none, 10.0), 30.0);
+
+        let stopping = PerkEffects {
+            damage_mul: 1.25,
+            ..none
+        };
+        assert_eq!(chest(&plain_mods, &stopping, 0.0), 37.5);
     }
 }

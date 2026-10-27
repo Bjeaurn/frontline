@@ -12,14 +12,16 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
 use super::protocol::{
-    BombExploded, CONNECTION_TIMEOUT_SECS, ChooseTeam, ControlChannel, Damaged, FireShot, Hello,
-    HitConfirm, KillFeed, ObjectiveHold, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseChannel,
-    PoseUpdate, Respawn, ShotChannel, ShotTracer,
+    AmmoRefill, BombExploded, CONNECTION_TIMEOUT_SECS, ChooseTeam, ControlChannel, Damaged,
+    EquipPerks, FireShot, Hello, HitConfirm, KillFeed, ObjectiveHold, PRIVATE_KEY, PROTOCOL_ID,
+    PlayerOwner, PoseChannel, PoseUpdate, Respawn, ShotChannel, ShotTracer,
 };
 use crate::flow::Settings;
+use crate::gear::PerkSet;
 use crate::shared::{
     FromServer, LocalPlayer, LocalPlayerReplica, PlayerPose, RemotePlayer, ToServer,
 };
+use crate::weapon::Kit;
 
 pub(super) struct ClientNetPlugin;
 
@@ -31,6 +33,7 @@ impl Plugin for ClientNetPlugin {
             .add_message::<FromServer<Respawn>>()
             .add_message::<FromServer<ShotTracer>>()
             .add_message::<FromServer<BombExploded>>()
+            .add_message::<FromServer<AmmoRefill>>()
             .add_message::<ToServer<FireShot>>()
             .add_message::<ToServer<ChooseTeam>>()
             .add_message::<ToServer<ObjectiveHold>>()
@@ -46,12 +49,19 @@ impl Plugin for ClientNetPlugin {
                     forward_from_server::<Respawn>,
                     forward_from_server::<ShotTracer>,
                     forward_from_server::<BombExploded>,
+                    forward_from_server::<AmmoRefill>,
                 )
                     .after(MessageSystems::Receive),
             )
             .add_systems(
                 PostUpdate,
-                (send_shots, send_team_choices, send_objective_holds).before(MessageSystems::Send),
+                (
+                    send_shots,
+                    send_perks,
+                    send_team_choices,
+                    send_objective_holds,
+                )
+                    .before(MessageSystems::Send),
             )
             .add_systems(Update, (mark_remote_players, mark_local_replica));
     }
@@ -118,7 +128,15 @@ fn on_connected(
 
 fn on_disconnected(
     trigger: On<Add<Disconnected>>,
-    clients: Query<(&Disconnected, Option<&PeerAddr>, Has<Connected>, Has<Connecting>), With<Client>>,
+    clients: Query<
+        (
+            &Disconnected,
+            Option<&PeerAddr>,
+            Has<Connected>,
+            Has<Connecting>,
+        ),
+        With<Client>,
+    >,
 ) {
     let Ok((disconnected, peer, was_connected, was_connecting)) = clients.get(trigger.entity)
     else {
@@ -197,6 +215,25 @@ fn send_shots(
     for mut sender in &mut senders {
         for ToServer(shot) in shots.read() {
             sender.send::<ShotChannel>(*shot);
+        }
+    }
+}
+
+/// Tells the server which Perks the local Loadout has in effect: on connecting and whenever
+/// they change.
+fn send_perks(
+    local_player: Query<&Kit, With<LocalPlayer>>,
+    mut senders: Query<(Entity, &mut MessageSender<EquipPerks>), (With<Client>, With<Connected>)>,
+    mut sent: Local<Option<(Entity, PerkSet)>>,
+) {
+    let Ok(kit) = local_player.single() else {
+        return;
+    };
+    let perks = kit.perks();
+    for (link, mut sender) in &mut senders {
+        if *sent != Some((link, perks)) {
+            sender.send::<ControlChannel>(EquipPerks(perks));
+            *sent = Some((link, perks));
         }
     }
 }
