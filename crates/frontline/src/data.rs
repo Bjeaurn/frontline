@@ -1,5 +1,5 @@
-//! Tunable game data (Weapons, Match Rules, movement, Game Modes, Factions, Loadouts), loaded
-//! once at startup.
+//! Tunable game data (Weapons, Match Rules, movement, presentation, Game Modes, Factions,
+//! Loadouts), loaded once at startup.
 //!
 //! Each file is read from `./data/<file>` relative to the working directory, so it can be
 //! edited and picked up on restart without recompiling. When the file isn't there (e.g. the
@@ -8,23 +8,29 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
+
+use crate::shared::MatchState;
 
 const WEAPONS_FILE: &str = "weapons.ron";
 const MATCH_RULES_FILE: &str = "match_rules.ron";
 const MOVEMENT_FILE: &str = "movement.ron";
+const PRESENTATION_FILE: &str = "presentation.ron";
 const GAME_MODES_FILE: &str = "game_modes.ron";
 const FACTIONS_FILE: &str = "factions.ron";
 const LOADOUTS_FILE: &str = "loadouts.ron";
 const BUILTIN_WEAPONS: &str = include_str!("../../../data/weapons.ron");
 const BUILTIN_MATCH_RULES: &str = include_str!("../../../data/match_rules.ron");
 const BUILTIN_MOVEMENT: &str = include_str!("../../../data/movement.ron");
+const BUILTIN_PRESENTATION: &str = include_str!("../../../data/presentation.ron");
 const BUILTIN_GAME_MODES: &str = include_str!("../../../data/game_modes.ron");
 const BUILTIN_FACTIONS: &str = include_str!("../../../data/factions.ron");
 const BUILTIN_LOADOUTS: &str = include_str!("../../../data/loadouts.ron");
 
-/// The preset used until Rotations exist.
+/// The Match Rules preset a server runs when `--rules` isn't given (until Rotations exist), and
+/// the one clients fall back to for a preset their own data lacks.
 pub const DEFAULT_MATCH_RULES: &str = "default";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]
@@ -64,13 +70,13 @@ pub struct WeaponStats {
     pub rpm: f32,
     /// Rounds per minute fully aimed down sights; equal to `rpm` for guns that don't slow.
     pub ads_rpm: f32,
-    /// Body-shot damage up to `falloff_start`.
+    /// Damage up to `falloff_start`, before the Hit Zone multiplier.
     pub damage_near: f32,
-    /// Body-shot damage from `falloff_end` on; linear in between.
+    /// Damage from `falloff_end` on, before the Hit Zone multiplier; linear in between.
     pub damage_far: f32,
     pub falloff_start: f32,
     pub falloff_end: f32,
-    pub headshot_multiplier: f32,
+    pub zone_multipliers: ZoneMultipliers,
     /// Maximum hitscan distance.
     pub range: f32,
     pub magazine: u32,
@@ -125,6 +131,16 @@ impl WeaponStats {
     }
 }
 
+/// Damage multiplier per Hit Zone (CONTEXT.md: Hit Zone).
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+pub struct ZoneMultipliers {
+    pub head: f32,
+    pub upper_torso: f32,
+    pub lower_torso: f32,
+    /// Arms and legs.
+    pub limbs: f32,
+}
+
 #[cfg(test)]
 impl WeaponStats {
     /// A plain rifle for unit tests; override the fields a test is about.
@@ -138,7 +154,12 @@ impl WeaponStats {
             damage_far: 20.0,
             falloff_start: 10.0,
             falloff_end: 30.0,
-            headshot_multiplier: 2.0,
+            zone_multipliers: ZoneMultipliers {
+                head: 2.0,
+                upper_torso: 1.0,
+                lower_torso: 0.9,
+                limbs: 0.5,
+            },
             range: 200.0,
             magazine: 30,
             reload_secs: 1.0,
@@ -178,6 +199,34 @@ pub struct MatchRules {
     pub damage_scale: f32,
     /// Whether bullets hurt teammates (and Killstreaks follow the same rule).
     pub friendly_fire: bool,
+    pub hud: HudRules,
+}
+
+/// Which HUD elements a Match shows (IDEA.md: HUD in Match Rules).
+#[derive(Clone, Debug, Deserialize)]
+pub struct HudRules {
+    pub crosshair: bool,
+    /// A white marker on every hit.
+    pub hitmarkers: bool,
+    /// A red marker on a kill; shown even when `hitmarkers` is off.
+    pub kill_hitmarker: bool,
+    pub kill_feed: bool,
+    /// Kill-feed lines appear this long after the kill (Rising Storm style); the death screen
+    /// still names the killer at once.
+    pub kill_feed_delay_secs: f32,
+    /// Bars pointing toward whoever damaged you.
+    pub damage_direction: bool,
+    /// Names over friendly players' heads.
+    pub name_tags: bool,
+}
+
+/// Client-only presentation tuning (seconds).
+#[derive(Clone, Debug, Deserialize)]
+pub struct PresentationTuning {
+    /// How long a dead player's body lies on the ground before it sinks away.
+    pub corpse_secs: f32,
+    /// Most bodies on the ground at once; the oldest goes first.
+    pub max_corpses: usize,
 }
 
 /// Movement tuning of the local player (metres, seconds).
@@ -279,6 +328,7 @@ pub struct GameData {
     pub weapons: HashMap<WeaponId, WeaponStats>,
     pub match_rules: HashMap<String, MatchRules>,
     pub movement: MovementTuning,
+    pub presentation: PresentationTuning,
     pub game_modes: HashMap<GameModeId, GameModeSettings>,
     /// In file order, so menus list them predictably.
     pub factions: Vec<Faction>,
@@ -306,9 +356,32 @@ impl GameData {
             .expect("validated at load")
     }
 
-    /// The Match Rules currently in effect.
-    pub fn rules(&self) -> &MatchRules {
-        &self.match_rules[DEFAULT_MATCH_RULES]
+    /// The Match Rules preset named `preset`, or the default one when this process's data
+    /// lacks it (a client with older files than its server). Servers validate their preset at
+    /// startup, so for them it never falls back.
+    pub fn rules(&self, preset: &str) -> &MatchRules {
+        self.match_rules
+            .get(preset)
+            .unwrap_or_else(|| &self.match_rules[DEFAULT_MATCH_RULES])
+    }
+}
+
+/// The Match Rules of the current Match, as named in the replicated `MatchState`; the default
+/// preset before the Match has arrived.
+#[derive(SystemParam)]
+pub struct ActiveRules<'w, 's> {
+    data: Res<'w, GameData>,
+    matches: Query<'w, 's, &'static MatchState>,
+}
+
+impl ActiveRules<'_, '_> {
+    pub fn get(&self) -> &MatchRules {
+        let preset = self
+            .matches
+            .iter()
+            .next()
+            .map_or(DEFAULT_MATCH_RULES, |state| state.rules.as_str());
+        self.data.rules(preset)
     }
 }
 
@@ -321,6 +394,7 @@ impl Plugin for DataPlugin {
             weapons: load(WEAPONS_FILE, BUILTIN_WEAPONS),
             match_rules: load(MATCH_RULES_FILE, BUILTIN_MATCH_RULES),
             movement: load(MOVEMENT_FILE, BUILTIN_MOVEMENT),
+            presentation: load(PRESENTATION_FILE, BUILTIN_PRESENTATION),
             game_modes: load(GAME_MODES_FILE, BUILTIN_GAME_MODES),
             factions: load(FACTIONS_FILE, BUILTIN_FACTIONS),
             default_loadouts: loadouts.defaults,

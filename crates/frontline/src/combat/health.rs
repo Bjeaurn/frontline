@@ -93,7 +93,7 @@ pub(super) fn apply_hits(
     time: Res<Time>,
     mut commands: Commands,
 ) {
-    let rules = data.rules();
+    let rules = data.rules(&state.rules);
     for hit in hits.read() {
         if !is_live(&state) {
             continue;
@@ -132,9 +132,9 @@ pub(super) fn apply_hits(
         health.0 = (health.0 - amount).max(0.0);
         last_damaged.0 = time.elapsed();
         let kill = health.is_dead();
-        debug!(
-            "{shooter_name} hit {} for {amount:.1} ({:?}, {:.1} m), health {:.1}",
-            victim_name.0, hit.zone, hit.distance, health.0
+        info!(
+            "{shooter_name} hit {} in the {} for {amount:.1} ({:?}, {:.1} m), health {:.1}",
+            victim_name.0, hit.zone, hit.weapon, hit.distance, health.0
         );
         if let Ok(mut sender) = damaged.get_mut(victim_link.owner) {
             sender.send::<EventChannel>(Damaged {
@@ -186,10 +186,11 @@ pub(super) fn apply_hits(
 /// Heals living players `regen_per_sec` once `regen_delay_secs` have passed without damage.
 pub(super) fn regenerate(
     mut players: Query<(&mut Health, &LastDamaged)>,
+    state: Single<&MatchState>,
     data: Res<GameData>,
     time: Res<Time>,
 ) {
-    let rules = data.rules();
+    let rules = data.rules(&state.rules);
     let delay = Duration::from_secs_f32(rules.regen_delay_secs);
     for (mut health, last_damaged) in &mut players {
         if health.is_dead()
@@ -206,7 +207,13 @@ pub(super) fn regenerate(
 /// anyone, restores health, places them and tells the owner. Players placed earlier in the same
 /// tick count as living, so a whole team respawning at once spreads out.
 pub(super) fn respawn_players(
-    mut players: Query<(Entity, &mut Health, &mut PlayerPose, &PlayerTeam, Has<PendingRespawn>)>,
+    mut players: Query<(
+        Entity,
+        &mut Health,
+        &mut PlayerPose,
+        &PlayerTeam,
+        Has<PendingRespawn>,
+    )>,
     respawning: Query<(
         Entity,
         &PendingRespawn,
@@ -219,6 +226,7 @@ pub(super) fn respawn_players(
     mut senders: Query<&mut MessageSender<Respawn>>,
     spawns: Res<SpawnPoints>,
     spatial: SpatialQuery,
+    state: Single<&MatchState>,
     data: Res<GameData>,
     time: Res<Time>,
     mut commands: Commands,
@@ -230,9 +238,7 @@ pub(super) fn respawn_players(
     let mut living: Vec<(Vec3, Option<Team>)> = players
         .iter()
         .filter(|(_, health, _, _, pending)| !health.is_dead() && !pending)
-        .map(|(_, _, pose, team, _)| {
-            (pose.position + Vec3::Y * pose.stance.eye_height(), team.0)
-        })
+        .map(|(_, _, pose, team, _)| (pose.position + Vec3::Y * pose.stance.eye_height(), team.0))
         .collect();
 
     for (entity, pending, name, team, owner, link, hitboxes) in &respawning {
@@ -258,8 +264,10 @@ pub(super) fn respawn_players(
             })
             .collect();
         let candidates = if free.is_empty() { &spawns.0 } else { &free };
-        let candidate_eyes: Vec<Vec3> =
-            candidates.iter().map(|&spawn| spawn + standing_eye).collect();
+        let candidate_eyes: Vec<Vec3> = candidates
+            .iter()
+            .map(|&spawn| spawn + standing_eye)
+            .collect();
         let line_of_sight = |from: Vec3, to: Vec3| {
             let (direction, distance) = Dir3::new_and_length(to - from).unwrap_or((Dir3::Y, 0.0));
             spatial
@@ -277,7 +285,7 @@ pub(super) fn respawn_players(
         let Ok((_, mut health, mut pose, ..)) = players.get_mut(entity) else {
             continue;
         };
-        health.0 = data.rules().max_health;
+        health.0 = data.rules(&state.rules).max_health;
         *pose = PlayerPose {
             position,
             yaw,

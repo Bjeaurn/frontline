@@ -1,5 +1,6 @@
 // Match Rules presets (see CONTEXT.md). Read at startup from ./data/ (falls back to the copy
-// built into the binary). Health in HP, times in seconds.
+// built into the binary). Health in HP, times in seconds. A server runs `default` unless
+// started with `--rules <preset>`; clients take the preset's `hud` block from their own copy.
 {
     "default": (
         max_health: 100.0,
@@ -8,5 +9,31 @@
         respawn_delay_secs: 3.0,
         damage_scale: 1.0,
         friendly_fire: false,
+        hud: (
+            crosshair: true,
+            hitmarkers: true,
+            kill_hitmarker: true,
+            kill_feed: true,
+            kill_feed_delay_secs: 0.0,
+            damage_direction: true,
+            name_tags: true,
+        ),
+    ),
+    "hardcore": (
+        max_health: 30.0,
+        regen_delay_secs: 5.0,
+        regen_per_sec: 0.0,
+        respawn_delay_secs: 3.0,
+        damage_scale: 1.0,
+        friendly_fire: true,
+        hud: (
+            crosshair: false,
+            hitmarkers: false,
+            kill_hitmarker: false,
+            kill_feed: true,
+            kill_feed_delay_secs: 6.0,
+            damage_direction: false,
+            name_tags: true,
+        ),
     ),
 }

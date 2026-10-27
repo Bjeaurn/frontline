@@ -1,15 +1,21 @@
 //! Capsule visuals for `RemotePlayer`s, smoothed toward their replicated `PlayerPose`, tinted
 //! friendly or enemy relative to the local player's Team, and hidden while dead or teamless.
+//!
+//! Respawns never glide: a pose jump over `TELEPORT_DISTANCE` snaps the visual, and a revived
+//! player stays hidden until its (interpolated, so later-arriving) pose has reached the spawn.
 
 use bevy::prelude::*;
+use lightyear::prelude::ConfirmedHistory;
 
 use super::BODY_RADIUS;
 use super::life::LocalLife;
 use crate::match_hud::is_friendly;
-use crate::shared::{Health, PlayerPose, PlayerTeam, RemotePlayer, Stance};
+use crate::shared::{Health, PlayerPose, PlayerTeam, RemotePlayer, Stance, TELEPORT_DISTANCE};
 
 /// Exponential decay rate (1/s) of the transform toward the pose; higher follows tighter.
 const FOLLOW_RATE: f32 = 20.0;
+/// A revived player shows once its pose is this close to where the server respawned it.
+const SPAWN_REACHED: f32 = 1.0;
 /// Length of the lying capsule shown for a prone player.
 const PRONE_LENGTH: f32 = 1.7;
 /// How far the prone body extends behind the player's position (the head is at the front).
@@ -38,6 +44,11 @@ impl RemoteAssets {
             self.enemy_material.clone()
         }
     }
+
+    /// The capsule mesh drawn for `stance`.
+    pub(super) fn body(&self, stance: Stance) -> Handle<Mesh> {
+        self.bodies[stance_index(stance)].clone()
+    }
 }
 
 const STANCES: [Stance; 3] = [Stance::Standing, Stance::Crouching, Stance::Prone];
@@ -59,6 +70,21 @@ pub(super) struct RemoteVisuals {
     eye_height: f32,
     /// Whether the body currently wears the friendly tint.
     friendly: bool,
+    /// Alive and on a Team, per the latest replicated `Health` and `PlayerTeam`.
+    in_play: bool,
+    /// Where the server put the player on revival, until the pose has caught up with it.
+    awaiting_spawn: Option<Vec3>,
+    /// Whether the visuals were drawn last frame.
+    shown: bool,
+}
+
+/// A remote player just died where its visual stood; `corpse` leaves a body there.
+#[derive(Message, Clone, Copy, Debug)]
+pub(super) struct RemoteDeath {
+    /// The player's visual transform (feet, yaw) at death.
+    pub transform: Transform,
+    pub stance: Stance,
+    pub friendly: bool,
 }
 
 fn body_mesh(stance: Stance) -> Capsule3d {
@@ -75,7 +101,7 @@ fn body_mesh(stance: Stance) -> Capsule3d {
 }
 
 /// Body transform relative to the feet; prone lies the capsule along the facing direction.
-fn body_transform(stance: Stance) -> Transform {
+pub(super) fn body_transform(stance: Stance) -> Transform {
     let half = stance.body_height() / 2.0;
     match stance {
         Stance::Prone => Transform::from_xyz(0.0, half, PRONE_BODY_OFFSET)
@@ -94,7 +120,12 @@ fn pose_transform(pose: &PlayerPose) -> Transform {
     Transform::from_translation(pose.position).with_rotation(Quat::from_rotation_y(pose.yaw))
 }
 
-fn body_material(color: Color) -> StandardMaterial {
+/// Body tint of a friendly or enemy player.
+pub(super) fn body_color(friendly: bool) -> Color {
+    if friendly { FRIENDLY_BODY } else { ENEMY_BODY }
+}
+
+pub(super) fn body_material(color: Color) -> StandardMaterial {
     StandardMaterial {
         base_color: color,
         perceptual_roughness: 0.8,
@@ -120,23 +151,25 @@ pub(super) fn load_remote_assets(
     });
 }
 
+/// Starts hidden; `follow_remote_poses` shows it from the next frame if it is in play.
 pub(super) fn attach_remote_visuals(
     add: On<Add<RemotePlayer>>,
     mut commands: Commands,
     assets: Res<RemoteAssets>,
     life: Res<LocalLife>,
-    players: Query<(&PlayerPose, Option<&PlayerTeam>)>,
+    players: Query<(&PlayerPose, Option<&Health>, Option<&PlayerTeam>)>,
 ) {
     let entity = add.entity;
-    let Ok((pose, team)) = players.get(entity) else {
+    let Ok((pose, health, team)) = players.get(entity) else {
         warn!("RemotePlayer {entity} has no PlayerPose; not drawing it");
         return;
     };
-    let friendly = is_friendly(life.team(), team.and_then(|team| team.0));
+    let team = team.and_then(|team| team.0);
+    let friendly = is_friendly(life.team(), team);
     let body = commands
         .spawn((
             Name::new("RemoteBody"),
-            Mesh3d(assets.bodies[stance_index(pose.stance)].clone()),
+            Mesh3d(assets.body(pose.stance)),
             MeshMaterial3d(assets.body_material(friendly)),
             body_transform(pose.stance),
             ChildOf(entity),
@@ -159,14 +192,24 @@ pub(super) fn attach_remote_visuals(
             stance: pose.stance,
             eye_height,
             friendly,
+            in_play: health.is_some_and(|health| !health.is_dead()) && team.is_some(),
+            awaiting_spawn: None,
+            shown: false,
         },
         pose_transform(pose),
-        Visibility::default(),
+        Visibility::Hidden,
     ));
 }
 
-/// Smooths each remote player's transform toward its pose, swaps the body on stance change
-/// and re-tints it when either side's Team changes.
+/// Moves each remote player's visuals to its pose and decides whether they are drawn.
+///
+/// Shown players are smoothed toward the pose, except across a teleport, which snaps.
+/// Hidden ones (dead, teamless, or revived but not yet at their spawn) snap every frame, so
+/// they reappear exactly where they are. A revived player's spawn is the newest replicated pose:
+/// the server moves it in the same tick that restores `Health`, but `Health` applies on
+/// arrival while the pose only shows once interpolation reaches it. On a Host there is no
+/// interpolation and the pose is already there. Dying sends a `RemoteDeath`. Also swaps the
+/// body on stance change and re-tints it when either side's Team changes.
 pub(super) fn follow_remote_poses(
     time: Res<Time>,
     assets: Res<RemoteAssets>,
@@ -174,8 +217,11 @@ pub(super) fn follow_remote_poses(
     mut players: Query<
         (
             &PlayerPose,
+            &Health,
             Option<&PlayerTeam>,
+            Option<&ConfirmedHistory<PlayerPose>>,
             &mut Transform,
+            &mut Visibility,
             &mut RemoteVisuals,
         ),
         With<RemotePlayer>,
@@ -188,26 +234,72 @@ pub(super) fn follow_remote_poses(
         ),
         Without<RemotePlayer>,
     >,
+    mut deaths: MessageWriter<RemoteDeath>,
 ) {
     let dt = time.delta_secs();
-    for (pose, team, mut transform, mut visuals) in &mut players {
+    for (pose, health, team, history, mut transform, mut visibility, mut visuals) in &mut players {
+        let team = team.and_then(|team| team.0);
+        let in_play = !health.is_dead() && team.is_some();
+        if in_play != visuals.in_play {
+            visuals.in_play = in_play;
+            if in_play {
+                let spawn = history
+                    .and_then(ConfirmedHistory::newest_present)
+                    .map_or(pose.position, |(_, newest)| newest.position);
+                visuals.awaiting_spawn = Some(spawn);
+            } else {
+                visuals.awaiting_spawn = None;
+                if health.is_dead() && visuals.shown {
+                    deaths.write(RemoteDeath {
+                        transform: *transform,
+                        stance: visuals.stance,
+                        friendly: visuals.friendly,
+                    });
+                }
+            }
+        }
+        if visuals
+            .awaiting_spawn
+            .is_some_and(|spawn| pose.position.distance(spawn) <= SPAWN_REACHED)
+        {
+            visuals.awaiting_spawn = None;
+        }
+        let shown = in_play && visuals.awaiting_spawn.is_none();
+
         let target = pose_transform(pose);
-        transform
-            .translation
-            .smooth_nudge(&target.translation, FOLLOW_RATE, dt);
-        transform
-            .rotation
-            .smooth_nudge(&target.rotation, FOLLOW_RATE, dt);
+        let snap = !shown
+            || !visuals.shown
+            || transform.translation.distance(target.translation) > TELEPORT_DISTANCE;
+        if snap {
+            *transform = target;
+            visuals.eye_height = pose.stance.eye_height();
+        } else {
+            transform
+                .translation
+                .smooth_nudge(&target.translation, FOLLOW_RATE, dt);
+            transform
+                .rotation
+                .smooth_nudge(&target.rotation, FOLLOW_RATE, dt);
+            visuals
+                .eye_height
+                .smooth_nudge(&pose.stance.eye_height(), FOLLOW_RATE, dt);
+        }
+        visuals.shown = shown;
+        visibility.set_if_neq(if shown {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
 
         if visuals.stance != pose.stance {
             visuals.stance = pose.stance;
             if let Ok((mut body_transform_mut, Some(mut mesh), _)) = parts.get_mut(visuals.body) {
                 *body_transform_mut = body_transform(pose.stance);
-                mesh.0 = assets.bodies[stance_index(pose.stance)].clone();
+                mesh.0 = assets.body(pose.stance);
             }
         }
 
-        let friendly = is_friendly(life.team(), team.and_then(|team| team.0));
+        let friendly = is_friendly(life.team(), team);
         if visuals.friendly != friendly {
             visuals.friendly = friendly;
             if let Ok((_, _, Some(mut material))) = parts.get_mut(visuals.body) {
@@ -215,28 +307,8 @@ pub(super) fn follow_remote_poses(
             }
         }
 
-        visuals
-            .eye_height
-            .smooth_nudge(&pose.stance.eye_height(), FOLLOW_RATE, dt);
         if let Ok((mut visor, ..)) = parts.get_mut(visuals.visor) {
             *visor = visor_transform(visuals.eye_height, pose.pitch);
         }
-    }
-}
-
-/// Hides remote players while dead or not on a Team yet.
-pub(super) fn hide_dead_players(
-    mut players: Query<
-        (&Health, Option<&PlayerTeam>, &mut Visibility),
-        (With<RemotePlayer>, With<RemoteVisuals>),
-    >,
-) {
-    for (health, team, mut visibility) in &mut players {
-        let in_play = !health.is_dead() && team.is_some_and(|team| team.0.is_some());
-        visibility.set_if_neq(if in_play {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        });
     }
 }

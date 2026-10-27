@@ -1,5 +1,6 @@
 // Weapon tuning. Read at startup from ./data/ (falls back to the copy built into the binary).
-// Distances in metres, angles in degrees, times in seconds.
+// Distances in metres, angles in degrees, times in seconds. `damage_near`/`damage_far` are
+// scaled by the Hit Zone struck: head, upper torso (chest), lower torso (belly) or limbs.
 {
     AssaultRifle: (
         name: "M4 (AR)",
@@ -10,7 +11,7 @@
         damage_far: 20.0,
         falloff_start: 20.0,
         falloff_end: 40.0,
-        headshot_multiplier: 1.4,
+        zone_multipliers: (head: 1.4, upper_torso: 1.0, lower_torso: 1.0, limbs: 0.8),
         range: 300.0,
         magazine: 30,
         reload_secs: 2.2,
@@ -47,7 +48,7 @@
         damage_far: 15.0,
         falloff_start: 10.0,
         falloff_end: 25.0,
-        headshot_multiplier: 1.4,
+        zone_multipliers: (head: 1.4, upper_torso: 1.0, lower_torso: 0.9, limbs: 0.8),
         range: 200.0,
         magazine: 30,
         reload_secs: 2.0,
@@ -85,7 +86,7 @@
         damage_far: 80.0,
         falloff_start: 80.0,
         falloff_end: 150.0,
-        headshot_multiplier: 1.5,
+        zone_multipliers: (head: 1.5, upper_torso: 1.2, lower_torso: 1.0, limbs: 0.75),
         range: 400.0,
         magazine: 5,
         reload_secs: 3.0,

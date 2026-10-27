@@ -116,6 +116,10 @@ _Avoid_: Mod, upgrade
 A position on a **Weapon** that holds at most one **Attachment**: Optic (e.g. Red Dot, ACOG) or Muzzle (e.g. Silencer).
 _Avoid_: Rail, socket
 
+**Hit Zone**:
+The part of a body a bullet strikes: head, upper torso, lower torso or limbs (arms and legs). Each **Weapon** sets its own damage multiplier per zone.
+_Avoid_: Hit location, body part (for the damage category)
+
 ### Loadouts & progression
 
 **Loadout**:

@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use bevy::prelude::Resource;
 use clap::Parser;
 
+use crate::data::DEFAULT_MATCH_RULES;
 use crate::flow::FlowCommand;
 
 /// Default UDP port a server listens on.
@@ -33,6 +34,11 @@ pub struct Cli {
     /// Player name (overrides the saved Settings), or the Dedicated Server's name on the LAN.
     #[arg(long)]
     name: Option<String>,
+
+    /// Match Rules preset a server runs (when hosting or dedicated), from `data/match_rules.ron`,
+    /// e.g. `hardcore`.
+    #[arg(long, default_value = DEFAULT_MATCH_RULES, conflicts_with = "connect")]
+    rules: String,
 }
 
 /// How this process participates in a game. Inserted as a resource at startup.
@@ -69,5 +75,10 @@ impl Cli {
             start,
             name: self.name.clone(),
         }
+    }
+
+    /// The Match Rules preset this process's server runs.
+    pub fn rules(&self) -> &str {
+        &self.rules
     }
 }

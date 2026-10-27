@@ -45,6 +45,11 @@ pub struct PlayerPose {
     pub stance: Stance,
 }
 
+/// A player's position changing by more than this between two samples is a teleport (a
+/// respawn, or a new Match placing everyone): interpolation and visuals jump instead of
+/// gliding across the map. Far beyond what a player can move in one sample, in metres.
+pub const TELEPORT_DISTANCE: f32 = 3.0;
+
 /// Display name of a player, chosen on the client.
 #[derive(Component, Clone, Debug, Default, PartialEq, Serialize, Deserialize, Reflect)]
 pub struct PlayerName(pub String);
@@ -108,6 +113,8 @@ pub struct PlayerTeam(pub Option<Team>);
 #[derive(Component, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MatchState {
     pub mode: GameModeId,
+    /// Name of the Match Rules preset in effect; clients look it up in their own `GameData`.
+    pub rules: String,
     /// Team scores, indexed by `Team::index`.
     pub scores: [u32; 2],
     pub score_limit: u32,
@@ -120,7 +127,10 @@ pub struct MatchState {
 pub enum MatchPhase {
     Playing,
     /// The Match is over; the next one starts in `next_in_secs`. `winner` is `None` on a draw.
-    Ended { winner: Option<Team>, next_in_secs: u32 },
+    Ended {
+        winner: Option<Team>,
+        next_in_secs: u32,
+    },
 }
 
 /// Physics layers. Arena geometry is `World`; player hitboxes are `Hitbox` and collide with

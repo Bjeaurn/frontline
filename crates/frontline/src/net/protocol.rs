@@ -7,7 +7,9 @@ use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::data::WeaponId;
-use crate::shared::{Health, MatchState, PlayerName, PlayerPose, PlayerStats, PlayerTeam, Team};
+use crate::shared::{
+    Health, MatchState, PlayerName, PlayerPose, PlayerStats, PlayerTeam, TELEPORT_DISTANCE, Team,
+};
 
 /// Netcode protocol id; client and server must agree on it.
 pub const PROTOCOL_ID: u64 = 0x4652_4f4e_544c_494e;
@@ -162,8 +164,12 @@ pub(super) fn register(app: &mut App) {
 }
 
 /// Interpolates between two confirmed poses: linear position and pitch, shortest-arc yaw,
-/// and the stance switches halfway.
+/// and the stance switches halfway. A jump over `TELEPORT_DISTANCE` is a teleport and lands
+/// on the end pose at once.
 fn lerp_pose(start: PlayerPose, end: PlayerPose, t: f32) -> PlayerPose {
+    if start.position.distance(end.position) > TELEPORT_DISTANCE {
+        return end;
+    }
     let yaw_delta = (end.yaw - start.yaw + PI).rem_euclid(TAU) - PI;
     PlayerPose {
         position: start.position.lerp(end.position, t),
@@ -179,7 +185,11 @@ mod tests {
     use crate::shared::Stance;
 
     fn pose(yaw: f32, stance: Stance) -> PlayerPose {
-        PlayerPose { yaw, stance, ..default() }
+        PlayerPose {
+            yaw,
+            stance,
+            ..default()
+        }
     }
 
     #[test]
@@ -197,5 +207,17 @@ mod tests {
         let (a, b) = (pose(0.0, Stance::Standing), pose(0.0, Stance::Prone));
         assert_eq!(lerp_pose(a, b, 0.49).stance, Stance::Standing);
         assert_eq!(lerp_pose(a, b, 0.5).stance, Stance::Prone);
+    }
+
+    #[test]
+    fn teleports_land_at_once_and_short_moves_glide() {
+        let at = |x: f32| PlayerPose {
+            position: Vec3::new(x, 0.0, 0.0),
+            ..default()
+        };
+        let respawn = lerp_pose(at(0.0), at(TELEPORT_DISTANCE + 20.0), 0.1);
+        assert_eq!(respawn, at(TELEPORT_DISTANCE + 20.0));
+        let step = lerp_pose(at(0.0), at(1.0), 0.25);
+        assert!((step.position.x - 0.25).abs() < 1e-6);
     }
 }

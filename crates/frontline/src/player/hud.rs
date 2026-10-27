@@ -1,12 +1,14 @@
 //! Local-player HUD: damage vignette and direction indicators, team-coloured kill feed and the
-//! death screen.
+//! death screen. The Match Rules' `hud` block switches the indicators and kill feed off and
+//! can delay the feed.
 
+use std::collections::VecDeque;
 use std::f32::consts::PI;
 
 use bevy::prelude::*;
 
 use super::life::LocalLife;
-use crate::data::GameData;
+use crate::data::{ActiveRules, GameData};
 use crate::flow::AppState;
 use crate::match_hud::{FRIENDLY_COLOR, relation_color};
 use crate::net::protocol::{Damaged, KillFeed};
@@ -57,6 +59,16 @@ pub(super) struct KillFeedList;
 #[derive(Component)]
 pub(super) struct KillFeedLine {
     born: f64,
+}
+
+/// Kill-feed lines received but not shown yet, each with the time (`elapsed_secs_f64`) it
+/// is due; the Match Rules' `kill_feed_delay_secs` holds them back.
+#[derive(Resource, Default, Debug)]
+pub(super) struct PendingKillFeed(VecDeque<(f64, KillFeed)>);
+
+/// Drops held-back kill-feed lines when leaving the game.
+pub(super) fn reset_kill_feed(mut pending: ResMut<PendingKillFeed>) {
+    pending.0.clear();
 }
 
 #[derive(Component)]
@@ -155,7 +167,7 @@ pub(super) fn spawn_hud(mut commands: Commands) {
 
 /// Red screen edges that deepen with missing health; none while still choosing a Team.
 pub(super) fn update_damage_vignette(
-    data: Res<GameData>,
+    rules: ActiveRules,
     replica: Query<
         (&Health, &PlayerTeam),
         (
@@ -169,7 +181,7 @@ pub(super) fn update_damage_vignette(
         return;
     };
     let missing = if team.0.is_some() {
-        (1.0 - health.0 / data.rules().max_health).clamp(0.0, 1.0)
+        (1.0 - health.0 / rules.get().max_health).clamp(0.0, 1.0)
     } else {
         0.0
     };
@@ -182,11 +194,17 @@ pub(super) fn update_damage_vignette(
     });
 }
 
+/// Spawns a direction indicator per `Damaged`, unless the Match Rules turn them off.
 pub(super) fn spawn_damage_indicators(
+    rules: ActiveRules,
     mut damaged: MessageReader<FromServer<Damaged>>,
     root: Single<Entity, With<DamageIndicators>>,
     mut commands: Commands,
 ) {
+    if !rules.get().hud.damage_direction {
+        damaged.clear();
+        return;
+    }
     for FromServer(hit) in damaged.read() {
         let bar = commands
             .spawn((
@@ -269,20 +287,35 @@ pub(super) fn update_damage_indicators(
 #[derive(Component)]
 pub(super) struct FeedColor(Color);
 
-/// Spawns one kill-feed line per message: friendly names blue, enemy names red.
+/// Queues each kill-feed message for `kill_feed_delay_secs`, then shows it: friendly names
+/// blue, enemy names red. Nothing shows when the Match Rules turn the kill feed off. (The
+/// death screen reads the messages itself, so it names the killer at once.)
 pub(super) fn add_kill_feed_lines(
     time: Res<Time>,
     data: Res<GameData>,
+    rules: ActiveRules,
     fonts: Res<UiFonts>,
     life: Res<LocalLife>,
     mut feed: MessageReader<FromServer<KillFeed>>,
+    mut pending: ResMut<PendingKillFeed>,
     me: Query<&PlayerName, With<LocalPlayer>>,
     players: Query<(&PlayerName, &PlayerTeam)>,
     list: Single<(Entity, Option<&Children>), With<KillFeedList>>,
     lines: Query<&KillFeedLine>,
     mut commands: Commands,
 ) {
-    if feed.is_empty() {
+    let now = time.elapsed_secs_f64();
+    let hud = &rules.get().hud;
+    if !hud.kill_feed {
+        feed.clear();
+        pending.0.clear();
+        return;
+    }
+    let due = now + f64::from(hud.kill_feed_delay_secs);
+    pending
+        .0
+        .extend(feed.read().map(|FromServer(line)| (due, line.clone())));
+    if pending.0.front().is_none_or(|(at, _)| *at > now) {
         return;
     }
     let (list, children) = *list;
@@ -303,7 +336,8 @@ pub(super) fn add_kill_feed_lines(
         font_size: FontSize::Px(FEED_FONT_SIZE),
         ..default()
     };
-    for FromServer(line) in feed.read() {
+    while let Some((_, line)) = pending.0.pop_front_if(|(at, _)| *at <= now) {
+        debug!("Kill feed shows: {} killed {}", line.killer, line.victim);
         if existing.len() >= FEED_LINES {
             commands.entity(existing.remove(0)).try_despawn();
         }
@@ -313,9 +347,7 @@ pub(super) fn add_kill_feed_lines(
         let victim = name_color(&line.victim);
         let entity = commands
             .spawn((
-                KillFeedLine {
-                    born: time.elapsed_secs_f64(),
-                },
+                KillFeedLine { born: now },
                 Text::new(line.killer.clone()),
                 font.clone(),
                 TextColor(killer),
@@ -373,7 +405,7 @@ pub(super) fn fade_kill_feed(
 /// Shown while dead; not while still choosing a Team.
 pub(super) fn update_death_screen(
     time: Res<Time>,
-    data: Res<GameData>,
+    rules: ActiveRules,
     life: Res<LocalLife>,
     mut screen: Single<&mut Visibility, With<DeathScreen>>,
     mut title: Single<&mut Text, (With<DeathTitle>, Without<DeathCountdown>)>,
@@ -393,7 +425,7 @@ pub(super) fn update_death_screen(
         None if life.switched_team() => "You switched to the other team".to_owned(),
         None => "You were killed".to_owned(),
     };
-    let left = f64::from(data.rules().respawn_delay_secs) - life.secs_dead(time.elapsed_secs_f64());
+    let left = f64::from(rules.get().respawn_delay_secs) - life.secs_dead(time.elapsed_secs_f64());
     let status = if left > 0.0 {
         format!("Respawning in {left:.1}")
     } else {

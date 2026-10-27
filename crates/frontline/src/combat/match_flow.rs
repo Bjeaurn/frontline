@@ -14,6 +14,11 @@ use crate::shared::{MatchPhase, MatchState, PlayerStats, PlayerTeam, Team};
 /// The only Game Mode until Rotations exist.
 const MODE: GameModeId = GameModeId::TeamDeathmatch;
 
+/// The Match Rules preset this process's server runs (`--rules`), validated against
+/// `GameData` at startup.
+#[derive(Resource, Clone, Debug)]
+pub struct ServerRules(pub String);
+
 /// Exact seconds left in the current phase (playing or end screen); `MatchState` only carries
 /// whole seconds, so it is written once per second.
 #[derive(Resource, Debug)]
@@ -44,6 +49,7 @@ pub(super) fn start_match(
     trigger: On<Add<Started>>,
     servers: Query<(), With<Server>>,
     data: Res<GameData>,
+    rules: Res<ServerRules>,
     mut commands: Commands,
 ) {
     if !servers.contains(trigger.entity) {
@@ -57,6 +63,7 @@ pub(super) fn start_match(
         Name::new("Match"),
         MatchState {
             mode: MODE,
+            rules: rules.0.clone(),
             scores: [0; 2],
             score_limit: settings.score_limit,
             seconds_left: settings.time_limit_secs,
@@ -64,7 +71,7 @@ pub(super) fn start_match(
         },
         Replicate::to_clients(NetworkTarget::All),
     ));
-    info!("Match started ({MODE:?})");
+    info!("Match started ({MODE:?}, \"{}\" Match Rules)", rules.0);
 }
 
 /// Drops the Match when its server stops (Host leaving).
@@ -119,14 +126,23 @@ pub(super) fn tick_match(
         }
         MatchPhase::Ended { winner, .. } if clock.left > 0.0 => {
             let next_in_secs = whole_secs(clock.left);
-            if state.phase != (MatchPhase::Ended { winner, next_in_secs }) {
-                state.phase = MatchPhase::Ended { winner, next_in_secs };
+            if state.phase
+                != (MatchPhase::Ended {
+                    winner,
+                    next_in_secs,
+                })
+            {
+                state.phase = MatchPhase::Ended {
+                    winner,
+                    next_in_secs,
+                };
             }
         }
         MatchPhase::Ended { .. } => {
             clock.left = settings.time_limit_secs as f32;
             **state = MatchState {
                 mode: state.mode,
+                rules: state.rules.clone(),
                 scores: [0; 2],
                 score_limit: settings.score_limit,
                 seconds_left: settings.time_limit_secs,

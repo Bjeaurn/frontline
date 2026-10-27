@@ -28,7 +28,8 @@ use crate::cli::{Cli, Mode};
 pub const TICK_HZ: f64 = 64.0;
 
 fn main() -> AppExit {
-    let mode = Cli::parse().mode();
+    let cli = Cli::parse();
+    let mode = cli.mode();
     let tick_duration = Duration::from_secs_f64(1.0 / TICK_HZ);
 
     let mut app = App::new();
@@ -59,6 +60,18 @@ fn main() -> AppExit {
         }
     }
     app.add_plugins((data::DataPlugin, world::WorldPlugin));
+    let presets = &app.world().resource::<data::GameData>().match_rules;
+    if !presets.contains_key(cli.rules()) {
+        let mut known: Vec<&str> = presets.keys().map(String::as_str).collect();
+        known.sort_unstable();
+        error!(
+            "Unknown Match Rules preset \"{}\" (--rules); known: {}",
+            cli.rules(),
+            known.join(", ")
+        );
+        return AppExit::error();
+    }
+    app.insert_resource(combat::ServerRules(cli.rules().to_owned()));
     if matches!(mode, Mode::Windowed { .. }) {
         app.add_plugins((
             flow::FlowPlugin,

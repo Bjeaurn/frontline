@@ -3,9 +3,10 @@
 use bevy::prelude::*;
 
 use super::{FRIENDLY_COLOR, is_friendly};
+use crate::data::ActiveRules;
 use crate::flow::AppState;
 use crate::player::{EyeCamera, LocalLife};
-use crate::shared::{Health, PlayerName, PlayerPose, PlayerTeam, RemotePlayer};
+use crate::shared::{PlayerName, PlayerPose, PlayerTeam, RemotePlayer};
 
 const FONT_SIZE: f32 = 14.0;
 /// Width of the box the name is centred in, in logical pixels.
@@ -53,25 +54,36 @@ pub(super) fn attach_name_tags(
     }
 }
 
-/// Shows each tag over its friendly, living, on-screen player; despawns tags whose player left.
+/// Shows each tag over its friendly, on-screen player while that player is drawn (so not while
+/// dead or not yet at its spawn), if the Match Rules show name tags; despawns tags whose
+/// player left.
 pub(super) fn place_name_tags(
+    rules: ActiveRules,
     life: Res<LocalLife>,
     camera: Query<(&Camera, &GlobalTransform), With<EyeCamera>>,
-    players: Query<(&PlayerName, &PlayerPose, &PlayerTeam, Option<&Health>), With<RemotePlayer>>,
-    mut tags: Query<(Entity, &NameTag, &mut Node, &mut Text, &mut Visibility)>,
+    players: Query<
+        (&PlayerName, &PlayerPose, &PlayerTeam, Option<&Visibility>),
+        With<RemotePlayer>,
+    >,
+    mut tags: Query<
+        (Entity, &NameTag, &mut Node, &mut Text, &mut Visibility),
+        Without<RemotePlayer>,
+    >,
     mut commands: Commands,
 ) {
     let Ok((camera, eye)) = camera.single() else {
         return;
     };
+    let enabled = rules.get().hud.name_tags;
     for (tag, NameTag { target }, mut node, mut text, mut visibility) in &mut tags {
-        let Ok((name, pose, team, health)) = players.get(*target) else {
+        let Ok((name, pose, team, drawn)) = players.get(*target) else {
             commands.entity(tag).despawn();
             continue;
         };
         let head = pose.position + Vec3::Y * TAG_HEIGHT;
-        let shown = is_friendly(life.team(), team.0)
-            && !health.is_some_and(|health| health.is_dead())
+        let shown = enabled
+            && is_friendly(life.team(), team.0)
+            && drawn.is_some_and(|drawn| *drawn != Visibility::Hidden)
             && eye.translation().distance(head) <= MAX_DISTANCE;
         let screen = shown
             .then(|| camera.world_to_viewport(eye, head).ok())

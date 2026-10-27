@@ -7,7 +7,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::window::PrimaryWindow;
 
 use super::{HeldWeapon, WeaponSystems};
-use crate::data::GameData;
+use crate::data::{ActiveRules, GameData};
 use crate::flow::AppState;
 use crate::net::protocol::HitConfirm;
 use crate::player::{EyeCamera, LocalLife};
@@ -364,8 +364,10 @@ fn spawn_weapon_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 }
 
 /// Opens the arms to the hip spread cone's edge on screen and fades them out with the sights.
+/// Hidden throughout when the Match Rules have no crosshair.
 fn update_crosshair(
     data: Res<GameData>,
+    rules: ActiveRules,
     life: Res<LocalLife>,
     weapons: Query<&HeldWeapon, With<LocalPlayer>>,
     eye: Query<&Projection, With<EyeCamera>>,
@@ -380,11 +382,13 @@ fn update_crosshair(
         return;
     };
     let alpha = CROSSHAIR_ALPHA * (1.0 - weapon.ads / CROSSHAIR_FADE_ADS).clamp(0.0, 1.0);
-    crosshair.set_if_neq(if alpha <= 0.0 || life.is_dead() {
-        Visibility::Hidden
-    } else {
-        Visibility::Inherited
-    });
+    crosshair.set_if_neq(
+        if alpha <= 0.0 || life.is_dead() || !rules.get().hud.crosshair {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        },
+    );
     let spread = weapon.hip_spread_deg(data.weapon(weapon.id)).to_radians();
     let gap = (spread.tan() / (projection.fov / 2.0).tan() * window.height() / 2.0)
         .max(CROSSHAIR_MIN_GAP);
@@ -398,7 +402,9 @@ fn update_crosshair(
     }
 }
 
+/// White on a hit, red on a kill, each only if the Match Rules show it.
 fn show_hitmarker(
+    rules: ActiveRules,
     mut hits: MessageReader<FromServer<HitConfirm>>,
     mut marker: Single<(&mut Hitmarker, &mut Visibility)>,
     mut arms: Query<&mut BackgroundColor, With<HitmarkerArm>>,
@@ -410,14 +416,17 @@ fn show_hitmarker(
     else {
         return;
     };
+    let hud = &rules.get().hud;
+    let color = if kill && hud.kill_hitmarker {
+        HITMARKER_KILL_COLOR
+    } else if hud.hitmarkers {
+        HITMARKER_COLOR
+    } else {
+        return;
+    };
     let (hitmarker, visibility) = &mut *marker;
     hitmarker.left = HITMARKER_SECS;
     **visibility = Visibility::Inherited;
-    let color = if kill {
-        HITMARKER_KILL_COLOR
-    } else {
-        HITMARKER_COLOR
-    };
     for mut arm in &mut arms {
         arm.0 = color;
     }

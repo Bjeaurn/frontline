@@ -1,0 +1,6 @@
+// Client-only presentation tuning. Read at startup from ./data/ (falls back to the copy built
+// into the binary). Seconds.
+(
+    corpse_secs: 10.0,
+    max_corpses: 16,
+)

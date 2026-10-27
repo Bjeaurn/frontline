@@ -10,7 +10,7 @@ use super::hitbox::{Hitboxes, set_hitboxes_enabled};
 use crate::data::GameData;
 use crate::net::LinkPlayer;
 use crate::net::protocol::ChooseTeam;
-use crate::shared::{Health, PlayerName, PlayerTeam};
+use crate::shared::{Health, MatchState, PlayerName, PlayerTeam};
 
 /// Puts players on the team they ask for. A first choice spawns them right away; switching
 /// while alive kills them without anyone getting credit, and they respawn after the usual delay.
@@ -23,14 +23,14 @@ pub(super) fn choose_teams(
         &Hitboxes,
         Has<PendingRespawn>,
     )>,
+    state: Single<&MatchState>,
     data: Res<GameData>,
     time: Res<Time>,
     mut commands: Commands,
 ) {
     for (player, mut receiver) in &mut links {
         for ChooseTeam(team) in receiver.receive() {
-            let Ok((mut current, mut health, name, hitboxes, pending)) =
-                players.get_mut(player.0)
+            let Ok((mut current, mut health, name, hitboxes, pending)) = players.get_mut(player.0)
             else {
                 continue;
             };
@@ -52,7 +52,8 @@ pub(super) fn choose_teams(
             health.0 = 0.0;
             set_hitboxes_enabled(&mut commands, hitboxes, false);
             commands.entity(player.0).insert(PendingRespawn::at(
-                time.elapsed() + Duration::from_secs_f32(data.rules().respawn_delay_secs),
+                time.elapsed()
+                    + Duration::from_secs_f32(data.rules(&state.rules).respawn_delay_secs),
             ));
         }
     }
