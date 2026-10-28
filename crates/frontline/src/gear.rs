@@ -1,12 +1,14 @@
-//! What a player carries: Attachments, Perks and the Loadout that picks them (CONTEXT.md:
+//! What a player carries: Attachments, Perks and the Loadout (class) that picks them (CONTEXT.md:
 //! Loadout, Attachment, Perk), plus the pure rules that turn them into effective Weapon stats and
 //! Perk effects. Shared by the client (viewmodel, HUD, editor) and the server (damage, range).
+//! The point budget and slot rules of a class are in `class`.
 //!
 //! The numbers live in `data/attachments.ron` and `data/perks.ron`.
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::class::{EquipmentId, EquipmentSlot, WildcardId};
 use crate::data::{GameData, SightKind, WeaponClass, WeaponId, WeaponStats};
 
 /// Longest Loadout name the editor accepts.
@@ -30,16 +32,18 @@ pub enum AttachmentId {
     Prism,
     Acog,
     Silencer,
+    Foregrip,
 }
 
 impl AttachmentId {
     /// Every Attachment, in the order menus list them.
-    pub const ALL: [AttachmentId; 5] = [
+    pub const ALL: [AttachmentId; 6] = [
         AttachmentId::RedDot,
         AttachmentId::Holographic,
         AttachmentId::Prism,
         AttachmentId::Acog,
         AttachmentId::Silencer,
+        AttachmentId::Foregrip,
     ];
 }
 
@@ -48,6 +52,16 @@ impl AttachmentId {
 pub enum AttachmentSlot {
     Optic,
     Muzzle,
+    Underbarrel,
+}
+
+impl AttachmentSlot {
+    /// Every Slot, in the order the editor lists them.
+    pub const ALL: [AttachmentSlot; 3] = [
+        AttachmentSlot::Optic,
+        AttachmentSlot::Muzzle,
+        AttachmentSlot::Underbarrel,
+    ];
 }
 
 /// Multipliers an Attachment applies to a Weapon's stats; 1 changes nothing.
@@ -58,6 +72,8 @@ pub struct StatMods {
     pub falloff_mul: f32,
     /// Scales the time to aim down sights: above 1 is slower.
     pub ads_secs_mul: f32,
+    /// Scales the recoil kick: below 1 is steadier.
+    pub recoil_mul: f32,
 }
 
 impl Default for StatMods {
@@ -65,6 +81,7 @@ impl Default for StatMods {
         Self {
             falloff_mul: 1.0,
             ads_secs_mul: 1.0,
+            recoil_mul: 1.0,
         }
     }
 }
@@ -75,6 +92,7 @@ impl StatMods {
         StatMods {
             falloff_mul: self.falloff_mul * other.falloff_mul,
             ads_secs_mul: self.ads_secs_mul * other.ads_secs_mul,
+            recoil_mul: self.recoil_mul * other.recoil_mul,
         }
     }
 
@@ -82,6 +100,8 @@ impl StatMods {
         stats.falloff_start *= self.falloff_mul;
         stats.falloff_end *= self.falloff_mul;
         stats.ads_secs *= self.ads_secs_mul;
+        stats.recoil_pitch_deg *= self.recoil_mul;
+        stats.recoil_yaw_deg *= self.recoil_mul;
     }
 }
 
@@ -91,6 +111,9 @@ pub struct Attachment {
     pub name: String,
     pub description: String,
     pub slot: AttachmentSlot,
+    /// Class points it costs, when that isn't the default for its kind (`class_points.ron`).
+    #[serde(default)]
+    pub cost: Option<u32>,
     #[serde(default)]
     pub mods: StatMods,
     /// The sight drawn and aimed through (Optics only).
@@ -123,11 +146,36 @@ pub struct Attachments {
     pub optic: Option<AttachmentId>,
     #[serde(default)]
     pub muzzle: Option<AttachmentId>,
+    #[serde(default)]
+    pub underbarrel: Option<AttachmentId>,
 }
 
 impl Attachments {
     pub fn iter(self) -> impl Iterator<Item = AttachmentId> {
-        [self.optic, self.muzzle].into_iter().flatten()
+        [self.optic, self.muzzle, self.underbarrel]
+            .into_iter()
+            .flatten()
+    }
+
+    /// How many are fitted.
+    pub fn count(self) -> usize {
+        self.iter().count()
+    }
+
+    pub fn get(self, slot: AttachmentSlot) -> Option<AttachmentId> {
+        match slot {
+            AttachmentSlot::Optic => self.optic,
+            AttachmentSlot::Muzzle => self.muzzle,
+            AttachmentSlot::Underbarrel => self.underbarrel,
+        }
+    }
+
+    pub fn set(&mut self, slot: AttachmentSlot, id: Option<AttachmentId>) {
+        match slot {
+            AttachmentSlot::Optic => self.optic = id,
+            AttachmentSlot::Muzzle => self.muzzle = id,
+            AttachmentSlot::Underbarrel => self.underbarrel = id,
+        }
     }
 }
 
@@ -153,11 +201,37 @@ impl PerkId {
     ];
 }
 
-/// One Perk per Perk Slot, in slot order.
-pub type PerkSet = [PerkId; 3];
-
 /// Number of Perk Slots.
 pub const PERK_SLOTS: usize = 3;
+
+/// The Perks of a class: at most one per Perk Slot, and a second one in a Slot whose Perk Greed
+/// Wildcard is equipped. Copy, so the client can tell the server and the server can replicate it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Perks {
+    /// The Perk of each Perk Slot, in slot order.
+    #[serde(default)]
+    pub picks: [Option<PerkId>; PERK_SLOTS],
+    /// The second Perk of each Perk Slot (Perk Greed).
+    #[serde(default)]
+    pub greed: [Option<PerkId>; PERK_SLOTS],
+}
+
+impl Perks {
+    /// Every Perk in effect.
+    pub fn iter(self) -> impl Iterator<Item = PerkId> {
+        self.picks.into_iter().chain(self.greed).flatten()
+    }
+
+    /// How many Perks there are.
+    pub fn count(self) -> usize {
+        self.iter().count()
+    }
+
+    /// The Perks of Perk Slot `slot` (0 to 2): its own and its Greed one.
+    pub fn in_slot(self, slot: usize) -> impl Iterator<Item = PerkId> {
+        [self.picks[slot], self.greed[slot]].into_iter().flatten()
+    }
+}
 
 /// What a Perk changes; 1 and `false` change nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
@@ -226,7 +300,7 @@ pub struct AmmoPackTuning {
 /// The Perks a player has equipped. Sent by the client with its Loadout, kept and replicated by
 /// the server so it can apply them (damage) and every client can too (footsteps).
 #[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct EquippedPerks(pub PerkSet);
+pub struct EquippedPerks(pub Perks);
 
 /// An ammo pack a dead player dropped at `position`, replicated to everyone. Server-owned.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -234,8 +308,9 @@ pub struct AmmoPack {
     pub position: Vec3,
 }
 
-/// A Loadout: the Weapons, Attachments and Perks a player spawns with. Default and custom
-/// Loadouts share this shape.
+/// A Loadout (a class): the Weapons, Attachments, Perks, equipment and Wildcards a player
+/// spawns with. Default and custom Loadouts share this shape. Whether it is a valid Pick 10
+/// class is `GameData::class_errors` (`class`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Loadout {
     pub name: String,
@@ -243,46 +318,92 @@ pub struct Loadout {
     /// Fitted to the Primary.
     #[serde(default)]
     pub attachments: Attachments,
-    pub secondary: WeaponId,
-    pub perks: PerkSet,
+    /// The second Weapon: a Secondary, or a Primary with the Overkill Wildcard. Optional.
+    #[serde(default)]
+    pub secondary: Option<WeaponId>,
+    #[serde(default)]
+    pub perks: Perks,
+    #[serde(default)]
+    pub lethal: Option<EquipmentId>,
+    #[serde(default)]
+    pub tactical: Option<EquipmentId>,
+    /// At most `class_points.max_wildcards`, each once.
+    #[serde(default)]
+    pub wildcards: Vec<WildcardId>,
     /// The Primary's camo: an id from `data/progression.ron`, or `none`.
     #[serde(default = "no_camo")]
     pub camo: String,
 }
 
 impl Loadout {
-    /// The Loadout with everything the data doesn't allow replaced (a hand-edited or stale
-    /// profile): the wrong kind of Weapon, an Attachment in the wrong Slot or on a Weapon that
-    /// can't take it, a Perk from another Perk Slot. Replacements are the first fitting choice.
-    pub fn validated(mut self, data: &GameData) -> Loadout {
-        let first_weapon = |class| {
-            WeaponId::ALL
-                .into_iter()
-                .find(|id| data.weapon(*id).class == class)
-                .expect("checked at startup")
-        };
-        if data.weapon(self.primary).class != WeaponClass::Primary {
-            self.primary = first_weapon(WeaponClass::Primary);
+    /// Whether the class carries `wildcard`.
+    pub fn has(&self, wildcard: WildcardId) -> bool {
+        self.wildcards.contains(&wildcard)
+    }
+
+    /// The equipment in `slot`.
+    pub fn equipment(&self, slot: EquipmentSlot) -> Option<EquipmentId> {
+        match slot {
+            EquipmentSlot::Lethal => self.lethal,
+            EquipmentSlot::Tactical => self.tactical,
         }
-        if data.weapon(self.secondary).class != WeaponClass::Secondary {
-            self.secondary = first_weapon(WeaponClass::Secondary);
+    }
+
+    pub fn set_equipment(&mut self, slot: EquipmentSlot, id: Option<EquipmentId>) {
+        match slot {
+            EquipmentSlot::Lethal => self.lethal = id,
+            EquipmentSlot::Tactical => self.tactical = id,
+        }
+    }
+
+    /// The Loadout with everything that is the wrong kind of thing for its place replaced or
+    /// emptied (a hand-edited or stale profile): a non-Primary Primary, an Attachment in the
+    /// wrong Slot or one the Primary doesn't offer, a Perk from another Perk Slot, equipment in
+    /// the wrong slot, a repeated Wildcard. How many things a class may hold and what they cost
+    /// is not repaired here but reported by `GameData::class_errors` (and trimmed by
+    /// `fitted`).
+    pub fn validated(mut self, data: &GameData) -> Loadout {
+        if data.weapon(self.primary).class != WeaponClass::Primary {
+            self.primary = WeaponId::ALL
+                .into_iter()
+                .find(|id| data.weapon(*id).class == WeaponClass::Primary)
+                .expect("checked at startup");
         }
         let stats = data.weapon(self.primary);
-        let fits = |id: Option<AttachmentId>, slot: AttachmentSlot| {
-            id.filter(|id| data.attachment(*id).slot == slot && stats.accepts(slot))
-        };
-        self.attachments = Attachments {
-            optic: fits(self.attachments.optic, AttachmentSlot::Optic),
-            muzzle: fits(self.attachments.muzzle, AttachmentSlot::Muzzle),
-        };
-        for (index, perk) in self.perks.iter_mut().enumerate() {
-            if data.perk(*perk).slot != index + 1 {
-                *perk = data
-                    .perks_in_slot(index + 1)
-                    .next()
-                    .expect("checked at startup");
-            }
+        for slot in AttachmentSlot::ALL {
+            let fits = |id: AttachmentId| {
+                data.attachment(id).slot == slot
+                    && stats.accepts(slot)
+                    && data
+                        .progression
+                        .attachment_level(self.primary, id)
+                        .is_some()
+            };
+            let fitted = self.attachments.get(slot).filter(|id| fits(*id));
+            self.attachments.set(slot, fitted);
         }
+        for slot in 0..PERK_SLOTS {
+            let in_slot = |perk: &PerkId| data.perk(*perk).slot == slot + 1;
+            self.perks.picks[slot] = self.perks.picks[slot].filter(in_slot);
+            self.perks.greed[slot] = self.perks.greed[slot]
+                .filter(in_slot)
+                .filter(|perk| Some(*perk) != self.perks.picks[slot]);
+        }
+        for slot in [EquipmentSlot::Lethal, EquipmentSlot::Tactical] {
+            let fitted = self.equipment(slot).filter(|id| {
+                data.class_points
+                    .equipment
+                    .get(id)
+                    .is_some_and(|equipment| equipment.slot == slot)
+            });
+            self.set_equipment(slot, fitted);
+        }
+        let mut seen = Vec::new();
+        self.wildcards.retain(|wildcard| {
+            let new = !seen.contains(wildcard);
+            seen.push(*wildcard);
+            new
+        });
         self.name = self
             .name
             .trim()
@@ -297,12 +418,19 @@ impl Loadout {
 }
 
 impl WeaponStats {
+    /// The short name used in toasts and lock notes: "M4" for "M4 (AR)".
+    pub fn short_name(&self) -> &str {
+        self.name.split(" (").next().unwrap_or(&self.name)
+    }
+
     /// Whether a Weapon has a place for an Attachment in `slot`: Secondaries have none, and a
     /// built-in scope leaves no room for an Optic.
     pub fn accepts(&self, slot: AttachmentSlot) -> bool {
         match slot {
             AttachmentSlot::Optic => self.class == WeaponClass::Primary && !self.scope,
-            AttachmentSlot::Muzzle => self.class == WeaponClass::Primary,
+            AttachmentSlot::Muzzle | AttachmentSlot::Underbarrel => {
+                self.class == WeaponClass::Primary
+            }
         }
     }
 }
@@ -341,11 +469,13 @@ impl GameData {
         })
     }
 
-    /// What `perks` do together.
-    pub fn perk_effects(&self, perks: &[PerkId]) -> PerkEffects {
-        perks.iter().fold(PerkEffects::default(), |effects, id| {
-            effects.combine(self.perk(*id).effects)
-        })
+    /// What `perks` do together: every Perk's effects stack, a Perk Greed pair included.
+    pub fn perk_effects(&self, perks: impl IntoIterator<Item = PerkId>) -> PerkEffects {
+        perks
+            .into_iter()
+            .fold(PerkEffects::default(), |effects, id| {
+                effects.combine(self.perk(id).effects)
+            })
     }
 
     /// A Weapon's stats with its Attachments fitted and the carrier's Perks in effect.
@@ -405,6 +535,13 @@ mod tests {
         GameData::load()
     }
 
+    fn picks(a: PerkId, b: PerkId, c: PerkId) -> Perks {
+        Perks {
+            picks: [Some(a), Some(b), Some(c)],
+            greed: [None; PERK_SLOTS],
+        }
+    }
+
     #[test]
     fn silencer_shortens_falloff_and_quiets_the_shot() {
         let data = data();
@@ -412,8 +549,8 @@ mod tests {
         let silenced = data.effective_weapon(
             WeaponId::Smg,
             Attachments {
-                optic: None,
                 muzzle: Some(AttachmentId::Silencer),
+                ..Attachments::default()
             },
             &PerkEffects::default(),
         );
@@ -424,6 +561,23 @@ mod tests {
     }
 
     #[test]
+    fn a_foregrip_steadies_the_recoil_and_slows_the_aim_a_little() {
+        let data = data();
+        let base = data.weapon(WeaponId::AssaultRifle);
+        let gripped = data.effective_weapon(
+            WeaponId::AssaultRifle,
+            Attachments {
+                underbarrel: Some(AttachmentId::Foregrip),
+                ..Attachments::default()
+            },
+            &PerkEffects::default(),
+        );
+        assert!((gripped.recoil_pitch_deg - base.recoil_pitch_deg * 0.75).abs() < 1e-4);
+        assert!((gripped.recoil_yaw_deg - base.recoil_yaw_deg * 0.75).abs() < 1e-4);
+        assert!(gripped.ads_secs > base.ads_secs);
+    }
+
+    #[test]
     fn optics_set_magnification_sway_and_the_field_of_view() {
         let data = data();
         let rifle = |optic: Option<AttachmentId>| {
@@ -431,7 +585,7 @@ mod tests {
                 WeaponId::AssaultRifle,
                 Attachments {
                     optic,
-                    muzzle: None,
+                    ..Attachments::default()
                 },
                 &PerkEffects::default(),
             )
@@ -478,7 +632,7 @@ mod tests {
         // A scope leaves no room for an Optic.
         let red_dot = Attachments {
             optic: Some(AttachmentId::RedDot),
-            muzzle: None,
+            ..Attachments::default()
         };
         let sniper = data.effective_weapon(WeaponId::SniperRifle, red_dot, &PerkEffects::default());
         assert_eq!(sniper.sight, SightKind::Scope);
@@ -489,7 +643,7 @@ mod tests {
     #[test]
     fn perks_stack_and_change_reload_and_speed() {
         let data = data();
-        let effects = data.perk_effects(&[
+        let effects = data.perk_effects([
             PerkId::SleightOfHand,
             PerkId::StoppingPower,
             PerkId::Marathon,
@@ -504,9 +658,34 @@ mod tests {
         assert!((stats.reload_secs - base.reload_secs * 0.7).abs() < 1e-4);
         assert!((stats.empty_reload_secs - base.empty_reload_secs * 0.7).abs() < 1e-4);
 
-        let light = data.perk_effects(&[PerkId::Lightweight, PerkId::Ninja, PerkId::Scavenger]);
+        let light = data.perk_effects([PerkId::Lightweight, PerkId::Ninja, PerkId::Scavenger]);
         assert!((light.move_speed_mul - 1.1).abs() < 1e-6);
         assert!(light.silent_footsteps && light.scavenger);
+    }
+
+    #[test]
+    fn a_perk_greed_pair_in_one_slot_stacks() {
+        let data = data();
+        let perks = Perks {
+            greed: [Some(PerkId::Scavenger), None, None],
+            ..picks(
+                PerkId::SleightOfHand,
+                PerkId::StoppingPower,
+                PerkId::Marathon,
+            )
+        };
+        assert_eq!(perks.count(), 4);
+        assert_eq!(
+            perks.in_slot(0).collect::<Vec<_>>(),
+            [PerkId::SleightOfHand, PerkId::Scavenger]
+        );
+        let effects = data.perk_effects(perks.iter());
+        assert!(
+            (effects.reload_time_mul - 0.7).abs() < 1e-6,
+            "first of slot 1"
+        );
+        assert!(effects.scavenger, "second of slot 1");
+        assert!((effects.damage_mul - 1.25).abs() < 1e-6, "slot 2 unchanged");
     }
 
     #[test]
@@ -518,23 +697,45 @@ mod tests {
             attachments: Attachments {
                 optic: Some(AttachmentId::Silencer),
                 muzzle: Some(AttachmentId::Acog),
+                underbarrel: Some(AttachmentId::RedDot),
             },
-            secondary: WeaponId::Smg,
-            // Slot 1 holds a Slot 2 Perk and vice versa.
-            perks: [PerkId::Ninja, PerkId::SleightOfHand, PerkId::Marathon],
+            secondary: Some(WeaponId::Smg),
+            // Slot 1 holds a Slot 2 Perk and vice versa; the Greed Perk repeats its slot's pick.
+            perks: Perks {
+                picks: [
+                    Some(PerkId::Ninja),
+                    Some(PerkId::SleightOfHand),
+                    Some(PerkId::Marathon),
+                ],
+                greed: [None, None, Some(PerkId::Marathon)],
+            },
+            lethal: None,
+            tactical: None,
+            wildcards: vec![
+                WildcardId::Overkill,
+                WildcardId::Overkill,
+                WildcardId::Gunfighter,
+            ],
             camo: String::new(),
         }
         .validated(&data);
         assert_eq!(data.weapon(bad.primary).class, WeaponClass::Primary);
-        assert_eq!(data.weapon(bad.secondary).class, WeaponClass::Secondary);
+        assert_eq!(
+            bad.secondary,
+            Some(WeaponId::Smg),
+            "left for the class rules"
+        );
         assert_eq!(bad.attachments, Attachments::default());
         assert_eq!(
             bad.perks,
-            [
-                PerkId::SleightOfHand,
-                PerkId::StoppingPower,
-                PerkId::Marathon
-            ]
+            Perks {
+                picks: [None, None, Some(PerkId::Marathon)],
+                greed: [None; PERK_SLOTS],
+            }
+        );
+        assert_eq!(
+            bad.wildcards,
+            [WildcardId::Overkill, WildcardId::Gunfighter]
         );
         assert_eq!(bad.name.chars().count(), MAX_LOADOUT_NAME_CHARS);
         assert_eq!(bad.camo, NO_CAMO);
@@ -549,13 +750,17 @@ mod tests {
             attachments: Attachments {
                 optic: Some(AttachmentId::Acog),
                 muzzle: Some(AttachmentId::Silencer),
+                underbarrel: None,
             },
-            secondary: WeaponId::Pistol,
-            perks: [
+            secondary: Some(WeaponId::Pistol),
+            perks: picks(
                 PerkId::SleightOfHand,
                 PerkId::StoppingPower,
                 PerkId::Marathon,
-            ],
+            ),
+            lethal: None,
+            tactical: None,
+            wildcards: Vec::new(),
             camo: NO_CAMO.into(),
         }
         .validated(&data);
@@ -564,7 +769,7 @@ mod tests {
     }
 
     #[test]
-    fn default_loadouts_are_valid_as_shipped() {
+    fn default_loadouts_are_unchanged_by_validation() {
         let data = data();
         for loadout in &data.default_loadouts {
             assert_eq!(

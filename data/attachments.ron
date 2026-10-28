@@ -1,8 +1,12 @@
 // Attachments. Read at startup from ./data/ (falls back to the copy built into the binary).
-// Each fits one Attachment Slot (Optic or Muzzle) on a Primary; the server applies the same
+// Each fits one Attachment Slot (Optic, Muzzle or Underbarrel) on a Primary; the server applies the same
 // `mods` for damage falloff as the client does for everything else. `mods` are multipliers:
 //   falloff_mul        scales both falloff distances (below 1: damage drops off sooner)
 //   ads_secs_mul       scales the time to aim down sights (above 1: slower)
+//   recoil_mul         scales the recoil kick (below 1: steadier)
+// `cost` is the class points it takes when that differs from the default in class_points.ron
+// (an Optic of 3x or more already costs more there). Which Weapons offer it, and at which
+// Weapon Level, is `weapon_attachments` in progression.ron.
 // `sight` is what an Optic draws and aims through. `magnification` drives the ADS field of view
 // (it narrows with the square root of it) and, from 3x, hold breath and the scope glint;
 // `sway_scale` multiplies the idle sway and gun motion while aimed through it. `silenced` removes the muzzle flash, and
@@ -52,5 +56,11 @@
         shot_volume: 0.35,
         shot_pitch: 0.8,
         muzzle_length: 0.16,
+    ),
+    Foregrip: (
+        name: "Foregrip",
+        description: "A steadier hold: 25% less recoil. Slightly slower to aim.",
+        slot: Underbarrel,
+        mods: (recoil_mul: 0.75, ads_secs_mul: 1.05),
     ),
 }

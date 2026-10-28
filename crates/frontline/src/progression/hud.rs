@@ -3,7 +3,7 @@
 
 use bevy::prelude::*;
 
-use super::client::{CamoUnlocked, LevelUp, XpGained};
+use super::client::{CamoUnlocked, LevelUp, WeaponLevelUp, XpGained};
 use crate::data::GameData;
 use crate::flow::AppState;
 use crate::ui::{self, BannerSpec, UiFonts};
@@ -24,6 +24,10 @@ const TOAST_Z: i32 = 14;
 const LEVEL_UP_TOP_PERCENT: f32 = 18.0;
 const CAMO_TOP_PERCENT: f32 = 27.0;
 const CAMO_COLOR: Color = Color::srgb(0.95, 0.78, 0.30);
+const WEAPON_TOP_PERCENT: f32 = 36.0;
+const WEAPON_COLOR: Color = Color::srgb(0.55, 0.78, 0.92);
+/// The weapon toast's headline is a whole sentence, so it is smaller than the other toasts.
+const WEAPON_TOAST_SCALE: f32 = 0.4;
 
 pub(super) struct ProgressionHudPlugin;
 
@@ -121,6 +125,7 @@ fn animate_popups(
 fn show_toasts(
     mut level_ups: MessageReader<LevelUp>,
     mut camos: MessageReader<CamoUnlocked>,
+    mut weapon_levels: MessageReader<WeaponLevelUp>,
     data: Res<GameData>,
     fonts: Res<UiFonts>,
     mut commands: Commands,
@@ -167,6 +172,25 @@ fn show_toasts(
                 subline: &subline,
                 top_percent: CAMO_TOP_PERCENT,
                 scale: TOAST_SCALE,
+                hold_secs: TOAST_HOLD_SECS,
+                z_index: TOAST_Z,
+            },
+        );
+        commands
+            .entity(banner)
+            .insert(DespawnOnExit(AppState::InGame));
+    }
+    for level_up in weapon_levels.read() {
+        let text = level_up.text(&data);
+        let banner = ui::spawn_result_banner(
+            &mut commands,
+            &fonts,
+            &BannerSpec {
+                headline: &text,
+                color: WEAPON_COLOR,
+                subline: "Weapon level",
+                top_percent: WEAPON_TOP_PERCENT,
+                scale: WEAPON_TOAST_SCALE,
                 hold_secs: TOAST_HOLD_SECS,
                 z_index: TOAST_Z,
             },

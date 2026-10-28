@@ -21,8 +21,8 @@ use bevy::prelude::*;
 use aim::Breath;
 use bolt::{Bolt, BoltEvent};
 
-use crate::data::{FireMode, GameData, WeaponClass, WeaponId, WeaponStats};
-use crate::gear::{Attachments, Loadout, PerkEffects, PerkSet};
+use crate::data::{FireMode, GameData, WeaponId, WeaponStats};
+use crate::gear::{Attachments, Loadout, PerkEffects, Perks};
 use crate::loadout::SpawnClock;
 use crate::net::protocol::{AmmoRefill, Damaged, FireShot, Respawn};
 use crate::player::input::Bindings;
@@ -129,6 +129,16 @@ pub struct HeldWeapon {
     accuracy: f32,
     /// Switching to the other Weapon.
     switch: Option<WeaponSwitch>,
+    /// Which of the class's two Weapon slots this Weapon came from: a Primary-class Weapon in
+    /// the Secondary slot (Overkill) switches like the pistol does.
+    slot: Slot,
+}
+
+/// One of a class's two Weapon slots.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Slot {
+    Primary,
+    Secondary,
 }
 
 /// A Primary/Secondary switch under way: the held Weapon lowers, the two exchange half-way
@@ -156,6 +166,7 @@ impl WeaponSwitch {
 #[derive(Component, Debug)]
 pub struct Stowed {
     id: WeaponId,
+    slot: Slot,
     attachments: Attachments,
     stats: Arc<WeaponStats>,
     rounds: u32,
@@ -165,6 +176,7 @@ impl Stowed {
     fn new(id: WeaponId, stats: Arc<WeaponStats>) -> Self {
         Self {
             id,
+            slot: Slot::Secondary,
             attachments: Attachments::default(),
             rounds: stats.magazine,
             stats,
@@ -185,7 +197,7 @@ impl Kit {
     }
 
     /// The Perks in effect, as the server needs to know them.
-    pub fn perks(&self) -> PerkSet {
+    pub fn perks(&self) -> Perks {
         self.loadout.perks
     }
 }
@@ -217,6 +229,7 @@ impl HeldWeapon {
             bloom: 0.0,
             accuracy: 1.0,
             switch: None,
+            slot: Slot::Primary,
         }
     }
 
@@ -268,6 +281,7 @@ impl HeldWeapon {
     /// Exchanges the held Weapon with the stowed one, leaving the new one idle and settled.
     fn exchange(&mut self, stowed: &mut Stowed) {
         std::mem::swap(&mut self.id, &mut stowed.id);
+        std::mem::swap(&mut self.slot, &mut stowed.slot);
         std::mem::swap(&mut self.attachments, &mut stowed.attachments);
         std::mem::swap(&mut self.stats, &mut stowed.stats);
         std::mem::swap(&mut self.rounds, &mut stowed.rounds);
@@ -432,19 +446,32 @@ fn ease(t: f32) -> f32 {
 }
 
 /// Builds the Weapons and Perk effects of `loadout`: the Primary with its Attachments in hand,
-/// the Secondary stowed, both with full magazines.
-fn equip(loadout: &Loadout, data: &GameData) -> (HeldWeapon, Stowed, Kit) {
-    let effects = data.perk_effects(&loadout.perks);
+/// the second Weapon (a Secondary, or a Primary with Overkill) stowed if the class has one,
+/// both with full magazines. Perk Greed's second Perks stack with the first.
+fn equip(loadout: &Loadout, data: &GameData) -> (HeldWeapon, Option<Stowed>, Kit) {
+    let effects = data.perk_effects(loadout.perks.iter());
     let primary = Arc::new(data.effective_weapon(loadout.primary, loadout.attachments, &effects));
-    let secondary =
-        Arc::new(data.effective_weapon(loadout.secondary, Attachments::default(), &effects));
+    let secondary = loadout
+        .secondary
+        .map(|id| Arc::new(data.effective_weapon(id, Attachments::default(), &effects)));
+    let wildcards: Vec<&str> = loadout
+        .wildcards
+        .iter()
+        .map(|id| data.wildcard_name(*id))
+        .collect();
     info!(
-        "Loadout \"{}\": {} {:?}, {}; Perks {:?}; effective: reload {:.2} s (empty {:.2} s), damage x{:.2}, \
-         move x{:.2}, sprint stamina {:.1} s, falloff {:.0}-{:.0} m",
+        "Loadout \"{}\" ({} / {} points): {} with {:?}, second weapon {}; Wildcards {:?}; Perks {:?}; \
+         effective: reload {:.2} s (empty {:.2} s), damage x{:.2}, move x{:.2}, \
+         sprint stamina {:.1} s, falloff {:.0}-{:.0} m, recoil {:.2} deg",
         loadout.name,
+        data.class_cost(loadout),
+        data.class_points.budget,
         primary.name,
         loadout.attachments,
-        secondary.name,
+        secondary
+            .as_ref()
+            .map_or("none", |stats| stats.name.as_str()),
+        wildcards,
         loadout.perks,
         primary.reload_secs,
         primary.empty_reload_secs,
@@ -453,15 +480,34 @@ fn equip(loadout: &Loadout, data: &GameData) -> (HeldWeapon, Stowed, Kit) {
         data.movement.sprint_stamina_secs * effects.sprint_stamina_mul,
         primary.falloff_start,
         primary.falloff_end,
+        primary.recoil_pitch_deg,
     );
     (
         HeldWeapon::new(loadout.primary, loadout.attachments, primary),
-        Stowed::new(loadout.secondary, secondary),
+        loadout
+            .secondary
+            .zip(secondary)
+            .map(|(id, stats)| Stowed::new(id, stats)),
         Kit {
             loadout: loadout.clone(),
             effects,
         },
     )
+}
+
+/// Puts a built kit on the local player: `Stowed` is only there when the class has a second
+/// Weapon.
+fn insert_kit(
+    commands: &mut Commands,
+    player: Entity,
+    (held, stowed, kit): (HeldWeapon, Option<Stowed>, Kit),
+) {
+    let mut player = commands.entity(player);
+    player.insert((held, kit));
+    match stowed {
+        Some(stowed) => player.insert(stowed),
+        None => player.remove::<Stowed>(),
+    };
 }
 
 fn equip_local_player(
@@ -470,9 +516,11 @@ fn equip_local_player(
     profile: Res<Profile>,
     mut commands: Commands,
 ) {
-    commands
-        .entity(add.entity)
-        .insert(equip(profile.loadout(&data), &data));
+    insert_kit(
+        &mut commands,
+        add.entity,
+        equip(profile.loadout(&data), &data),
+    );
 }
 
 /// A respawn hands out the chosen Loadout with fresh magazines and a settled aim.
@@ -480,14 +528,15 @@ fn equip_on_respawn(
     mut respawns: MessageReader<FromServer<Respawn>>,
     data: Res<GameData>,
     profile: Res<Profile>,
-    mut player: Query<(&mut HeldWeapon, &mut Stowed, &mut Kit), With<LocalPlayer>>,
+    player: Query<Entity, With<LocalPlayer>>,
+    mut commands: Commands,
 ) {
     if respawns.read().count() == 0 {
         return;
     }
     let loadout = profile.loadout(&data);
-    for (mut weapon, mut stowed, mut kit) in &mut player {
-        (*weapon, *stowed, *kit) = equip(loadout, &data);
+    for player in &player {
+        insert_kit(&mut commands, player, equip(loadout, &data));
         info!("Spawned with Loadout \"{}\"", loadout.name);
     }
 }
@@ -500,19 +549,20 @@ fn swap_loadout(
     profile: Res<Profile>,
     clock: Res<SpawnClock>,
     life: Res<LocalLife>,
-    mut player: Query<(&mut HeldWeapon, &mut Stowed, &mut Kit), With<LocalPlayer>>,
+    player: Query<(Entity, &Kit), With<LocalPlayer>>,
+    mut commands: Commands,
 ) {
     if !profile.is_changed() || profile.is_added() {
         return;
     }
     let loadout = profile.loadout(&data);
     let open = clock.swap_open(time.elapsed_secs_f64(), &life, &data);
-    for (mut weapon, mut stowed, mut kit) in &mut player {
+    for (player, kit) in &player {
         if kit.loadout == *loadout {
             continue;
         }
         if open {
-            (*weapon, *stowed, *kit) = equip(loadout, &data);
+            insert_kit(&mut commands, player, equip(loadout, &data));
             info!("Loadout \"{}\" applied now", loadout.name);
         } else {
             info!("Loadout \"{}\" applies on next spawn", loadout.name);
@@ -523,14 +573,16 @@ fn swap_loadout(
 /// An ammo pack picked up with Scavenger refills both magazines.
 fn refill_ammo(
     mut refills: MessageReader<FromServer<AmmoRefill>>,
-    mut player: Query<(&mut HeldWeapon, &mut Stowed), With<LocalPlayer>>,
+    mut player: Query<(&mut HeldWeapon, Option<&mut Stowed>), With<LocalPlayer>>,
 ) {
     if refills.read().count() == 0 {
         return;
     }
-    for (mut weapon, mut stowed) in &mut player {
+    for (mut weapon, stowed) in &mut player {
         weapon.rounds = weapon.stats.magazine;
-        stowed.rounds = stowed.stats.magazine;
+        if let Some(mut stowed) = stowed {
+            stowed.rounds = stowed.stats.magazine;
+        }
         info!("Ammo refilled from a pack");
     }
 }
@@ -568,7 +620,7 @@ fn switch_weapon(
     if !captured.active() || weapon.mantling {
         return;
     }
-    let holding_primary = weapon.stats.class == WeaponClass::Primary;
+    let holding_primary = weapon.slot == Slot::Primary;
     let wheel = scroll.delta.y != 0.0;
     let wants = if holding_primary {
         bindings.secondary_weapon.just_pressed(&keys)
@@ -895,6 +947,76 @@ fn recover_recoil(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::class::WildcardId;
+    use crate::data::WeaponClass;
+    use crate::gear::{PerkId, Perks};
+
+    #[test]
+    fn overkill_carries_a_primary_as_the_second_weapon_and_switches_like_the_pistol() {
+        let data = GameData::load();
+        let class = Loadout {
+            primary: WeaponId::AssaultRifle,
+            secondary: Some(WeaponId::SniperRifle),
+            wildcards: vec![WildcardId::Overkill],
+            ..data.default_loadouts[0].clone()
+        };
+        assert!(data.class_errors(&class, None).is_empty());
+        let (mut weapon, stowed, _) = equip(&class, &data);
+        let mut stowed = stowed.expect("the Overkill Primary is stowed");
+        assert_eq!(
+            (weapon.id, weapon.slot),
+            (WeaponId::AssaultRifle, Slot::Primary)
+        );
+        assert_eq!(
+            (stowed.id, stowed.slot),
+            (WeaponId::SniperRifle, Slot::Secondary)
+        );
+        assert_eq!(stowed.stats.class, WeaponClass::Primary);
+
+        // Switching goes by slot, not by the Weapon's class: the sniper is "the other" Weapon.
+        weapon.exchange(&mut stowed);
+        assert_eq!(
+            (weapon.id, weapon.slot),
+            (WeaponId::SniperRifle, Slot::Secondary)
+        );
+        assert_eq!(weapon.stats.class, WeaponClass::Primary);
+        weapon.exchange(&mut stowed);
+        assert_eq!(
+            (weapon.id, weapon.slot),
+            (WeaponId::AssaultRifle, Slot::Primary)
+        );
+    }
+
+    #[test]
+    fn a_class_with_no_second_weapon_stows_nothing() {
+        let data = GameData::load();
+        let class = Loadout {
+            secondary: None,
+            ..data.default_loadouts[0].clone()
+        };
+        assert!(equip(&class, &data).1.is_none());
+    }
+
+    #[test]
+    fn perk_greed_perks_stack_in_the_kit() {
+        let data = GameData::load();
+        let class = Loadout {
+            perks: Perks {
+                picks: [Some(PerkId::SleightOfHand), None, None],
+                greed: [Some(PerkId::Scavenger), None, None],
+            },
+            wildcards: vec![WildcardId::PerkGreed1],
+            ..data.default_loadouts[0].clone()
+        };
+        let (weapon, _, kit) = equip(&class, &data);
+        assert!(kit.effects.scavenger, "the Greed Perk is in effect");
+        assert!(
+            (kit.effects.reload_time_mul - 0.7).abs() < 1e-6,
+            "and so is the first"
+        );
+        assert!(weapon.stats.reload_secs < data.weapon(WeaponId::AssaultRifle).reload_secs);
+        assert_eq!(kit.perks().count(), 2);
+    }
 
     fn held(id: WeaponId, stats: &WeaponStats) -> HeldWeapon {
         HeldWeapon::new(id, Attachments::default(), Arc::new(stats.clone()))

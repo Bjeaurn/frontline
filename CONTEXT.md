@@ -141,7 +141,7 @@ The main **Weapon** in a **Loadout**: assault rifle, SMG, sniper rifle or shotgu
 _Avoid_: Main weapon
 
 **Secondary**:
-The backup **Weapon** in a **Loadout**, currently a pistol.
+The backup **Weapon** in a **Loadout**, a pistol, or a **Primary** with the Overkill **Wildcard**.
 _Avoid_: Sidearm
 
 **Attachment**:
@@ -149,7 +149,7 @@ A modification fitted to one **Attachment Slot** on a **Weapon**.
 _Avoid_: Mod, upgrade
 
 **Attachment Slot**:
-A position on a **Weapon** that holds at most one **Attachment**: Optic (e.g. Red Dot, Holographic, Prism, ACOG) or Muzzle (e.g. Silencer).
+A position on a **Weapon** that holds at most one **Attachment**: Optic (e.g. Red Dot, Holographic, Prism, ACOG), Muzzle (e.g. Silencer) or Underbarrel (e.g. Foregrip).
 _Avoid_: Rail, socket
 
 **Magnification**:
@@ -183,19 +183,27 @@ _Avoid_: Hit location, body part (for the damage category)
 ### Loadouts & progression
 
 **Loadout**:
-A player's chosen **Primary**, **Secondary**, **Attachments**, **Perks** and **Camo**, applied at spawn.
-_Avoid_: Class, kit, build
+A player's chosen **Primary**, optional **Secondary**, **Attachments**, **Perks**, equipment, **Wildcards** and **Camo**, within a budget of **Class Points**, applied at spawn. In the editor and the menus it is called a class.
+_Avoid_: Kit, build
+
+**Class Points** ("Pick 10"):
+The budget every **Loadout** has (10) and what each choice costs: a **Primary** 1, a **Secondary** 1, each **Attachment** 1 (an Optic of 3× or more, and the grenade launcher, 2), each **Perk** 1, each piece of equipment 1 and each **Wildcard** 1. Everything but the **Primary** is optional, so dropping something frees points. The costs live in `data/class_points.ron`.
+_Avoid_: Cost, credits, slots (for the budget)
+
+**Wildcard**:
+A **Loadout** choice, costing a point, that breaks one slot rule: Perk 1, 2 or 3 Greed (a second **Perk** in that **Perk Slot**), Gunfighter (a third **Attachment** on the **Primary**) or Overkill (a **Primary** as the second **Weapon**). At most three per **Loadout**, each unlocked at an account **Level**.
+_Avoid_: Perk (a Wildcard isn't one), modifier
 
 **Perk**:
 A passive ability that occupies one **Perk Slot** in a **Loadout**.
 _Avoid_: Skill, trait, buff
 
 **Perk Slot**:
-One of three positions in a **Loadout**, each holding exactly one **Perk** from that slot's own set.
+One of three positions in a **Loadout**, each holding one **Perk** from that slot's own set, or two with that slot's Perk Greed **Wildcard**.
 _Avoid_: Perk tier
 
 **Create a Class**:
-The editor, opened from the Loadout screen, where a player fills one of the **Profile**'s custom **Loadouts**: **Primary** with its **Attachments**, **Secondary**, one **Perk** per **Perk Slot** and a name.
+The editor, opened from the Loadout screen, where a player fills one of the **Profile**'s custom **Loadouts** within its **Class Points**: **Primary** with its **Attachments**, **Secondary**, **Perks**, equipment, **Wildcards** and a name.
 _Avoid_: Class builder, loadout editor (as the in-game name)
 
 **Ammo Pack**:
@@ -227,11 +235,15 @@ The experience points the server awards a player for kills, **Assists**, **Multi
 _Avoid_: Score (that is the **Team** points), points, exp
 
 **Level**:
-A player's progression rank, derived from their XP (level n+1 needs n×1500 XP in all), up to a maximum of 30; reaching it unlocks **Weapons**, **Attachments**, **Perks** and custom **Loadouts**.
+A player's account progression rank, derived from their XP (level n+1 needs n×1500 XP in all), up to a maximum of 30; reaching it unlocks **Weapons**, **Perks**, equipment, **Wildcards** and custom **Loadouts**. Not to be confused with a **Weapon Level**.
 _Avoid_: Rank, prestige
 
+**Weapon Level**:
+A **Weapon**'s own progression rank (0 to 5), derived from its **Weapon XP**: each kill with it gives 1 **Weapon XP** (+1 for a headshot) and the levels come at 5, 15, 30, 50 and 75. Each level unlocks that **Weapon**'s next **Attachments** (e.g. M4 level 3: Holographic); a **Weapon Level** is separate from the account **Level**.
+_Avoid_: Mastery, weapon rank
+
 **Unlock**:
-An item (a **Weapon**, **Attachment**, **Perk** or the custom **Loadouts**) that becomes usable at a given **Level**; anything not in the unlock table is there from Level 1, and Default **Loadouts** are always usable. The **Create a Class** editor shows what is locked and at which Level.
+An item (a **Weapon**, **Perk**, piece of equipment, **Wildcard** or the custom **Loadouts**) that becomes usable at a given **Level**, or an **Attachment** at a given **Weapon Level**; anything not in the unlock table is there from Level 1, and Default **Loadouts** are always usable. The **Create a Class** editor shows what is locked and which track and level unlocks it (`Level 8`, `M4 level 3`).
 _Avoid_: Reward, perk (for a Level reward)
 
 **Camo**:
@@ -239,11 +251,11 @@ A skin on a **Primary**'s body in the viewmodel, chosen per **Loadout** and unlo
 _Avoid_: Skin, paint, finish
 
 **Challenge**:
-What a **Weapon** must do to unlock a **Camo**: a number of kills or headshot kills with it, or (Gold) every other **Camo** unlocked on it. The **Profile** counts kills and headshot kills per **Weapon**.
+What a **Weapon** must do to unlock a **Camo**: a number of kills or headshot kills with it, or (Gold) every other **Camo** unlocked on it. The **Profile** counts kills and headshot kills per **Weapon**; camos are listed after the **Attachments** in a **Weapon**'s track.
 _Avoid_: Mastery, achievement
 
 **Profile**:
-A player's name, **Loadouts**, **XP** and per-**Weapon** kill counts, owned by the player and carried to whichever server they join; the server awards **XP** and the client stores it.
+A player's name, **Loadouts**, **XP** and per-**Weapon** kill counts and **Weapon XP**, owned by the player and carried to whichever server they join; the server awards **XP** and the client stores it.
 _Avoid_: Account, save, user
 
 **Assist**:
@@ -264,12 +276,14 @@ _Avoid_: Combo, double/triple (as the general term)
 - **Domination** has exactly three **Flags** (A, B, C) per **Map**
 - **Headquarters** needs at least one HQ site on the **Map**; **Search & Destroy** needs two **Bomb Sites** (A, B)
 - A **Rotation entry** only names a **Game Mode** its **Map** supports
-- A **Loadout** has one **Primary**, one **Secondary**, and one **Perk** per **Perk Slot**
+- A **Loadout** costs at most 10 **Class Points**; it has one **Primary**, optionally one **Secondary** (a **Primary** with Overkill), a **Perk** per **Perk Slot** (two with that slot's Perk Greed), optionally a lethal and a tactical piece of equipment, and up to three **Wildcards**
 - A **Weapon** fires through exactly one sight at a time (its own, or the fitted Optic); that sight's **Magnification** and Sway Scale drive aiming
-- A **Primary** has an Optic and a Muzzle **Attachment Slot**, each optionally filled; a scoped Primary (the sniper rifle) has no Optic slot, and a **Secondary** has no Attachment Slots
+- A **Primary** has an Optic, a Muzzle and an Underbarrel **Attachment Slot**, each optionally filled, but carries two **Attachments** at most (three with Gunfighter); a scoped Primary (the sniper rifle) has no Optic slot, and a **Secondary** has no Attachment Slots
+- Each **Weapon** offers its own **Attachments**, each unlocked at a **Weapon Level**; the sniper rifle offers no Optics
 - A **Profile** belongs to one player and is independent of any **Host**
 - A **Profile** holds three custom and three default **Loadouts**; the default ones are read-only and the custom ones are edited through **Create a Class**
 - A player's **Level** follows from the **XP** in their **Profile**; custom **Loadouts** and each **Unlock** wait for their **Level**
+- A **Weapon Level** follows from the **Weapon XP** in the **Profile** and unlocks that **Weapon**'s **Attachments**; its **Camos** are unlocked separately by their **Challenges**, counted in kills
 - A **Camo** is unlocked on one **Weapon** at a time by its **Challenge**, and a **Loadout**'s Camo goes on its **Primary**
 - A dead player drops an **Ammo Pack** that a player with the Scavenger **Perk** picks up by walking over it
 

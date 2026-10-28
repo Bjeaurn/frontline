@@ -71,7 +71,7 @@ pub(super) fn play_footsteps(
         }
         stride.walked -= STEP_LENGTH;
         stride.right = !stride.right;
-        if perks.is_some_and(|perks| data.perk_effects(&perks.0).silent_footsteps) {
+        if perks.is_some_and(|perks| data.perk_effects(perks.0.iter()).silent_footsteps) {
             continue;
         }
         commands.spawn((

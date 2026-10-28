@@ -50,7 +50,7 @@ pub(super) fn tick_packs(
         }
         let taker = players.iter().find(|(pose, health, perks, _)| {
             !health.is_dead()
-                && data.perk_effects(&perks.0).scavenger
+                && data.perk_effects(perks.0.iter()).scavenger
                 && pose.position.xz().distance(position.xz()) <= data.ammo_pack.pickup_radius
                 && (pose.position.y - position.y).abs() <= PICKUP_HEIGHT
         });

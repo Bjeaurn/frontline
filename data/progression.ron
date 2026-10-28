@@ -1,7 +1,7 @@
-// Progression: XP awards, the Level curve, what each Level unlocks and the weapon camos with
-// their challenges. Read at startup from ./data/ (falls back to the copy built into the binary).
-// The server awards XP (a client's Profile stores it, docs/adr/0002), so a Host's numbers apply
-// to everyone on it. All amounts are whole XP.
+// Progression: XP awards, the Level curve, what each Level unlocks, Weapon Levels and the
+// weapon camos with their challenges. Read at startup from ./data/ (falls back to the copy
+// built into the binary). The server awards XP (a client's Profile stores it, docs/adr/0002),
+// so a Host's numbers apply to everyone on it. All amounts are whole XP.
 (
     xp: (
         kill: 100,
@@ -32,26 +32,61 @@
         xp_per_level: 1500,
         max_level: 30,
     ),
-    // The Level each item unlocks at. An item that isn't listed is available from Level 1.
-    // Default Loadouts ignore this: they are always usable.
+    // The account Level each item unlocks at: Weapons, Perks, equipment and Wildcards. An item
+    // that isn't listed is available from Level 1. Attachments are not here: each Weapon's own
+    // level unlocks them (`weapon_levels` and `weapon_attachments` below). Default Loadouts
+    // ignore all of this: they are always usable.
     unlocks: [
         (level: 1, item: Weapon(AssaultRifle)),
         (level: 1, item: Weapon(Smg)),
         (level: 1, item: Weapon(SniperRifle)),
         (level: 1, item: Weapon(Pistol)),
-        (level: 1, item: Attachment(RedDot)),
         (level: 1, item: Perk(SleightOfHand)),
         (level: 1, item: Perk(StoppingPower)),
         (level: 1, item: Perk(Marathon)),
         (level: 2, item: CustomLoadouts),
-        (level: 3, item: Attachment(Acog)),
-        (level: 4, item: Attachment(Silencer)),
-        (level: 5, item: Attachment(Holographic)),
         (level: 5, item: Perk(Scavenger)),
         (level: 6, item: Perk(Lightweight)),
-        (level: 7, item: Attachment(Prism)),
+        (level: 6, item: Wildcard(Gunfighter)),
         (level: 8, item: Perk(Ninja)),
+        (level: 8, item: Wildcard(PerkGreed1)),
+        (level: 9, item: Wildcard(PerkGreed2)),
+        (level: 10, item: Wildcard(PerkGreed3)),
+        (level: 12, item: Wildcard(Overkill)),
+        // Equipment goes here once it exists: (level: 3, item: Equipment(Frag)).
     ],
+    // Weapon Levels: every kill with a Weapon gives that Weapon XP (`xp_per_kill`, plus
+    // `xp_per_headshot` when the killing shot hit the head). `thresholds` is the Weapon XP at
+    // which Weapon Level 1, 2, 3, ... is reached (strictly rising).
+    weapon_levels: (
+        xp_per_kill: 1,
+        xp_per_headshot: 1,
+        thresholds: [5, 15, 30, 50, 75],
+    ),
+    // Which Attachments each Weapon offers and the Weapon Level that unlocks each, in the order
+    // they are listed in the editor. A Weapon not listed (the pistol) offers none, and an
+    // Attachment a Weapon doesn't list can't be fitted to it (the sniper has no Optics).
+    weapon_attachments: {
+        AssaultRifle: [
+            (level: 1, attachment: RedDot),
+            (level: 2, attachment: Silencer),
+            (level: 3, attachment: Holographic),
+            (level: 4, attachment: Foregrip),
+            (level: 4, attachment: Prism),
+            (level: 5, attachment: Acog),
+        ],
+        Smg: [
+            (level: 1, attachment: RedDot),
+            (level: 2, attachment: Silencer),
+            (level: 3, attachment: Holographic),
+            (level: 4, attachment: Foregrip),
+            (level: 5, attachment: Prism),
+        ],
+        SniperRifle: [
+            (level: 1, attachment: Silencer),
+            (level: 3, attachment: Foregrip),
+        ],
+    },
     // Weapon camos. A camo is unlocked per Weapon by its `challenge`, counted on that Weapon:
     //   Kills(n) / Headshots(n)   n kills / headshot kills with it
     //   AllOthers                 every other camo unlocked on it

@@ -19,7 +19,7 @@ use super::protocol::{
     ShotChannel, ShotTracer, XpAward,
 };
 use crate::flow::Settings;
-use crate::gear::PerkSet;
+use crate::gear::Perks;
 use crate::shared::{
     FromServer, LocalPlayer, LocalPlayerReplica, PlayerPose, RemotePlayer, ToServer,
 };
@@ -234,7 +234,7 @@ fn send_shots(
 fn send_perks(
     local_player: Query<&Kit, With<LocalPlayer>>,
     mut senders: Query<(Entity, &mut MessageSender<EquipPerks>), (With<Client>, With<Connected>)>,
-    mut sent: Local<Option<(Entity, PerkSet)>>,
+    mut sent: Local<Option<(Entity, Perks)>>,
 ) {
     let Ok(kit) = local_player.single() else {
         return;

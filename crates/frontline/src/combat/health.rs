@@ -195,7 +195,7 @@ pub(super) fn apply_hits(
         let headshot = hit.zone == HitZone::Head;
         let effects = perks
             .get(hit.shooter)
-            .map(|perks| data.perk_effects(&perks.0))
+            .map(|perks| data.perk_effects(perks.0.iter()))
             .unwrap_or_default();
         let amount = shot_damage(
             data.weapon(hit.weapon),

@@ -5,29 +5,34 @@
     swap_window_secs: 5.0,
     // Switching between Primary and Secondary: lowering one and raising the other takes this long.
     weapon_switch_secs: 0.4,
-    // The Default Loadouts, offered read-only on the Loadout screen. Names are at most 16
-    // characters; a Weapon, Attachment or Perk that doesn't fit its place stops the game at startup.
+    // The Default Loadouts, offered read-only on the Loadout screen. Each is a valid Pick 10
+    // class (class_points.ron). Names are at most 16 characters; anything that breaks the class
+    // rules (a Weapon, Attachment or Perk that doesn't fit its place, too many points) stops
+    // the game at startup. Default Loadouts ignore the unlock tables: they are always usable.
     defaults: [
         (
+            // 7 points: Primary 1, Red Dot 1, Foregrip 1, Secondary 1, three Perks 3.
             name: "Assault",
             primary: AssaultRifle,
-            attachments: (optic: Some(RedDot), muzzle: None),
-            secondary: Pistol,
-            perks: (SleightOfHand, StoppingPower, Marathon),
+            attachments: (optic: Some(RedDot), underbarrel: Some(Foregrip)),
+            secondary: Some(Pistol),
+            perks: (picks: (Some(SleightOfHand), Some(StoppingPower), Some(Marathon))),
         ),
         (
+            // 7 points: Primary 1, Silencer 1, Foregrip 1, Secondary 1, three Perks 3.
             name: "Close Quarters",
             primary: Smg,
-            attachments: (optic: None, muzzle: None),
-            secondary: Pistol,
-            perks: (Scavenger, Lightweight, Ninja),
+            attachments: (muzzle: Some(Silencer), underbarrel: Some(Foregrip)),
+            secondary: Some(Pistol),
+            perks: (picks: (Some(Scavenger), Some(Lightweight), Some(Ninja))),
         ),
         (
+            // 6 points: Primary 1, Silencer 1, Secondary 1, three Perks 3.
             name: "Marksman",
             primary: SniperRifle,
-            attachments: (optic: None, muzzle: None),
-            secondary: Pistol,
-            perks: (SleightOfHand, StoppingPower, Ninja),
+            attachments: (muzzle: Some(Silencer)),
+            secondary: Some(Pistol),
+            perks: (picks: (Some(SleightOfHand), Some(StoppingPower), Some(Ninja))),
         ),
     ],
 )

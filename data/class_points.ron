@@ -1,0 +1,36 @@
+// Class points ("Pick 10"): every class has a point budget and each choice costs points. Read at
+// startup from ./data/ (falls back to the copy built into the binary).
+(
+    budget: 10,
+    costs: (
+        primary: 1,
+        secondary: 1,
+        // Each Attachment, unless its own `cost` (attachments.ron) says otherwise.
+        attachment: 1,
+        // An Optic of at least `heavy_optic_magnification` costs `heavy_optic` instead.
+        heavy_optic_magnification: 3.0,
+        heavy_optic: 2,
+        perk: 1,
+        // Each piece of equipment, unless its own `cost` (below) says otherwise.
+        equipment: 1,
+        wildcard: 1,
+    ),
+    // Attachments on the Primary: this many, and `gunfighter_extra_attachments` more with Gunfighter.
+    max_attachments: 2,
+    gunfighter_extra_attachments: 1,
+    max_wildcards: 3,
+    // What each Wildcard is called and does. The unlock Level is in progression.ron.
+    //   PerkGreedN   a second Perk in Perk Slot N (its effects stack with the first)
+    //   Gunfighter   a third Attachment on the Primary
+    //   Overkill     a Primary Weapon in the Secondary slot
+    wildcards: {
+        PerkGreed1: (name: "Perk 1 Greed", description: "A second Perk in Perk Slot 1."),
+        PerkGreed2: (name: "Perk 2 Greed", description: "A second Perk in Perk Slot 2."),
+        PerkGreed3: (name: "Perk 3 Greed", description: "A second Perk in Perk Slot 3."),
+        Gunfighter: (name: "Gunfighter", description: "A third Attachment on your Primary."),
+        Overkill: (name: "Overkill", description: "A Primary Weapon as your second Weapon."),
+    },
+    // Equipment, once there is some: lethal and tactical items with their own `name`,
+    // `description`, `slot` (Lethal or Tactical) and optional `cost`.
+    equipment: {},
+)

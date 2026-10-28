@@ -65,6 +65,42 @@ struct XpSummary {
     from_level: u32,
     /// The Level now and the progress through it.
     progress: LevelProgress,
+    /// The Weapons that earned Weapon XP this Match, most first.
+    weapons: Vec<WeaponLine>,
+}
+
+/// What one Weapon earned this Match and where that leaves its Weapon Level.
+#[derive(PartialEq)]
+struct WeaponLine {
+    name: String,
+    gained: u32,
+    /// The Weapon Level at the start of the Match.
+    from_level: u32,
+    progress: LevelProgress,
+}
+
+/// Most Weapons the end screen lists: it is a glance, not a report.
+const MAX_WEAPON_LINES: usize = 3;
+
+/// The Weapons that gained Weapon XP since the Match began, most gained first.
+fn weapon_lines(profile: &Profile, match_xp: &MatchXp, data: &GameData) -> Vec<WeaponLine> {
+    let levels = &data.progression.weapon_levels;
+    let mut lines: Vec<WeaponLine> = profile
+        .weapons
+        .iter()
+        .filter_map(|(weapon, record)| {
+            let start = match_xp.start_weapon_xp.get(weapon).copied().unwrap_or(0);
+            (record.xp > start).then(|| WeaponLine {
+                name: data.weapon(*weapon).short_name().to_uppercase(),
+                gained: record.xp - start,
+                from_level: levels.level_for(start),
+                progress: levels.progress(record.xp),
+            })
+        })
+        .collect();
+    lines.sort_by(|a, b| b.gained.cmp(&a.gained).then_with(|| a.name.cmp(&b.name)));
+    lines.truncate(MAX_WEAPON_LINES);
+    lines
 }
 
 /// `1234` as `1,234`.
@@ -345,6 +381,37 @@ fn build_xp_summary(panel: &mut ChildSpawnerCommands, fonts: &UiFonts, xp: &XpSu
                     BackgroundColor(ui::ACCENT),
                 ));
             summary.spawn(ui::label(fonts, &remaining, ROW_SIZE, ui::TEXT_DIM));
+            for line in &xp.weapons {
+                let level = if line.progress.level > line.from_level {
+                    format!("LEVEL {} > {}", line.from_level, line.progress.level)
+                } else {
+                    format!("LEVEL {}", line.progress.level)
+                };
+                let next = if line.progress.maxed() {
+                    "MAX".to_owned()
+                } else {
+                    format!("{} / {} XP", line.progress.into_level, line.progress.span)
+                };
+                summary
+                    .spawn(Node {
+                        justify_content: JustifyContent::SpaceBetween,
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        row.spawn(ui::label(
+                            fonts,
+                            &format!("{}  +{} XP", line.name, line.gained),
+                            ROW_SIZE,
+                            ui::TEXT,
+                        ));
+                        row.spawn(ui::label(
+                            fonts,
+                            &format!("{level}  {next}"),
+                            ROW_SIZE,
+                            ui::TEXT_DIM,
+                        ));
+                    });
+            }
         });
 }
 
@@ -402,6 +469,7 @@ pub(super) fn update_scoreboard(
             gained: match_xp.gained,
             from_level: data.progression.levels.level_for(match_xp.start_xp),
             progress: profile.level_progress(&data),
+            weapons: weapon_lines(&profile, &match_xp, &data),
         },
         next_in,
         next_up: format!(

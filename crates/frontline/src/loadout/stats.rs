@@ -1,6 +1,7 @@
 //! The stat bars of a Weapon, shared by the Loadout screen and the Create a Class editor. Each
 //! bar compares the Weapon (with its Attachments) to the best of every Weapon.
 
+use bevy::ecs::query::QueryFilter;
 use bevy::prelude::*;
 
 use crate::data::{FireMode, GameData, WeaponStats};
@@ -123,8 +124,8 @@ pub(super) fn spawn_bars(commands: &mut Commands, fonts: &UiFonts, parent: Entit
 }
 
 /// Sets every bar to `stats`.
-pub(super) fn update_bars(
-    fills: &mut Query<(&StatFill, &mut Node)>,
+pub(super) fn update_bars<F: QueryFilter>(
+    fills: &mut Query<(&StatFill, &mut Node), F>,
     data: &GameData,
     stats: &WeaponStats,
 ) {

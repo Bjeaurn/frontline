@@ -105,25 +105,36 @@ Every sight has a **Magnification** and a **Sway Scale** in the data (`iron_magn
 
 Fall damage (CoD style, from the peak of the fall): none below `min_height` (4.5 m by default, 3.5 m in hardcore), then linear up to a lethal fall at `max_height` (12 m, 8 m in hardcore). The kill feed says "X fell to their death". The Tab Scoreboard's header shows the win condition, e.g. `FIRST TO 50 · 10:00 LIMIT` (Search & Destroy: `FIRST TO 4 ROUNDS`), with the Host's limit overrides applied.
 
-Tuning lives in `data/`: `weapons.ron` (including per-Weapon Hit Zone damage multipliers), `attachments.ron` (Optics, with their magnification and sway scale, and Muzzles, as stat modifiers), `perks.ron` (the six Perks and the ammo pack), `loadouts.ron` (Default Loadouts, the instant-swap window and the Weapon switch time), `movement.ron`, `match_rules.ron` (presets: health, regen, respawn delay and the earliest early respawn, damage scale, friendly fire, fall damage and the HUD block), `game_modes.ron` (score and time limits, capture, HQ and bomb tuning of every Game Mode), `factions.ron`, `maps.ron` (every built-in Map: file, look, Game Modes, and the two Factions its theater plays), `looks.ron` (per-Map look presets: grade, fog, sun, ambient, sky), `presentation.ron` (how long bodies stay and how many at once) and `progression.ron` (XP awards, the Level curve, unlocks and camo Challenges). The game reads them at startup from `./data/` (relative to where you launch it), so edit and restart to retune. Without that folder it uses the copies built into the binary. Both machines should use the same files: damage and score are decided on the server, but movement, recoil, spread and fire rate come from each client's own copy.
+Tuning lives in `data/`: `weapons.ron` (including per-Weapon Hit Zone damage multipliers), `attachments.ron` (Optics, with their magnification and sway scale, Muzzles and Underbarrels, as stat modifiers and optional class point costs), `perks.ron` (the six Perks and the ammo pack), `class_points.ron` (the Pick 10 budget, point costs, slot limits and the Wildcards), `loadouts.ron` (Default Loadouts, the instant-swap window and the Weapon switch time), `movement.ron`, `match_rules.ron` (presets: health, regen, respawn delay and the earliest early respawn, damage scale, friendly fire, fall damage and the HUD block), `game_modes.ron` (score and time limits, capture, HQ and bomb tuning of every Game Mode), `factions.ron`, `maps.ron` (every built-in Map: file, look, Game Modes, and the two Factions its theater plays), `looks.ron` (per-Map look presets: grade, fog, sun, ambient, sky), `presentation.ron` (how long bodies stay and how many at once) and `progression.ron` (XP awards, the Level curve, unlocks and camo Challenges). The game reads them at startup from `./data/` (relative to where you launch it), so edit and restart to retune. Without that folder it uses the copies built into the binary. Both machines should use the same files: damage and score are decided on the server, but movement, recoil, spread and fire rate come from each client's own copy.
 
 ## Loadouts
 
-A Loadout is a Primary (AR, SMG or Sniper) with an Optic and a Muzzle Attachment, a Secondary (the M9 pistol), one Perk per Perk Slot and a camo for the Primary (`none`, or one of the camos under Progression). It applies on your next spawn, or at once within 5 s of spawning. The Loadout screen (B, or Change Loadout in the pause menu) lists three read-only Default Loadouts and the three custom ones in your Profile; CHOOSE picks one.
+A Loadout (a class) is a **Pick 10** build: every class has 10 points to spend (`data/class_points.ron`).
 
-**Create a Class** (button on the Loadout screen) edits one of the three custom slots: pick the slot, type a name, then cycle the Primary, its camo, Optic, Muzzle, Secondary and Perks 1 to 3 with the arrows. Everything is listed, but what your Level or a camo Challenge hasn't unlocked is greyed with what it takes (`Unlocks at Level 4`, `Locked: 34/50 kills`), and SAVE refuses a class that holds any of it. The stat bars follow the Attachments (an Optic or Muzzle the Primary can't take, like an Optic on the Sniper's built-in scope, shows as unavailable). SAVE writes the class into the Profile and returns to the Loadout screen on it; BACK or Esc discards.
-
-The Profile is a client-local file, `<config dir>/frontline/profile.ron`, next to `settings.ron`: the custom classes, the chosen Loadout, your XP (the Level follows from it) and kills and headshot kills per Weapon for the camo Challenges. The first run starts with the Default Loadout your old Settings had chosen. It follows you to any server you join.
-
-| Slot | Choices |
+| Choice | Cost |
 |---|---|
-| Optic | none (iron sights), Red Dot (1x), Holographic (1.5x), Prism (2x), ACOG (4x; slower to aim, swayier, allows hold breath and glints); none on the Sniper, which has its built-in 8x scope |
-| Muzzle | none, Silencer (no muzzle flash, a quieter and duller shot, damage falls off at 0.75x the distance) |
+| Primary (AR, SMG or Sniper; always there) | 1 |
+| Secondary (the M9 pistol; optional) | 1 |
+| Each Attachment, up to 2 on the Primary | 1 (an Optic of 3x or more, the ACOG, costs 2; so will the grenade launcher) |
+| Each Perk, one per Perk Slot | 1 |
+| Each piece of equipment (lethal and tactical slots; none exist yet) | 1 |
+| Each Wildcard, up to 3 | 1 |
+
+**Wildcards** break a slot rule: *Perk 1 / 2 / 3 Greed* adds a second Perk in that Perk Slot (both Perks' effects stack), *Gunfighter* allows a third Attachment on the Primary, and *Overkill* lets the second Weapon be a Primary (a rifle, SMG or Sniper) instead of the pistol; it is carried and switched to like the pistol (`1`, `2` or the wheel). Everything but the Primary is optional: no Secondary frees a point for another Perk, and a class of just a Primary is valid. The Primary has three Attachment Slots, Optic (Red Dot 1x, Holographic 1.5x, Prism 2x, ACOG 4x; none on the Sniper, which has its built-in 8x scope), Muzzle (Silencer: no muzzle flash, a quieter and duller shot, damage falls off at 0.75x the distance) and Underbarrel (Foregrip: 25% less recoil, a little slower to aim), but only two Attachments at once without Gunfighter. Each Weapon offers its own set (see Progression). Camos (per Weapon, see Progression) go on the Primary and are free.
+
+A class applies on your next spawn, or at once within 5 s of spawning. The Loadout screen (B, or Change Loadout in the pause menu) lists three read-only Default Loadouts (valid Pick 10 classes, usable from the start) and the three custom ones in your Profile; CHOOSE picks one.
+
+**Create a Class** (button on the Loadout screen) edits one of the three custom slots: pick the slot, type a name, then cycle the Primary, Optic, Muzzle, Underbarrel, camo, Secondary, Perks 1 to 3 and the equipment with the arrows, and switch Wildcards on and off with the buttons in the Wildcards row (a Perk Greed row appears under its Perk while the Wildcard is on). The points meter (`7 / 10` and ten pips) is always on top, and every item shows its cost (`ACOG  [2]`). A pick that would break a rule is refused with a short message in red (`Not enough points: 11 / 10`, `2 attachments at most without Gunfighter`) and nothing changes. Everything is listed, but what isn't unlocked is greyed with its track and level (`Unlocks at Level 8`, `Unlocks at M4 level 3`, `Locked: 34/50 kills`), and SAVE refuses a class that holds any of it. The stat bars follow the Attachments. SAVE writes the class into the Profile and returns to the Loadout screen on it; BACK or Esc discards.
+
+The Profile is a client-local file, `<config dir>/frontline/profile.ron`, next to `settings.ron`: the custom classes, the chosen Loadout, your XP (the Level follows from it) and, per Weapon, kills, headshot kills and Weapon XP. A Profile from before Pick 10 is migrated when it loads: each class keeps what fits and, if it is over the rules or the budget, loses things from the end (Wildcards, equipment, Perks, the Secondary, then Attachments); the log says what was dropped. The first run starts with the Default Loadout your old Settings had chosen. It follows you to any server you join.
+
+| Perk Slot | Perks |
+|---|---|
 | Perk 1 | Sleight of Hand (reload 30% faster), Scavenger (walk over a dead player's ammo pack to refill ammo) |
 | Perk 2 | Stopping Power (+25% bullet damage), Lightweight (+10% move speed) |
 | Perk 3 | Marathon (sprint 2.5x as long), Ninja (your footsteps make no sound) |
 
-Other players' footsteps are heard as a quiet thud while they walk or run; crouched and prone players, and Ninja, are silent. The server applies the Attachments' falloff and the Perks' damage; clients tell it their Attachments with every shot and their Perks when they spawn (clients are trusted on a LAN, docs/adr/0002). Fire Pings and the Minimap don't exist yet, so the Silencer only changes the flash, the sound and the damage range.
+Other players' footsteps are heard as a quiet thud while they walk or run; crouched and prone players, and Ninja, are silent. The server applies the Attachments' falloff and the Perks' damage (a Perk Greed pair both count); clients tell it their Attachments with every shot and their Perks when they spawn (clients are trusted on a LAN, docs/adr/0002). Fire Pings and the Minimap don't exist yet, so the Silencer only changes the flash, the sound and the damage range.
 
 ## Progression
 
@@ -143,16 +154,28 @@ The server awards XP for what you do and sends it to you as an `XpAward` (amount
 
 Level n+1 needs `n * 1500` XP in all (Level 2 at 1,500, Level 3 at 3,000, ...), up to Level 30 for now. The HUD shows a `+100 KILL` popup stack under the crosshair for each award (it fades after about two seconds), a small LEVEL UP toast (the result banner at half size, naming what the Level unlocked) and a CAMO UNLOCKED toast. The end-of-Match Scoreboard ends with your XP summary: XP earned, your Level (`LEVEL 2 > 3  LEVEL UP` when it rose) and a progress bar. The Loadout screen shows your Level and XP.
 
-**Unlocks** are a table in `progression.ron` (anything not listed is there from Level 1, and the Default Loadouts are always usable):
+**Unlocks** come on two tracks. The **account Level** unlocks Weapons, Perks, equipment and Wildcards; it is a table in `progression.ron` (anything not listed is there from Level 1, and the Default Loadouts are always usable):
 
 | Level | Unlocks |
 |---|---|
-| 1 | AR, SMG, Sniper, Pistol, Red Dot, Sleight of Hand, Stopping Power, Marathon |
+| 1 | AR, SMG, Sniper, Pistol, Sleight of Hand, Stopping Power, Marathon |
 | 2 | Custom classes (editing and choosing the three custom slots) |
-| 3 | ACOG |
-| 4 | Silencer |
-| 5 | Holographic, Scavenger |
-| 6 / 7 / 8 | Lightweight / Prism / Ninja |
+| 5 / 6 / 8 | Scavenger / Lightweight / Ninja |
+| 6 | Gunfighter |
+| 8 / 9 / 10 | Perk 1 / 2 / 3 Greed |
+| 12 | Overkill |
+
+Equipment unlocks go in the same table (`Equipment(..)` entries) once there is equipment. Each **Weapon Level** unlocks that Weapon's Attachments, then its camos. Every kill with a Weapon gives it 1 Weapon XP and a headshot kill 1 more, and its Weapon Level rises at 5, 15, 30, 50 and 75 Weapon XP (`weapon_levels` in `progression.ron`; the Profile stores Weapon XP per Weapon). `weapon_attachments` lists, per Weapon, which Attachments it offers and at which Weapon Level (an Attachment a Weapon doesn't list can't be fitted to it: the Sniper has no Optics, the pistol takes none):
+
+| Weapon Level | M4 (AR) | MP5 (SMG) | M40 (Sniper) |
+|---|---|---|---|
+| 1 | Red Dot | Red Dot | Silencer |
+| 2 | Silencer | Silencer | |
+| 3 | Holographic | Holographic | Foregrip |
+| 4 | Foregrip, Prism | Foregrip | |
+| 5 | ACOG | Prism | |
+
+Reaching a Weapon Level shows a toast such as `M4 LEVEL 3: HOLOGRAPHIC UNLOCKED`, and the end-of-Match Scoreboard lists the Weapons that gained XP (up to three: `M4  +7 XP   LEVEL 2 > 3  12 / 15 XP`). The editor shows the Primary's Weapon Level and what the next one opens, and a locked Attachment says `Unlocks at M4 level 3`.
 
 **Camos** are material variants of the Primary's body parts in the first-person viewmodel (barrel, sights and bolt stay bare; the third-person gun comes later with remote players' guns). Six ship: Woodland, Desert, Urban (grey digital), Tiger (stripes), Arctic and a metallic Gold. Each Weapon unlocks them separately by a **Challenge** counted in your Profile on that Weapon: Woodland 25 kills, Desert 50 kills, Urban 25 headshot kills, Tiger 100 kills, Arctic 50 headshot kills, and Gold once the other five are unlocked on it. The editor's Camo picker shows the progress of a locked one (`34/50 kills`). The textures are 128 px tiling PNGs under `crates/frontline/assets/camos/` (embedded in the binary), made by `tools/camos/camos.py`:
 
@@ -228,8 +251,9 @@ The kit has no vehicles, barriers or lamp posts, so the generators build those a
 - `crates/frontline/src/player/`: first-person controller, input bindings, damage/kill-feed/death HUD, remote player visuals and their bodies
 - `crates/frontline/src/weapon/`: local Weapon (firing, ammo, aiming, recoil, sway, hold breath, flinch, the bolt rack), per-weapon viewmodels, shot effects, crosshair/hitmarker/ammo/scope/breath HUD
 - `crates/frontline/src/gear.rs`: Attachments, Perks and the Loadout, and the pure rules that turn them into effective Weapon stats and Perk effects (unit-tested)
-- `crates/frontline/src/profile.rs`: the Profile file (`profile.ron`): custom Loadouts, the chosen one, XP and per-Weapon kill counters, and applying an award to them
-- `crates/frontline/src/progression/`: XP values, the Level curve, the unlock table and camo Challenges (pure, unit-tested); client-side award handling, and the XP popups and toasts
+- `crates/frontline/src/class.rs`: Pick 10: the point budget and costs, Wildcards, equipment slots, class validation (budget, slot rules, Wildcard rules, unlocks) and trimming a class that doesn't fit (unit-tested)
+- `crates/frontline/src/profile.rs`: the Profile file (`profile.ron`): custom Loadouts, the chosen one, XP and per-Weapon kill counters and Weapon XP, migrating old Profiles, and applying an award to them
+- `crates/frontline/src/progression/`: XP values, the Level curve, the unlock table, Weapon Levels and camo Challenges (pure, unit-tested); client-side award handling, and the XP popups and toasts
 - `crates/frontline/src/combat/xp.rs`: server XP awarding, the per-life damage ledger (Assists) and the Multikill chain
 - `crates/frontline/src/loadout/`: the Loadout screen, the Create a Class editor, stat bars, the CoD swap rule
 - `crates/frontline/src/maps/`: Map registry (`data/maps.ron`, private Maps), TrenchBroom loading (units, textures, colliders, entity classes), loading the Match's Map and swapping it (`ChangeMap`), spawn points

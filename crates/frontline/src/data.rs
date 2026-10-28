@@ -12,6 +12,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::class::ClassPoints;
 use crate::gear::{AmmoPackTuning, Attachment, AttachmentId, Loadout, PERK_SLOTS, Perk, PerkId};
 use crate::progression::Progression;
 use crate::shared::MatchState;
@@ -26,6 +27,7 @@ const LOADOUTS_FILE: &str = "loadouts.ron";
 const ATTACHMENTS_FILE: &str = "attachments.ron";
 const PERKS_FILE: &str = "perks.ron";
 const PROGRESSION_FILE: &str = "progression.ron";
+const CLASS_POINTS_FILE: &str = "class_points.ron";
 const BUILTIN_WEAPONS: &str = include_str!("../../../data/weapons.ron");
 const BUILTIN_MATCH_RULES: &str = include_str!("../../../data/match_rules.ron");
 const BUILTIN_MOVEMENT: &str = include_str!("../../../data/movement.ron");
@@ -36,6 +38,7 @@ const BUILTIN_LOADOUTS: &str = include_str!("../../../data/loadouts.ron");
 const BUILTIN_ATTACHMENTS: &str = include_str!("../../../data/attachments.ron");
 const BUILTIN_PERKS: &str = include_str!("../../../data/perks.ron");
 const BUILTIN_PROGRESSION: &str = include_str!("../../../data/progression.ron");
+const BUILTIN_CLASS_POINTS: &str = include_str!("../../../data/class_points.ron");
 
 /// The Match Rules preset a server runs when `--rules` isn't given, and the one clients fall back
 /// to for a preset their own data lacks.
@@ -652,6 +655,8 @@ pub struct GameData {
     pub weapon_switch_secs: f32,
     /// XP awards, the Level curve, unlocks and camos.
     pub progression: Progression,
+    /// The Pick 10 budget, costs and Wildcards.
+    pub class_points: ClassPoints,
 }
 
 impl GameData {
@@ -760,8 +765,10 @@ impl GameData {
             loadout_swap_secs: loadouts.swap_window_secs,
             weapon_switch_secs: loadouts.weapon_switch_secs,
             progression: load(PROGRESSION_FILE, BUILTIN_PROGRESSION),
+            class_points: load(CLASS_POINTS_FILE, BUILTIN_CLASS_POINTS),
         };
         data.progression.check(PROGRESSION_FILE);
+        data.class_points.check(CLASS_POINTS_FILE);
         assert!(
             data.match_rules.contains_key(DEFAULT_MATCH_RULES),
             "{MATCH_RULES_FILE} must define the \"{DEFAULT_MATCH_RULES}\" preset"
@@ -847,6 +854,27 @@ impl GameData {
                 "{LOADOUTS_FILE}: \"{}\" has a Weapon, Attachment or Perk that doesn't fit its place",
                 loadout.name
             );
+            let errors = data.class_errors(loadout, None);
+            assert!(
+                errors.is_empty(),
+                "{LOADOUTS_FILE}: \"{}\" isn't a valid class: {}",
+                loadout.name,
+                errors
+                    .iter()
+                    .map(|error| error.describe(&data))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            );
+        }
+        for (weapon, unlocks) in &data.progression.weapon_attachments {
+            for unlock in unlocks {
+                let attachment = data.attachment(unlock.attachment);
+                assert!(
+                    data.weapon(*weapon).accepts(attachment.slot),
+                    "{PROGRESSION_FILE}: the {weapon:?} has no place for {:?}",
+                    unlock.attachment
+                );
+            }
         }
         data
     }

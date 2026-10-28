@@ -805,7 +805,7 @@ fn build_gun(
     };
     // The Loadout's camo goes on its Primary only.
     let wanted = &kit.loadout().camo;
-    let camo = if weapon.id == kit.loadout().primary && camos.0.contains_key(wanted.as_str()) {
+    let camo = if weapon.slot == super::Slot::Primary && camos.0.contains_key(wanted.as_str()) {
         wanted.clone()
     } else {
         NO_CAMO.to_owned()

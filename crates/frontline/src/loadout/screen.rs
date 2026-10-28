@@ -10,9 +10,10 @@ use bevy::ui_widgets::Activate;
 use super::SpawnClock;
 use super::editor::Draft;
 use super::stats::{self, StatFill};
+use crate::class::EquipmentSlot;
 use crate::data::GameData;
 use crate::flow::Overlay;
-use crate::gear::{Loadout, NO_CAMO, PerkEffects};
+use crate::gear::{Loadout, NO_CAMO, PERK_SLOTS, PerkEffects};
 use crate::player::LocalLife;
 use crate::profile::{LoadoutChoice, Profile};
 use crate::shared::LocalPlayer;
@@ -100,21 +101,65 @@ pub(super) fn describe(loadout: &Loadout, data: &GameData) -> String {
     } else {
         format!("  +  {}", fitted.join(", "))
     };
-    let perks: Vec<String> = loadout
-        .perks
-        .iter()
-        .enumerate()
-        .map(|(slot, perk)| format!("PERK {}  {}", slot + 1, data.perk(*perk).name))
-        .collect();
     let camo = data
         .progression
         .camo(&loadout.camo)
         .filter(|_| loadout.camo != NO_CAMO)
         .map_or(String::new(), |camo| format!("\nCAMO  {}", camo.name));
+    let secondary = loadout
+        .secondary
+        .map_or("None", |id| data.weapon(id).name.as_str());
+    let perks: Vec<String> = (0..PERK_SLOTS)
+        .map(|slot| {
+            let names: Vec<&str> = loadout
+                .perks
+                .in_slot(slot)
+                .map(|perk| data.perk(perk).name.as_str())
+                .collect();
+            format!(
+                "PERK {}  {}",
+                slot + 1,
+                if names.is_empty() {
+                    "None".to_owned()
+                } else {
+                    names.join(" + ")
+                }
+            )
+        })
+        .collect();
+    let equipment: Vec<String> = EquipmentSlot::ALL
+        .into_iter()
+        .filter_map(|slot| {
+            loadout.equipment(slot).map(|id| {
+                format!(
+                    "{}  {}",
+                    format!("{slot:?}").to_uppercase(),
+                    data.class_points.equipment[&id].name
+                )
+            })
+        })
+        .collect();
+    let wildcards = if loadout.wildcards.is_empty() {
+        String::new()
+    } else {
+        let names: Vec<&str> = loadout
+            .wildcards
+            .iter()
+            .map(|id| data.wildcard_name(*id))
+            .collect();
+        format!("\nWILDCARDS  {}", names.join(", "))
+    };
+    let mut lines = vec![
+        format!("PRIMARY  {primary}{fitted}{camo}"),
+        format!("SECONDARY  {secondary}"),
+    ];
+    lines.extend(perks);
+    lines.extend(equipment);
     format!(
-        "PRIMARY  {primary}{fitted}{camo}\nSECONDARY  {}\n{}",
-        data.weapon(loadout.secondary).name,
-        perks.join("\n")
+        "{}{wildcards}\nPOINTS  {} / {}",
+        lines.join("\n"),
+        data.class_cost(loadout),
+        data.class_points.budget
     )
 }
 

@@ -1,16 +1,19 @@
-//! Progression (CONTEXT.md: Level, Unlock, Camo, Challenge): the XP the server awards, the Level
-//! curve, what each Level unlocks, and the per-Weapon camo Challenges. The pure rules and the
-//! data of `data/progression.ron` live here and are shared by the server (what an event is
-//! worth) and the client (Levels, locks, camos); `client` applies awards to the Profile and
-//! `hud` shows them.
+//! Progression (CONTEXT.md: Level, Weapon Level, Unlock, Camo, Challenge): the XP the server
+//! awards, the Level curve, what each Level unlocks, the Weapon Levels that unlock Attachments,
+//! and the per-Weapon camo Challenges. The pure rules and the data of `data/progression.ron`
+//! live here and are shared by the server (what an event is worth) and the client (Levels,
+//! locks, camos); `client` applies awards to the Profile and `hud` shows them.
 
 pub mod client;
 mod hud;
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
+use crate::class::{EquipmentId, WildcardId};
 use crate::data::{GameData, WeaponId};
-use crate::gear::{AttachmentId, Loadout, NO_CAMO, PerkId};
+use crate::gear::{AttachmentId, AttachmentSlot, Loadout, NO_CAMO, PerkId};
 
 pub use client::{MatchXp, ProgressionPlugin};
 
@@ -159,12 +162,14 @@ impl LevelCurve {
     }
 }
 
-/// Something a Level unlocks.
+/// Something the account Level unlocks. Attachments are not here: a Weapon's own level
+/// unlocks those (`WeaponLevels`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 pub enum UnlockItem {
     Weapon(WeaponId),
-    Attachment(AttachmentId),
     Perk(PerkId),
+    Wildcard(WildcardId),
+    Equipment(EquipmentId),
     /// Editing and choosing the Profile's custom Loadouts.
     CustomLoadouts,
 }
@@ -213,6 +218,70 @@ pub struct WeaponRecord {
     /// Kills whose killing shot hit the head.
     #[serde(default)]
     pub headshots: u32,
+    /// Weapon XP, from which the Weapon Level follows (`WeaponLevels`).
+    #[serde(default)]
+    pub xp: u32,
+}
+
+/// How Weapon XP turns into Weapon Levels (CONTEXT.md: Weapon Level).
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct WeaponLevels {
+    /// Weapon XP of a kill.
+    pub xp_per_kill: u32,
+    /// Weapon XP on top of that when the killing shot hit the head.
+    pub xp_per_headshot: u32,
+    /// The Weapon XP at which Weapon Level 1, 2, 3, ... is reached.
+    pub thresholds: Vec<u32>,
+}
+
+impl WeaponLevels {
+    /// The last Weapon Level.
+    pub fn max_level(&self) -> u32 {
+        self.thresholds.len() as u32
+    }
+
+    /// Weapon XP of `kills` kills of which `headshots` were headshots.
+    pub fn xp_for(&self, kills: u32, headshots: u32) -> u32 {
+        kills.saturating_mul(self.xp_per_kill) + headshots.saturating_mul(self.xp_per_headshot)
+    }
+
+    /// The Weapon Level `xp` has reached; 0 before the first threshold.
+    pub fn level_for(&self, xp: u32) -> u32 {
+        self.thresholds.iter().take_while(|at| xp >= **at).count() as u32
+    }
+
+    /// The Weapon XP at which `level` is reached (0 for level 0, the last threshold beyond the
+    /// last level).
+    pub fn xp_to_reach(&self, level: u32) -> u32 {
+        match level {
+            0 => 0,
+            level => self.thresholds[(level as usize - 1).min(self.thresholds.len() - 1)],
+        }
+    }
+
+    /// Where `xp` stands: its Weapon Level and the progress to the next.
+    pub fn progress(&self, xp: u32) -> LevelProgress {
+        let level = self.level_for(xp);
+        if level >= self.max_level() {
+            return LevelProgress {
+                level,
+                into_level: 0,
+                span: 0,
+            };
+        }
+        LevelProgress {
+            level,
+            into_level: xp - self.xp_to_reach(level),
+            span: self.xp_to_reach(level + 1) - self.xp_to_reach(level),
+        }
+    }
+}
+
+/// One row of a Weapon's Attachment track: `attachment` unlocks at Weapon Level `level`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+pub struct AttachmentUnlock {
+    pub level: u32,
+    pub attachment: AttachmentId,
 }
 
 /// How far a Weapon is on a camo's Challenge: unlocked when `current >= target`.
@@ -247,6 +316,9 @@ pub struct Progression {
     pub levels: LevelCurve,
     pub unlocks: Vec<Unlock>,
     pub camos: Vec<Camo>,
+    pub weapon_levels: WeaponLevels,
+    /// What each Weapon offers and the Weapon Level that unlocks it; no entry, none.
+    pub weapon_attachments: HashMap<WeaponId, Vec<AttachmentUnlock>>,
 }
 
 impl Progression {
@@ -284,6 +356,33 @@ impl Progression {
                 camo.id
             );
         }
+        let levels = &self.weapon_levels;
+        assert!(
+            !levels.thresholds.is_empty()
+                && levels.thresholds[0] > 0
+                && levels.thresholds.windows(2).all(|pair| pair[0] < pair[1]),
+            "{file}: weapon_levels.thresholds must be a non-empty, strictly rising list of XP above 0"
+        );
+        for (weapon, unlocks) in &self.weapon_attachments {
+            for unlock in unlocks {
+                assert!(
+                    (1..=levels.max_level()).contains(&unlock.level),
+                    "{file}: {:?} on {weapon:?} unlocks at Weapon Level {}, outside 1 to {}",
+                    unlock.attachment,
+                    unlock.level,
+                    levels.max_level()
+                );
+            }
+            for (index, unlock) in unlocks.iter().enumerate() {
+                assert!(
+                    unlocks[..index]
+                        .iter()
+                        .all(|other| other.attachment != unlock.attachment),
+                    "{file}: {:?} is listed twice on {weapon:?}",
+                    unlock.attachment
+                );
+            }
+        }
     }
 
     /// The Level `item` unlocks at; 1 for an item the table doesn't list.
@@ -305,6 +404,27 @@ impl Progression {
             .iter()
             .filter(move |unlock| unlock.level == level && level > 1)
             .map(|unlock| unlock.item)
+    }
+
+    /// The Weapon Level that unlocks `attachment` on `weapon`; `None` when the Weapon doesn't
+    /// offer it.
+    pub fn attachment_level(&self, weapon: WeaponId, attachment: AttachmentId) -> Option<u32> {
+        self.weapon_attachments
+            .get(&weapon)?
+            .iter()
+            .find(|unlock| unlock.attachment == attachment)
+            .map(|unlock| unlock.level)
+    }
+
+    /// What reaching Weapon Level `level` on `weapon` unlocks, in table order.
+    pub fn attachments_unlocked_at(&self, weapon: WeaponId, level: u32) -> Vec<AttachmentId> {
+        self.weapon_attachments
+            .get(&weapon)
+            .into_iter()
+            .flatten()
+            .filter(|unlock| unlock.level == level)
+            .map(|unlock| unlock.attachment)
+            .collect()
     }
 
     pub fn camo(&self, id: &str) -> Option<&Camo> {
@@ -366,14 +486,45 @@ impl GameData {
     pub fn unlock_name(&self, item: UnlockItem) -> String {
         match item {
             UnlockItem::Weapon(id) => self.weapon(id).name.clone(),
-            UnlockItem::Attachment(id) => self.attachment(id).name.clone(),
             UnlockItem::Perk(id) => self.perk(id).name.clone(),
+            UnlockItem::Wildcard(id) => self.class_points.wildcards[&id].name.clone(),
+            UnlockItem::Equipment(id) => self.class_points.equipment[&id].name.clone(),
             UnlockItem::CustomLoadouts => "Custom classes".into(),
         }
     }
 
+    /// What `weapon` offers for `slot`, in the order its table lists them (data order).
+    pub fn weapon_attachments(&self, weapon: WeaponId, slot: AttachmentSlot) -> Vec<AttachmentId> {
+        self.progression
+            .weapon_attachments
+            .get(&weapon)
+            .into_iter()
+            .flatten()
+            .map(|unlock| unlock.attachment)
+            .filter(|id| self.attachment(*id).slot == slot)
+            .collect()
+    }
+
+    /// What `attachment` still needs on `weapon`, if it isn't usable yet: the Weapon Level
+    /// (`M4 level 3`), or that the Weapon doesn't take it at all.
+    pub fn attachment_lock(
+        &self,
+        weapon: WeaponId,
+        attachment: AttachmentId,
+        record: &WeaponRecord,
+    ) -> Option<String> {
+        let name = self.weapon(weapon).short_name();
+        let Some(needed) = self.progression.attachment_level(weapon, attachment) else {
+            return Some(format!("not available on the {name}"));
+        };
+        (self.progression.weapon_levels.level_for(record.xp) < needed)
+            .then(|| format!("{name} level {needed}"))
+    }
+
     /// Everything in `loadout` that a player at `level` with `primary_record` (the Primary's
-    /// camo counters) hasn't unlocked, one text each. Empty when it is all theirs.
+    /// Weapon XP and camo counters) hasn't unlocked, one text each. Empty when it is all theirs.
+    /// Weapons, Perks, equipment and Wildcards wait for the account Level; the Primary's
+    /// Attachments for its Weapon Level; a camo for its Challenge.
     pub fn loadout_locks(
         &self,
         loadout: &Loadout,
@@ -381,13 +532,18 @@ impl GameData {
         primary_record: &WeaponRecord,
     ) -> Vec<String> {
         let progression = &self.progression;
-        let items = [
-            UnlockItem::Weapon(loadout.primary),
-            UnlockItem::Weapon(loadout.secondary),
-        ]
-        .into_iter()
-        .chain(loadout.attachments.iter().map(UnlockItem::Attachment))
-        .chain(loadout.perks.iter().copied().map(UnlockItem::Perk));
+        let items = [Some(loadout.primary), loadout.secondary]
+            .into_iter()
+            .flatten()
+            .map(UnlockItem::Weapon)
+            .chain(loadout.perks.iter().map(UnlockItem::Perk))
+            .chain(
+                [loadout.lethal, loadout.tactical]
+                    .into_iter()
+                    .flatten()
+                    .map(UnlockItem::Equipment),
+            )
+            .chain(loadout.wildcards.iter().copied().map(UnlockItem::Wildcard));
         let mut locks: Vec<String> = items
             .filter(|item| !progression.is_unlocked(*item, level))
             .map(|item| {
@@ -398,6 +554,10 @@ impl GameData {
                 )
             })
             .collect();
+        locks.extend(loadout.attachments.iter().filter_map(|id| {
+            self.attachment_lock(loadout.primary, id, primary_record)
+                .map(|need| format!("{} unlocks at {need}", self.attachment(id).name))
+        }));
         if !progression.camo_unlocked(&loadout.camo, primary_record)
             && let Some(camo) = progression.camo(&loadout.camo)
         {
@@ -459,7 +619,6 @@ mod tests {
         for id in WeaponId::ALL {
             assert!(progression.is_unlocked(UnlockItem::Weapon(id), 1), "{id:?}");
         }
-        assert!(progression.is_unlocked(UnlockItem::Attachment(AttachmentId::RedDot), 1));
         for slot in 1..=crate::gear::PERK_SLOTS {
             assert!(
                 data.perks_in_slot(slot)
@@ -469,17 +628,18 @@ mod tests {
         }
         assert!(!progression.is_unlocked(UnlockItem::CustomLoadouts, 1));
         assert!(progression.is_unlocked(UnlockItem::CustomLoadouts, 2));
-        let acog = progression.unlock_level(UnlockItem::Attachment(AttachmentId::Acog));
-        let silencer = progression.unlock_level(UnlockItem::Attachment(AttachmentId::Silencer));
-        assert!((3..=8).contains(&acog) && (3..=8).contains(&silencer));
+        let wildcard = |id| progression.unlock_level(UnlockItem::Wildcard(id));
+        assert_eq!(wildcard(WildcardId::Gunfighter), 6);
         assert_eq!(
-            progression.unlock_level(UnlockItem::Attachment(AttachmentId::Holographic)),
-            5
+            [
+                WildcardId::PerkGreed1,
+                WildcardId::PerkGreed2,
+                WildcardId::PerkGreed3
+            ]
+            .map(wildcard),
+            [8, 9, 10]
         );
-        assert_eq!(
-            progression.unlock_level(UnlockItem::Attachment(AttachmentId::Prism)),
-            7
-        );
+        assert_eq!(wildcard(WildcardId::Overkill), 12);
         assert_eq!(
             progression.unlocked_at(2).collect::<Vec<_>>(),
             [UnlockItem::CustomLoadouts]
@@ -492,7 +652,11 @@ mod tests {
     fn a_camo_unlocks_when_its_challenge_is_met_and_gold_needs_the_rest() {
         let data = data();
         let progression = &data.progression;
-        let record = |kills, headshots| WeaponRecord { kills, headshots };
+        let record = |kills, headshots| WeaponRecord {
+            kills,
+            headshots,
+            ..Default::default()
+        };
         let woodland = progression.camo("woodland").unwrap();
         assert_eq!(woodland.challenge, Challenge::Kills(25));
         assert!(!progression.camo_unlocked("woodland", &record(24, 0)));
@@ -523,25 +687,103 @@ mod tests {
             primary: WeaponId::AssaultRifle,
             attachments: crate::gear::Attachments {
                 optic: Some(AttachmentId::Acog),
-                muzzle: None,
+                ..Default::default()
             },
-            secondary: WeaponId::Pistol,
-            perks: [
-                PerkId::SleightOfHand,
-                PerkId::StoppingPower,
-                PerkId::Marathon,
-            ],
+            secondary: Some(WeaponId::Pistol),
+            perks: crate::gear::Perks {
+                picks: [Some(PerkId::SleightOfHand), Some(PerkId::Lightweight), None],
+                ..Default::default()
+            },
+            lethal: None,
+            tactical: None,
+            wildcards: vec![WildcardId::Gunfighter],
             camo: "tiger".into(),
         };
-        let none = WeaponRecord::default();
-        let locks = data.loadout_locks(&acog, 1, &none);
-        assert_eq!(locks.len(), 2, "{locks:?}");
-        assert!(locks[0].contains("ACOG") && locks[0].contains("Level 3"));
-        assert!(locks[1].contains("Tiger") && locks[1].contains("0/100 kills"));
-        let tiger = WeaponRecord {
+        let fresh = WeaponRecord::default();
+        let locks = data.loadout_locks(&acog, 1, &fresh);
+        assert_eq!(locks.len(), 4, "{locks:?}");
+        assert!(locks[0].contains("Lightweight") && locks[0].contains("Level 6"));
+        assert!(locks[1].contains("Gunfighter") && locks[1].contains("Level 6"));
+        assert!(
+            locks[2].contains("ACOG") && locks[2].contains("M4 level 5"),
+            "{locks:?}"
+        );
+        assert!(locks[3].contains("Tiger") && locks[3].contains("0/100 kills"));
+        let veteran = WeaponRecord {
             kills: 100,
             headshots: 0,
+            xp: data.progression.weapon_levels.xp_to_reach(5),
         };
-        assert!(data.loadout_locks(&acog, 3, &tiger).is_empty());
+        assert!(data.loadout_locks(&acog, 6, &veteran).is_empty());
+    }
+
+    #[test]
+    fn weapon_levels_follow_the_thresholds_and_stop_at_the_last() {
+        let levels = WeaponLevels {
+            xp_per_kill: 1,
+            xp_per_headshot: 1,
+            thresholds: vec![5, 15, 30, 50, 75],
+        };
+        assert_eq!(levels.max_level(), 5);
+        assert_eq!(
+            [0, 4, 5, 14, 15, 29, 30, 74, 75, 9999].map(|xp| levels.level_for(xp)),
+            [0, 0, 1, 1, 2, 2, 3, 4, 5, 5]
+        );
+        assert_eq!(
+            [0, 1, 3, 5].map(|level| levels.xp_to_reach(level)),
+            [0, 5, 30, 75]
+        );
+        let mid = levels.progress(20);
+        assert_eq!((mid.level, mid.into_level, mid.span), (2, 5, 15));
+        let start = levels.progress(2);
+        assert_eq!((start.level, start.into_level, start.span), (0, 2, 5));
+        assert!(levels.progress(75).maxed() && levels.progress(75).level == 5);
+        // A kill is 1, a headshot kill 2 in all.
+        assert_eq!(levels.xp_for(10, 4), 14);
+    }
+
+    #[test]
+    fn attachments_unlock_on_each_weapons_own_track_in_data_order() {
+        let data = data();
+        let progression = &data.progression;
+        let rifle = WeaponId::AssaultRifle;
+        let order = |weapon, level| progression.attachments_unlocked_at(weapon, level);
+        assert_eq!(order(rifle, 1), [AttachmentId::RedDot]);
+        assert_eq!(order(rifle, 2), [AttachmentId::Silencer]);
+        assert_eq!(order(rifle, 3), [AttachmentId::Holographic]);
+        assert_eq!(order(rifle, 5), [AttachmentId::Acog]);
+        assert_eq!(
+            progression.attachment_level(rifle, AttachmentId::Prism),
+            Some(4)
+        );
+        // The sniper has no Optics and the pistol nothing at all.
+        for optic in [
+            AttachmentId::RedDot,
+            AttachmentId::Holographic,
+            AttachmentId::Prism,
+            AttachmentId::Acog,
+        ] {
+            assert_eq!(
+                progression.attachment_level(WeaponId::SniperRifle, optic),
+                None
+            );
+        }
+        assert!(
+            data.weapon_attachments(WeaponId::Pistol, AttachmentSlot::Muzzle)
+                .is_empty()
+        );
+        // Holographic needs M4 level 3: 30 weapon XP.
+        let record = |xp| WeaponRecord {
+            xp,
+            ..Default::default()
+        };
+        assert!(
+            data.attachment_lock(rifle, AttachmentId::Holographic, &record(30))
+                .is_none()
+        );
+        assert_eq!(
+            data.attachment_lock(rifle, AttachmentId::Holographic, &record(29)),
+            Some("M4 level 3".to_owned())
+        );
     }
 }

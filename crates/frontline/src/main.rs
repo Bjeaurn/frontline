@@ -3,6 +3,7 @@
 
 mod assets;
 mod atmosphere;
+mod class;
 mod cli;
 mod combat;
 mod data;

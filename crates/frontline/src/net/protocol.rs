@@ -7,7 +7,7 @@ use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::data::WeaponId;
-use crate::gear::{AmmoPack, Attachments, EquippedPerks, PerkSet};
+use crate::gear::{AmmoPack, Attachments, EquippedPerks, Perks};
 use crate::modes::ModeView;
 use crate::progression::XpReason;
 use crate::shared::{
@@ -53,7 +53,7 @@ pub struct ObjectiveHold(pub bool);
 /// Client -> server (`ControlChannel`): the Perks of the Loadout now in effect. The server
 /// keeps them as the player's `EquippedPerks`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct EquipPerks(pub PerkSet);
+pub struct EquipPerks(pub Perks);
 
 /// Server -> all clients: the Search & Destroy bomb went off at `position`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
