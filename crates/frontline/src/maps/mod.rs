@@ -38,9 +38,10 @@ use bevy_trenchbroom::prelude::*;
 use bevy_trenchbroom::special_textures::SpecialTexturesPlugin;
 
 pub use classes::{BombSite, DomFlag, HqSite, Prop, PropCollider, SpawnPoint, SpawnTeam};
-pub use registry::{DEFAULT_MAP, MapId, MapRegistry, register_private_source};
+pub use registry::{DEFAULT_MAP, MapId, MapRegistry, private_dir, register_private_source};
 
 use crate::cli::Mode;
+use crate::cod4::{Cod4, Cod4Overrides, PreparedTexture};
 use crate::data::{GameData, GameModeId};
 use crate::flow::{AppState, ConnectionError, FlowCommand, MenuScreen};
 use crate::materials::{SurfaceKind, SurfaceMaterials};
@@ -68,7 +69,10 @@ impl Plugin for MapsPlugin {
             add_headless_asset_support(app);
         }
         let surfaces = match app.world().get_resource::<SurfaceMaterials>() {
-            Some(library) => MapSurfaces::Library(Box::new(library.clone())),
+            Some(library) => MapSurfaces::Library {
+                library: Box::new(library.clone()),
+                cod4: app.world().get_resource::<Cod4Overrides>().cloned(),
+            },
             None => MapSurfaces::Headless(
                 app.world_mut()
                     .resource_mut::<Assets<StandardMaterial>>()
@@ -130,7 +134,11 @@ fn add_headless_asset_support(app: &mut App) {
 /// Materials map faces get: the surface library when rendering, one plain material headless.
 #[derive(Clone)]
 enum MapSurfaces {
-    Library(Box<SurfaceMaterials>),
+    /// `cod4`: decoded CoD4 textures for Homage Maps, when this process has that support.
+    Library {
+        library: Box<SurfaceMaterials>,
+        cod4: Option<Cod4Overrides>,
+    },
     Headless(Handle<StandardMaterial>),
 }
 
@@ -167,26 +175,68 @@ fn editor_assets_path() -> PathBuf {
 
 /// Resolves a face's texture name to a material of [`MapSurfaces`] instead of loading the file.
 fn loose_texture_hook(surfaces: MapSurfaces) -> Arc<LoadLooseTextureFn> {
-    texture_hook(move |view| {
+    texture_hook(move |mut view| {
         let material = match &surfaces {
             MapSurfaces::Headless(material) => material.clone(),
-            MapSurfaces::Library(library) => match SurfaceKind::from_texture_name(view.name) {
-                Some(kind) => library.material(kind),
-                None => {
-                    warn!(
-                        "Map texture \"{}\" names no surface ({}); drawing it as missing",
-                        view.name,
-                        SurfaceKind::ALL.map(SurfaceKind::name).join(", ")
-                    );
-                    return Box::pin(ready(view.tb_server.missing_material.read().clone()));
+            MapSurfaces::Library { library, cod4 } => {
+                match SurfaceKind::from_texture_name(view.name) {
+                    Some(kind) => {
+                        let map_file = view.load_context.path().without_label().to_string();
+                        let textures = cod4.as_ref().and_then(|cod4| cod4.get(&map_file));
+                        match textures.as_deref().and_then(|map| map.get(view.name)) {
+                            Some(prepared) => cod4_material(&mut view, kind, prepared),
+                            None => library.material(kind),
+                        }
+                    }
+                    None => {
+                        warn!(
+                            "Map texture \"{}\" names no surface ({}); drawing it as missing",
+                            view.name,
+                            SurfaceKind::ALL.map(SurfaceKind::name).join(", ")
+                        );
+                        return Box::pin(ready(view.tb_server.missing_material.read().clone()));
+                    }
                 }
-            },
+            }
         };
         let handle = view.load_context.add_labeled_asset(
             format!("GenericMaterial_{}", view.name),
             GenericMaterial::new(material),
         );
         Box::pin(ready(handle))
+    })
+}
+
+/// A material of `kind`'s faces made from the player's own CoD4 image (docs/adr/0004). The
+/// images live in the Map's asset, in memory only. UVs are rescaled so one repeat covers
+/// `tile_m` metres of wall instead of the CC0 texture's size, which the faces' scale assumes.
+fn cod4_material(
+    view: &mut TextureLoadView,
+    kind: SurfaceKind,
+    prepared: &PreparedTexture,
+) -> Handle<StandardMaterial> {
+    let name = view.name;
+    let (width, height) = (
+        prepared.color.width() as f32,
+        prepared.color.height() as f32,
+    );
+    let tile = Vec2::new(prepared.tile_m, prepared.tile_m * height / width);
+    let color = view
+        .load_context
+        .add_labeled_asset(format!("Cod4Color_{name}"), prepared.color.clone());
+    let normal = prepared.normal.as_ref().map(|image| {
+        view.load_context
+            .add_labeled_asset(format!("Cod4Normal_{name}"), image.clone())
+    });
+    view.add_material(StandardMaterial {
+        base_color_texture: Some(color),
+        normal_map_texture: normal,
+        // CoD4 normal maps have Y pointing down.
+        flip_normal_map_y: true,
+        perceptual_roughness: 0.9,
+        reflectance: 0.3,
+        uv_transform: bevy::math::Affine2::from_scale(kind.tile_metres() / tile),
+        ..default()
     })
 }
 
@@ -301,6 +351,7 @@ fn sync_map(
     roots: Query<(Entity, &MapRoot)>,
     registry: Res<MapRegistry>,
     asset_server: Res<AssetServer>,
+    mut cod4: Option<ResMut<Cod4>>,
     mut unknown: Local<Option<MapId>>,
     mut commands: Commands,
 ) {
@@ -311,6 +362,9 @@ fn sync_map(
     for (entity, root) in &roots {
         info!("Unloading Map \"{}\"", root.id);
         commands.entity(entity).despawn();
+        if let (Some(cod4), Some(info)) = (&cod4, registry.get(&root.id)) {
+            cod4.release(&info.file);
+        }
     }
     commands.remove_resource::<MapSpawns>();
     let Some(info) = registry.get(wanted) else {
@@ -324,6 +378,13 @@ fn sync_map(
         return;
     };
     *unknown = None;
+    // A Homage Map with CoD4 textures waits for them to be decoded (docs/adr/0004).
+    if let Some(cod4) = cod4.as_mut()
+        && info.private
+        && !cod4.prepare_map(wanted, &info.file)
+    {
+        return;
+    }
     info!("Loading Map \"{wanted}\" from {}", info.file);
     let scene = asset_server.load(AssetPath::from(info.file.clone()).with_label("Scene"));
     commands.spawn((

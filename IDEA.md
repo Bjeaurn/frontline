@@ -38,8 +38,15 @@ The definition for a MVP would be Team deathmatch, 3-5 weapons with a different 
 - **Equipment:** lethal frag grenade; tactical flashbang and smoke. Grenades are physical projectiles (bounce, fuse).
 - **M16A4:** a 3-round burst rifle. It is the only Weapon that takes the underslung grenade launcher (the "noob tube", 2 points, physical arcing projectile).
 - **Fire modes:** X cycles the Weapon's fire modes (B already opens the Loadout screen). Each Weapon lists its modes in weapons.ron: Auto, Burst(n) with its own burst rate and a delay between bursts, Semi, or Bolt. Examples: M4 Auto/Burst 3/Semi, M16A4 Burst 3/Semi, MP5 Auto/Burst 2/Semi, pistol Semi, sniper Bolt. The HUD shows the current mode next to the ammo, the switch makes a click sound, and the last mode used is remembered per Weapon in the Profile. Shots still reach the server one by one, so the server needs no change.
+- **Manual reload:** an empty magazine doesn't reload on its own. Pulling the trigger on empty gives a dry-fire click (each pull, no auto-repeat) and a flashing "RELOAD" hint, and R reloads. A Gameplay setting "Auto reload" (default off) brings the old behaviour back for players who want it.
 - **Levels shown to others:** the Scoreboard shows each player's Level and a rank insignia before their name. Insignia are generated per Level band, like the emblems (chevrons → bars → stars). Levels live in each client's Profile, so the client reports its Level on join and on level-up (trusted, ADR 0002) and the server replicates it. A level-up is announced to everyone as a system line in chat.
 - **Text chat:** Y = all, U = team. A small fading chat box bottom-left also carries system lines (level-ups, joins/leaves, team switches).
+- **Settings tabs:**
+  - **Video:** display mode (windowed / borderless fullscreen / exclusive fullscreen), resolution (from the monitor's modes), vsync, FPS cap, render scale, a quality preset (Low/Medium/High/Custom) for shadows, ambient occlusion, bloom and anti-aliasing, and brightness. Display changes apply live, with a 10 s "Keep these settings?" revert.
+  - **Audio:** master, effects, music and voice volumes.
+  - **Controls:** sensitivity, ADS sensitivity multiplier, invert Y, and a key-rebinding list.
+  - **Gameplay:** name, FOV, and the CoD4 texture path.
+  All saved in settings.ron.
 - **Create a Class, MW2 style:** reachable from the main menu (CREATE A CLASS) as well as in game. Three levels deep, never a scrolling form:
   1. **Class list:** the default + custom classes on the left; the selected class's summary on the right.
   2. **Slot overview:** big tiles for Primary (with its attachments), Secondary, Lethal, Tactical, Perk 1–3 and Wildcards, plus the points meter. Each tile shows the current pick, its icon and its cost.

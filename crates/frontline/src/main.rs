@@ -6,6 +6,7 @@ mod atmosphere;
 mod chat;
 mod class;
 mod cli;
+mod cod4;
 mod combat;
 mod data;
 mod flow;
@@ -76,8 +77,12 @@ fn main() -> AppExit {
     app.add_plugins((data::DataPlugin, world::WorldPlugin));
     let windowed = matches!(mode, Mode::Windowed { .. });
     if windowed {
-        // Before `MapsPlugin`: map faces use the material library.
-        app.add_plugins((assets::EmbeddedAssetsPlugin, materials::MaterialsPlugin));
+        // Before `MapsPlugin`: map faces use the material library (and CoD4 overrides).
+        app.add_plugins((
+            assets::EmbeddedAssetsPlugin,
+            materials::MaterialsPlugin,
+            cod4::Cod4Plugin,
+        ));
     }
     app.add_plugins(maps::MapsPlugin {
         idle: cli.map(),

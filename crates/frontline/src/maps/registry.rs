@@ -139,7 +139,7 @@ impl MapRegistry {
 }
 
 /// `content/private` as an absolute path, if that folder exists.
-fn private_dir() -> Option<PathBuf> {
+pub fn private_dir() -> Option<PathBuf> {
     let dir = std::env::current_dir().ok()?.join(PRIVATE_DIR);
     dir.is_dir().then_some(dir)
 }

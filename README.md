@@ -247,6 +247,20 @@ python3 tools/assets/import_props.py --zip "content/assets/Downtown City MegaKit
 
 The kit has no vehicles, barriers or lamp posts, so the generators build those as brushes. Homage Maps keep their own copy in `content/private/models/` (`--prefix private://models --out content/private/models`), so the public repo carries nothing selected for them.
 
+### Original CoD4 textures (bring your own)
+
+Homage Maps can use Call of Duty 4's own textures, read from **your** copy of the game. They are Activision's files, so Frontline never stores or ships them (`docs/adr/0004`): they are read and decoded in memory while the game runs, and nothing is written to disk, into either repo or into a build.
+
+Set **Settings > CoD4 textures** to one of:
+
+- your CoD4 install folder (its `main/iw_*.iwd` archives are used),
+- a folder that holds `iw_*.iwd`,
+- a zip that contains IWDs (such as a texture mod's `IW3_TEXTURES_MOD.zip`) or `images/*.iwi` files (`raw/images/`).
+
+Press CHECK (or APPLY): the status line shows what was found, e.g. `Found 7 archives, 6,236 images`, or `Not found`. For one run, `--cod4 <path>` overrides the saved setting. Later archives override earlier ones, as in the game (`iw_06` over `iw_00`). The index is built at startup and whenever the path changes; a Map picks the change up the next time it loads.
+
+It only affects **Homage Maps** (the private ones, `content/private/cod4_textures.ron` maps each Map's brush textures like `brick/color` to CoD4 image names; names only). Remix Maps, props, weapons and everything else stay on the CC0 textures, as does any surface whose image isn't in your files, and the whole game when no path is set; players without CoD4 see CC0 surfaces on the same geometry. Textures larger than 1024 px are downscaled, and a Dedicated Server never loads textures.
+
 ## Layout
 
 - `crates/frontline/src/flow.rs`: screen states (main menu, in game, overlays), flow commands, Settings file
@@ -270,6 +284,7 @@ The kit has no vehicles, barriers or lamp posts, so the generators build those a
 - `crates/frontline/src/loadout/`: the Loadout screen, the Create a Class screens (`editor/`: rules in `model.rs`, drawing in `view.rs`), stat bars, the CoD swap rule
 - `crates/frontline/src/maps/`: Map registry (`data/maps.ron`, private Maps), TrenchBroom loading (units, textures, colliders, entity classes), loading the Match's Map and swapping it (`ChangeMap`), spawn points
 - `crates/frontline/src/world.rs`: physics
+- `crates/frontline/src/cod4/`: bring-your-own CoD4 textures for Homage Maps: the archive index (`source.rs`), the IWI image decoder (`iwi.rs`, unit-tested) and the per-Map decode/override plumbing
 - `crates/frontline/src/materials.rs`: material library (one tinted material per `SurfaceKind` texture set)
 - `crates/frontline/src/atmosphere.rs`: camera look (tonemapping, bloom, SSAO) and per-Map look presets (`data/looks.ron`)
 - `crates/frontline/src/assets.rs`: files embedded in the binary (faction emblems, rank insignia, camo textures, surface textures; CC0 credits in `assets/textures/CREDITS.md`)

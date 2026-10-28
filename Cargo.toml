@@ -24,6 +24,8 @@ clap = { version = "4.6", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 ron = "0.12"
 dirs = "7"
+# Reads the player's own CoD4 archives (docs/adr/0004); deflate only, IWDs are plain zips.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
 # Bevy systems routinely take many params and complex query types.
 [workspace.lints.clippy]

@@ -66,6 +66,11 @@ pub struct Cli {
     #[arg(long, conflicts_with = "connect")]
     look: Option<String>,
 
+    /// Where your own CoD4 images are, for Homage Map textures (overrides the saved Setting): an
+    /// install folder, a folder of `iw_*.iwd`, or a zip containing them.
+    #[arg(long, conflicts_with = "dedicated")]
+    cod4: Option<PathBuf>,
+
     /// Write TrenchBroom's game config for Frontline (FGD, texture folder) into TrenchBroom's
     /// user folder on startup. Also on when the `FRONTLINE_WRITE_TRENCHBROOM_CONFIG` environment
     /// variable is set.
@@ -81,6 +86,7 @@ pub enum Mode {
         port: u16,
         start: Option<FlowCommand>,
         name: Option<String>,
+        cod4: Option<PathBuf>,
     },
     /// A headless server announcing itself as `name`.
     Dedicated { port: u16, name: String },
@@ -106,6 +112,7 @@ impl Cli {
             port: self.port,
             start,
             name: self.name.clone(),
+            cod4: self.cod4.clone(),
         }
     }
 

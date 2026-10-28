@@ -51,7 +51,7 @@ impl Plugin for MenusPlugin {
                         .chain()
                         .run_if(rules_editor_open)
                         .run_if(resource_exists::<rules_editor::Editor>),
-                    settings::show_readouts,
+                    (settings::show_readouts, settings::show_cod4_status),
                     connecting::show_connecting.run_if(in_state(AppState::InGame)),
                 ),
             );

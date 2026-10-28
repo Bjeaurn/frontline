@@ -124,6 +124,10 @@ pub struct Settings {
     /// The Host setup screen's choices.
     #[serde(default)]
     pub host: HostSetup,
+    /// Where the player's own CoD4 images are (docs/adr/0004): an install, a folder of
+    /// `iw_*.iwd` or a zip of them. Homage Maps use them when set.
+    #[serde(default)]
+    pub cod4_path: Option<PathBuf>,
 }
 
 impl Default for Settings {
@@ -135,6 +139,7 @@ impl Default for Settings {
             master_volume: 0.8,
             loadout: 0,
             host: HostSetup::default(),
+            cod4_path: None,
         }
     }
 }
@@ -149,13 +154,18 @@ pub struct FlowPlugin;
 
 impl Plugin for FlowPlugin {
     fn build(&self, app: &mut App) {
-        let Some(Mode::Windowed { start, name, .. }) = app.world().get_resource::<Mode>().cloned()
+        let Some(Mode::Windowed {
+            start, name, cod4, ..
+        }) = app.world().get_resource::<Mode>().cloned()
         else {
             panic!("FlowPlugin needs Mode::Windowed inserted first");
         };
         let mut settings = load_settings();
         if let Some(name) = name {
             settings.name = name;
+        }
+        if let Some(path) = cod4 {
+            settings.cod4_path = Some(path);
         }
         match start {
             Some(_) => app.insert_state(AppState::InGame),

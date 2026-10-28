@@ -84,6 +84,21 @@ impl SurfaceKind {
         })
     }
 
+    /// Metres one repeat of the CC0 texture covers (horizontal, vertical); must match
+    /// `SURFACES` in `tools/mapgen/mapgen.py`, which bakes it into the faces' scale. Replacement
+    /// textures rescale their UVs against it.
+    pub fn tile_metres(self) -> Vec2 {
+        match self {
+            SurfaceKind::Concrete => Vec2::new(2.2, 1.1),
+            SurfaceKind::Plaster => Vec2::new(2.0, 1.0),
+            SurfaceKind::Metal => Vec2::new(2.0, 2.0),
+            SurfaceKind::Corrugated => Vec2::new(2.0, 2.0),
+            SurfaceKind::Wood => Vec2::new(1.0, 1.0),
+            SurfaceKind::Ground => Vec2::new(4.0, 4.0),
+            SurfaceKind::Brick => Vec2::new(2.4, 1.2),
+        }
+    }
+
     /// Multiplied into the colour texture: the bright palette Maps share.
     fn tint(self) -> Color {
         match self {
@@ -174,7 +189,7 @@ impl FromWorld for SurfaceMaterials {
 }
 
 /// Trilinear, anisotropic and tiling in both directions.
-fn repeat_sampler() -> ImageSamplerDescriptor {
+pub(crate) fn repeat_sampler() -> ImageSamplerDescriptor {
     ImageSamplerDescriptor {
         label: Some("surface".into()),
         address_mode_u: ImageAddressMode::Repeat,
@@ -226,7 +241,7 @@ fn mip_surface_textures(
 
 /// Appends a box-filtered mip chain to an uncompressed 8-bit RGBA 2D image without one
 /// (averaging sRGB colour in linear space).
-fn generate_mips(image: &mut Image) {
+pub(crate) fn generate_mips(image: &mut Image) {
     let srgb = match image.texture_descriptor.format {
         TextureFormat::Rgba8UnormSrgb => true,
         TextureFormat::Rgba8Unorm => false,

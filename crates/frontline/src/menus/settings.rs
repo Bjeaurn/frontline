@@ -1,11 +1,13 @@
-//! Settings, from the main menu or the pause menu: name, mouse sensitivity, field of view and
-//! master volume. APPLY saves them (`flow` writes the file) and goes back; BACK discards.
+//! Settings, from the main menu or the pause menu: name, mouse sensitivity, field of view,
+//! master volume and the CoD4 folder for Homage Map textures (docs/adr/0004; CHECK applies it
+//! at once so the status line can say what was found). APPLY saves them (`flow` writes the file) and goes back; BACK discards.
 
 use bevy::prelude::*;
 use bevy::text::EditableText;
 use bevy::ui_widgets::{Activate, SliderStep, SliderValue};
 
 use super::rules_editor::{EditorOrigin, RulesOrigin};
+use crate::cod4::{Cod4, parse_path_input};
 use crate::flow::{MenuScreen, Overlay, Settings};
 use crate::ui::{
     ACCENT, TEXT_DIM, UiFonts, backdrop, button, compact_button, label, panel, slider, text_field,
@@ -13,6 +15,7 @@ use crate::ui::{
 };
 
 const MAX_NAME_CHARS: usize = 24;
+const MAX_PATH_CHARS: usize = 300;
 const SENSITIVITY_RANGE: (f32, f32) = (0.0005, 0.006);
 const FOV_RANGE: (f32, f32) = (65.0, 110.0);
 
@@ -34,6 +37,14 @@ impl Origin {
 
 #[derive(Component)]
 struct NameField;
+
+/// The CoD4 path text field.
+#[derive(Component)]
+struct Cod4Field;
+
+/// The line under the CoD4 field saying what was found.
+#[derive(Component)]
+pub(super) struct Cod4Status;
 
 /// Which setting a slider edits.
 #[derive(Component, Clone, Copy)]
@@ -139,6 +150,49 @@ fn spawn_settings(mut commands: Commands, fonts: &UiFonts, settings: &Settings, 
         ));
     }
 
+    let cod4_row = setting_row(&mut commands, fonts, panel, "CoD4 textures");
+    let field = commands
+        .spawn((
+            ChildOf(cod4_row),
+            Cod4Field,
+            text_field(
+                fonts,
+                &settings
+                    .cod4_path
+                    .as_ref()
+                    .map_or_else(String::new, |path| path.display().to_string()),
+                MAX_PATH_CHARS,
+            ),
+        ))
+        .id();
+    commands.entity(field).insert(Node {
+        width: px(420.0),
+        padding: UiRect::axes(px(10.0), px(4.0)),
+        border: UiRect::all(px(1.0)),
+        overflow: Overflow::clip(),
+        ..default()
+    });
+    commands
+        .spawn((
+            ChildOf(cod4_row),
+            compact_button(fonts, "Check", 90.0, 22.0),
+        ))
+        .observe(
+            |_: On<Activate>,
+             name: Single<&EditableText, With<NameField>>,
+             cod4_field: Single<&EditableText, With<Cod4Field>>,
+             sliders: Query<(&SettingSlider, &SliderValue)>,
+             mut settings: ResMut<Settings>| {
+                commit(&name, &cod4_field, &sliders, &mut settings);
+            },
+        );
+    let status_row = setting_row(&mut commands, fonts, panel, "");
+    commands.spawn((
+        ChildOf(status_row),
+        Cod4Status,
+        label(fonts, "", 20.0, TEXT_DIM),
+    ));
+
     // The Custom Match Rules editor; the settings edited so far are applied on the way, so
     // coming back shows them.
     let rules_row = setting_row(&mut commands, fonts, panel, "Match rules");
@@ -150,12 +204,13 @@ fn spawn_settings(mut commands: Commands, fonts: &UiFonts, settings: &Settings, 
         .observe(
             move |_: On<Activate>,
                   name: Single<&EditableText, With<NameField>>,
+                  cod4_field: Single<&EditableText, With<Cod4Field>>,
                   sliders: Query<(&SettingSlider, &SliderValue)>,
                   mut settings: ResMut<Settings>,
                   mut menu: ResMut<NextState<MenuScreen>>,
                   mut overlay: ResMut<NextState<Overlay>>,
                   mut commands: Commands| {
-                commit(&name, &sliders, &mut settings);
+                commit(&name, &cod4_field, &sliders, &mut settings);
                 match origin {
                     Origin::MainMenu => {
                         commands.insert_resource(RulesOrigin(EditorOrigin::Settings));
@@ -184,11 +239,12 @@ fn spawn_settings(mut commands: Commands, fonts: &UiFonts, settings: &Settings, 
         .observe(
             move |_: On<Activate>,
                   name: Single<&EditableText, With<NameField>>,
+                  cod4_field: Single<&EditableText, With<Cod4Field>>,
                   sliders: Query<(&SettingSlider, &SliderValue)>,
                   mut settings: ResMut<Settings>,
                   mut menu: ResMut<NextState<MenuScreen>>,
                   mut overlay: ResMut<NextState<Overlay>>| {
-                commit(&name, &sliders, &mut settings);
+                commit(&name, &cod4_field, &sliders, &mut settings);
                 origin.go_back(&mut menu, &mut overlay);
             },
         );
@@ -241,9 +297,23 @@ pub(super) fn show_readouts(
     }
 }
 
-/// Writes the screen's name and slider values into the Settings.
+/// Keeps the status line under the CoD4 field in step with the indexed source.
+pub(super) fn show_cod4_status(
+    cod4: Option<Res<Cod4>>,
+    mut status: Query<&mut Text, With<Cod4Status>>,
+) {
+    let shown = cod4.map_or_else(String::new, |cod4| cod4.status());
+    for mut text in &mut status {
+        if text.0 != shown {
+            text.0 = shown.clone();
+        }
+    }
+}
+
+/// Writes the screen's name, CoD4 path and slider values into the Settings.
 fn commit(
     name: &EditableText,
+    cod4_path: &EditableText,
     sliders: &Query<(&SettingSlider, &SliderValue)>,
     settings: &mut ResMut<Settings>,
 ) {
@@ -252,6 +322,7 @@ fn commit(
     if !name.trim().is_empty() {
         edited.name = name.trim().to_owned();
     }
+    edited.cod4_path = parse_path_input(&cod4_path.value().to_string());
     for (kind, value) in sliders {
         match kind {
             SettingSlider::Sensitivity => edited.mouse_sensitivity = value.0,
