@@ -1,5 +1,5 @@
 //! The game's own screens, built from `ui`: title, Host setup, Server Browser, Settings and the
-//! Match Rules editor in the main menu; the 'Connecting' panel, Pause, Settings and the Match
+//! Match Rules editor in the main menu (Create a Class lives with `loadout`); the 'Connecting' panel, Pause, Settings and the Match
 //! Rules editor over the game. TeamSelect and Loadout live with their features (`match_hud`,
 //! `loadout`). Client/Host only.
 
@@ -59,15 +59,17 @@ impl Plugin for MenusPlugin {
 }
 
 /// Esc on a main-menu page goes back to the title (the rules editor steps back to where it
-/// was opened from instead).
+/// was opened from instead, Create a Class steps up its own screens).
 fn back_to_title(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<Bindings>,
     screen: Res<State<MenuScreen>>,
     mut next: ResMut<NextState<MenuScreen>>,
 ) {
-    if !matches!(*screen.get(), MenuScreen::Title | MenuScreen::Rules)
-        && bindings.pause.just_pressed(&keys)
+    if !matches!(
+        *screen.get(),
+        MenuScreen::Title | MenuScreen::Rules | MenuScreen::CreateAClass
+    ) && bindings.pause.just_pressed(&keys)
     {
         next.set(MenuScreen::Title);
     }

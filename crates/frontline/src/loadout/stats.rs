@@ -82,9 +82,30 @@ pub(super) fn fire_mode_text(stats: &WeaponStats) -> &'static str {
     }
 }
 
-/// Spawns one labelled bar per stat under `parent`.
+/// Spawns one labelled bar per stat under `parent`, empty until `update_bars` fills them.
 pub(super) fn spawn_bars(commands: &mut Commands, fonts: &UiFonts, parent: Entity) {
+    spawn_bars_with(commands, fonts, parent, None);
+}
+
+/// Spawns one labelled bar per stat under `parent`, already filled for `stats`.
+pub(super) fn spawn_filled_bars(
+    commands: &mut Commands,
+    fonts: &UiFonts,
+    parent: Entity,
+    data: &GameData,
+    stats: &WeaponStats,
+) {
+    spawn_bars_with(commands, fonts, parent, Some((data, stats)));
+}
+
+fn spawn_bars_with(
+    commands: &mut Commands,
+    fonts: &UiFonts,
+    parent: Entity,
+    filled: Option<(&GameData, &WeaponStats)>,
+) {
     for stat in Stat::ALL {
+        let fill = filled.map_or(0.0, |(data, stats)| stat.bar(data, stats) * 100.0);
         commands.spawn((
             Node {
                 flex_direction: FlexDirection::Row,
@@ -112,7 +133,7 @@ pub(super) fn spawn_bars(commands: &mut Commands, fonts: &UiFonts, parent: Entit
                         StatFill(stat),
                         Node {
                             height: percent(100.0),
-                            width: percent(0.0),
+                            width: percent(fill),
                             ..default()
                         },
                         BackgroundColor(ui::ACCENT),

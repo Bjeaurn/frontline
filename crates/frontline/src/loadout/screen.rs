@@ -1,6 +1,6 @@
 //! The Loadout screen (`Overlay::Loadout`): the Default Loadouts (read-only) and the Profile's
 //! custom ones on the left, the selected one's Weapons, Perks and stat bars on the right.
-//! CHOOSE confirms, CREATE A CLASS opens the editor, Esc goes back. B opens it in game. The
+//! CHOOSE confirms, CREATE A CLASS opens the class editor (`editor`), Esc goes back. B opens it in game. The
 //! player's Level and XP show on top; a custom class the Level or a camo Challenge hasn't
 //! unlocked is greyed, says why, and can't be chosen. Default Loadouts are always usable.
 
@@ -8,7 +8,6 @@ use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 
 use super::SpawnClock;
-use super::editor::Draft;
 use super::stats::{self, StatFill};
 use crate::class::EquipmentSlot;
 use crate::data::GameData;
@@ -42,10 +41,9 @@ impl Plugin for LoadoutScreenPlugin {
     }
 }
 
-/// The Loadout highlighted on the screen, confirmed with CHOOSE. The editor starts on its
-/// custom slot.
+/// The Loadout highlighted on the screen, confirmed with CHOOSE.
 #[derive(Resource, Debug)]
-pub(super) struct Preview(pub LoadoutChoice);
+struct Preview(pub LoadoutChoice);
 
 impl Default for Preview {
     fn default() -> Self {
@@ -89,7 +87,7 @@ struct LockNote;
 const LOCKED: Color = Color::srgb(0.85, 0.42, 0.34);
 
 /// What a Loadout holds, one line each, for the details panel and tooltips.
-pub(super) fn describe(loadout: &Loadout, data: &GameData) -> String {
+fn describe(loadout: &Loadout, data: &GameData) -> String {
     let primary = &data.weapon(loadout.primary).name;
     let fitted: Vec<&str> = loadout
         .attachments
@@ -346,21 +344,9 @@ fn spawn_screen(
         );
     commands
         .spawn((ui::button(&fonts, "Create a Class"), ChildOf(actions)))
-        .observe(
-            |_: On<Activate>,
-             preview: Res<Preview>,
-             profile: Res<Profile>,
-             data: Res<GameData>,
-             mut commands: Commands,
-             mut overlay: ResMut<NextState<Overlay>>| {
-                if !profile.custom_unlocked(&data) {
-                    info!("Create a Class is locked until the Level unlocks custom classes");
-                    return;
-                }
-                commands.insert_resource(Draft::opening(&preview, &profile));
-                overlay.set(Overlay::ClassEditor);
-            },
-        );
+        .observe(|_: On<Activate>, mut overlay: ResMut<NextState<Overlay>>| {
+            overlay.set(Overlay::ClassEditor);
+        });
     commands
         .spawn((ui::button(&fonts, "Choose"), ChildOf(actions)))
         .observe(choose);

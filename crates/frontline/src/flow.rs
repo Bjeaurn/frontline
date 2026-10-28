@@ -45,6 +45,8 @@ pub enum MenuScreen {
     Settings,
     /// The Custom Match Rules editor, opened from Settings or Host setup.
     Rules,
+    /// CREATE A CLASS: the class list and the editor under it (`loadout::editor`).
+    CreateAClass,
 }
 
 /// Full-screen panel shown over the game. While it isn't `None`, the cursor is free and
@@ -56,7 +58,8 @@ pub enum Overlay {
     None,
     TeamSelect,
     Loadout,
-    /// Create a Class: edits one of the Profile's custom Loadouts. Opened from `Loadout`.
+    /// Create a Class: the class list and the editor under it. Opened from `Loadout`, which
+    /// closing the class list returns to.
     ClassEditor,
     Pause,
     Settings,

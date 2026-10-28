@@ -85,6 +85,11 @@ pub(super) fn spawn_title(mut commands: Commands, fonts: Res<UiFonts>) {
                     next.set(MenuScreen::ServerBrowser);
                 },
             );
+            root.spawn(button(&fonts, "Create a Class")).observe(
+                |_: On<Activate>, mut next: ResMut<NextState<MenuScreen>>| {
+                    next.set(MenuScreen::CreateAClass);
+                },
+            );
             root.spawn(button(&fonts, "Settings")).observe(
                 |_: On<Activate>, mut next: ResMut<NextState<MenuScreen>>| {
                     next.set(MenuScreen::Settings);

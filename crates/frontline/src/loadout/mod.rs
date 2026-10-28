@@ -1,5 +1,5 @@
 //! Loadouts: the Loadout screen (Default Loadouts and the Profile's custom ones), the Create a
-//! Class editor, and the instant-swap window. The choice and the custom Loadouts live in the
+//! Class editor (from the main menu too), and the instant-swap window. The choice and the custom Loadouts live in the
 //! `Profile`. CoD rule: a change applies on the next spawn, or at once if made within
 //! `GameData::loadout_swap_secs` of spawning.
 

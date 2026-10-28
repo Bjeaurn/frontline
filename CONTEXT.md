@@ -207,7 +207,7 @@ One of three positions in a **Loadout**, each holding one **Perk** from that slo
 _Avoid_: Perk tier
 
 **Create a Class**:
-The editor, opened from the Loadout screen, where a player fills one of the **Profile**'s custom **Loadouts** within its **Class Points**: **Primary** with its **Attachments**, **Secondary**, **Perks**, equipment, **Wildcards** and a name.
+The three-level editor, opened from the main menu (CREATE A CLASS) or from the Loadout screen in game, where a player fills one of the **Profile**'s custom **Loadouts** within its **Class Points**: a class list, a slot overview (big tiles for **Primary** with its **Attachments**, **Secondary**, equipment, **Perks**, **Wildcards**, plus a name) and a full-screen picker per slot.
 _Avoid_: Class builder, loadout editor (as the in-game name)
 
 **Ammo Pack**:
@@ -251,7 +251,7 @@ A **Weapon**'s own progression rank (0 to 5), derived from its **Weapon XP**: ea
 _Avoid_: Mastery, weapon rank
 
 **Unlock**:
-An item (a **Weapon**, **Perk**, piece of equipment, **Wildcard** or the custom **Loadouts**) that becomes usable at a given **Level**, or an **Attachment** at a given **Weapon Level**; anything not in the unlock table is there from Level 1, and Default **Loadouts** are always usable. The **Create a Class** editor shows what is locked and which track and level unlocks it (`Level 8`, `M4 level 3`).
+An item (a **Weapon**, **Perk**, piece of equipment, **Wildcard** or the custom **Loadouts**) that becomes usable at a given **Level**, or an **Attachment** at a given **Weapon Level**; anything not in the unlock table is there from Level 1, and Default **Loadouts** are always usable. The **Create a Class** pickers show what is locked and which track and level unlocks it (`Level 8`, `M4 level 3`).
 _Avoid_: Reward, perk (for a Level reward)
 
 **Camo**:
