@@ -126,11 +126,14 @@ fn log_sounds_loaded(
     }
 }
 
-/// The eye camera is the ears.
+/// The eye camera is the ears. The ear offsets are mirrored on purpose: rodio 0.22's `Spatial`
+/// (behind Bevy's spatial audio) makes the channel of the ear *farther* from the emitter louder,
+/// so `SpatialListener::new` puts sounds on the wrong side. Recheck on any bevy/rodio upgrade.
 fn add_listener(add: On<Add<EyeCamera>>, mut commands: Commands) {
-    commands
-        .entity(add.entity)
-        .insert(SpatialListener::new(EAR_GAP));
+    commands.entity(add.entity).insert(SpatialListener {
+        left_ear_offset: Vec3::X * EAR_GAP / 2.0,
+        right_ear_offset: Vec3::X * EAR_GAP / -2.0,
+    });
 }
 
 /// Plays `sound` once; spatial at `at`, else flat. `speed` is the pitch.
