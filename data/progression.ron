@@ -46,8 +46,10 @@
         (level: 2, item: CustomLoadouts),
         (level: 3, item: Attachment(Acog)),
         (level: 4, item: Attachment(Silencer)),
+        (level: 5, item: Attachment(Holographic)),
         (level: 5, item: Perk(Scavenger)),
         (level: 6, item: Perk(Lightweight)),
+        (level: 7, item: Attachment(Prism)),
         (level: 8, item: Perk(Ninja)),
     ],
     // Weapon camos. A camo is unlocked per Weapon by its `challenge`, counted on that Weapon:

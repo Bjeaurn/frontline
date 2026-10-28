@@ -1,13 +1,16 @@
 //! The local player's Weapon: firing, ammo and reloads, aiming down sights and recoil, plus
 //! its viewmodel, effects and HUD. Client and Host only; the server decides what shots hit.
 
+mod aim;
 mod audio;
+mod bolt;
 mod effects;
 mod hud;
 mod viewmodel;
 
 pub use viewmodel::ViewmodelCamera;
 
+use std::f32::consts::TAU;
 use std::hash::{BuildHasher, RandomState};
 use std::sync::Arc;
 
@@ -15,10 +18,13 @@ use avian3d::prelude::*;
 use bevy::input::mouse::AccumulatedMouseScroll;
 use bevy::prelude::*;
 
+use aim::Breath;
+use bolt::{Bolt, BoltEvent};
+
 use crate::data::{FireMode, GameData, WeaponClass, WeaponId, WeaponStats};
 use crate::gear::{Attachments, Loadout, PerkEffects, PerkSet};
 use crate::loadout::SpawnClock;
-use crate::net::protocol::{AmmoRefill, FireShot, Respawn};
+use crate::net::protocol::{AmmoRefill, Damaged, FireShot, Respawn};
 use crate::player::input::Bindings;
 use crate::player::{
     ControllerModifiers, ControllerSystems, EyeCamera, LocalLife, Motor, MouseCaptured, PITCH_LIMIT,
@@ -26,11 +32,13 @@ use crate::player::{
 use crate::profile::Profile;
 use crate::shared::{FromServer, GameLayer, LocalPlayer, PlayerPose, Stance, ToServer};
 
-/// Part of a bolt cycle (as a fraction of the fire-rate cooldown) spent working the bolt;
-/// the gun is off the sights meanwhile.
-const BOLT_WINDOW: (f32, f32) = (0.15, 0.7);
-/// ADS blend from which a scoped Weapon shows the scope instead of the viewmodel.
+/// ADS blend from which a scoped Weapon shows the scope instead of the viewmodel, and from
+/// which hold breath and the scope glint apply.
 const SCOPE_MIN_ADS: f32 = 0.9;
+/// Exponential rate (1/s) at which the sway amplitude follows its target, and at which a
+/// rack's sway kick dies down.
+const SWAY_FOLLOW_PER_SEC: f32 = 8.0;
+const SWAY_KICK_DECAY_PER_SEC: f32 = 2.5;
 
 pub struct WeaponClientPlugin;
 
@@ -54,6 +62,8 @@ impl Plugin for WeaponClientPlugin {
                     switch_weapon,
                     track_body,
                     aim,
+                    sway,
+                    flinch,
                     reload,
                     fire,
                     recover_recoil,
@@ -89,8 +99,20 @@ pub struct HeldWeapon {
     trigger: bool,
     /// A `Semi` Weapon already fired (or clicked empty) on this trigger pull.
     pull_spent: bool,
-    /// Bolt cycle after a bolt-action shot, from 0 (just fired) to 1 (chambered).
-    bolt: Option<f32>,
+    /// The bolt of a bolt-action Weapon.
+    bolt: Bolt,
+    /// The aim button is held (and nothing, like a reload, takes the sights down).
+    aiming: bool,
+    /// The breath tank of hold breath.
+    breath: Breath,
+    /// Seconds along the sway figure-eight.
+    sway_time: f32,
+    /// Current sway amplitude in degrees, easing toward its target.
+    sway_amp: f32,
+    /// Extra sway from working the bolt while scoped, as (yaw, pitch) in radians.
+    sway_kick: Vec2,
+    /// The sway currently added to the view, as (yaw, pitch) in radians.
+    sway_applied: Vec2,
     /// Aim-down-sights blend: 0 at the hip, 1 fully aimed.
     ads: f32,
     /// Recoil not yet recovered, as (yaw, pitch) in radians.
@@ -180,7 +202,13 @@ impl HeldWeapon {
             cooldown: 0.0,
             trigger: false,
             pull_spent: false,
-            bolt: None,
+            bolt: Bolt::Closed,
+            aiming: false,
+            breath: Breath::default(),
+            sway_time: 0.0,
+            sway_amp: 0.0,
+            sway_kick: Vec2::ZERO,
+            sway_applied: Vec2::ZERO,
             ads: 0.0,
             recoil: Vec2::ZERO,
             sprinting: false,
@@ -198,7 +226,7 @@ impl HeldWeapon {
             info!("Reloading ({} rounds left, {:.2} s)", self.rounds, secs);
             self.reload_total = secs;
             self.reload_left = Some(secs);
-            self.bolt = None;
+            self.bolt = Bolt::Closed;
         }
     }
 
@@ -246,7 +274,7 @@ impl HeldWeapon {
         self.reload_left = None;
         self.cooldown = 0.0;
         self.pull_spent = false;
-        self.bolt = None;
+        self.bolt = Bolt::Closed;
         self.ads = 0.0;
         info!("Switched to {}", self.stats.name);
     }
@@ -257,18 +285,15 @@ impl HeldWeapon {
     /// magazine starts a reload.
     fn rounds_to_fire(&mut self, stats: &WeaponStats, dt: f32) -> u32 {
         self.cooldown -= dt;
-        let spacing = stats.seconds_per_shot(self.ads_eased());
-        if let Some(bolt) = &mut self.bolt {
-            *bolt += dt / spacing;
-            if *bolt >= 1.0 {
-                self.bolt = None;
-            }
-        }
         if !self.trigger {
             self.pull_spent = false;
         }
         let mut fired = 0;
-        if self.trigger && self.ready() && self.reload_left.is_none() {
+        if self.trigger
+            && self.ready()
+            && self.reload_left.is_none()
+            && (!stats.bolt_action || self.bolt.can_fire())
+        {
             while self.cooldown <= 0.0 && !self.pull_spent {
                 if self.rounds == 0 {
                     self.start_reload(stats);
@@ -276,12 +301,14 @@ impl HeldWeapon {
                     break;
                 }
                 self.rounds -= 1;
-                self.cooldown += stats.seconds_per_shot(self.ads_eased());
+                if !stats.bolt_action {
+                    self.cooldown += stats.seconds_per_shot(self.ads_eased());
+                }
                 fired += 1;
                 if stats.fire_mode == FireMode::Semi {
                     self.pull_spent = true;
                     if stats.bolt_action && self.rounds > 0 {
-                        self.bolt = Some(0.0);
+                        self.bolt.fire();
                     }
                 }
             }
@@ -290,12 +317,29 @@ impl HeldWeapon {
         fired
     }
 
-    /// How far the bolt is worked, 0 to 1, while it is off the sights mid-cycle.
+    /// Works the bolt of a bolt-action Weapon for `dt` seconds, before the trigger runs: a
+    /// click while aimed racks it (and is used up), letting go of the sights racks it by itself.
+    fn step_bolt(&mut self, stats: &WeaponStats, dt: f32) -> BoltEvent {
+        if !stats.bolt_action {
+            return BoltEvent::Idle;
+        }
+        let click = self.trigger && !self.pull_spent && self.ready() && self.reload_left.is_none();
+        let event = self.bolt.step(
+            dt,
+            self.aiming,
+            click,
+            stats.rack_secs_scoped,
+            stats.rack_secs_unscoped,
+        );
+        if event == (BoltEvent::RackStarted { scoped: true }) {
+            self.pull_spent = true;
+        }
+        event
+    }
+
+    /// How far the bolt is worked, 0 to 1, while it is being racked.
     fn bolt_phase(&self) -> Option<f32> {
-        let (start, end) = BOLT_WINDOW;
-        self.bolt
-            .filter(|bolt| (start..end).contains(bolt))
-            .map(|bolt| (bolt - start) / (end - start))
+        self.bolt.progress()
     }
 
     /// Looking through the scope: the viewmodel hides and the scope mask shows.
@@ -534,7 +578,7 @@ fn switch_weapon(
     if wants || wheel {
         weapon.reload_left = None;
         weapon.trigger = false;
-        weapon.bolt = None;
+        weapon.bolt = Bolt::Closed;
         weapon.switch = Some(WeaponSwitch {
             left: data.weapon_switch_secs,
             total: data.weapon_switch_secs,
@@ -602,13 +646,14 @@ fn aim(
     let in_control = captured.active() && !life.is_dead();
     let wants = in_control && mouse.pressed(bindings.aim) && weapon.reload_left.is_none();
     let step = time.delta_secs() / stats.ads_secs.max(f32::EPSILON);
-    weapon.ads = if wants && weapon.ready() && weapon.bolt_phase().is_none() {
+    weapon.aiming = wants;
+    weapon.ads = if wants && weapon.ready() {
         (weapon.ads + step).min(1.0)
     } else {
         (weapon.ads - step).max(0.0)
     };
     let t = weapon.ads_eased();
-    modifiers.fov_scale = 1.0_f32.lerp(stats.ads_fov_scale, t);
+    modifiers.fov_scale = 1.0_f32.lerp(stats.ads_fov_scale(), t);
     modifiers.move_scale = stats.move_scale * 1.0_f32.lerp(stats.ads_move_scale, t);
     modifiers.stamina_scale = kit.effects.sprint_stamina_mul;
     modifiers.sprint_blocked = wants || (in_control && mouse.pressed(bindings.fire));
@@ -661,7 +706,31 @@ fn fire(
     let pulled = mouse.just_pressed(bindings.fire) && !captured.is_changed();
     weapon.trigger = held && !life.is_dead() && (weapon.trigger || pulled);
 
-    let rounds = weapon.rounds_to_fire(&stats, time.delta_secs());
+    let dt = time.delta_secs();
+    match weapon.step_bolt(&stats, dt) {
+        BoltEvent::RackStarted { scoped } => {
+            let secs = if scoped {
+                stats.rack_secs_scoped
+            } else {
+                stats.rack_secs_unscoped
+            };
+            info!(
+                "Racking the bolt ({}, {secs:.2} s)",
+                if scoped {
+                    "click while scoped"
+                } else {
+                    "sights down"
+                }
+            );
+            if scoped {
+                let kick = stats.rack_kick_deg.to_radians();
+                weapon.sway_kick += Vec2::new(rng.signed(), rng.signed() * 0.5) * kick;
+            }
+        }
+        BoltEvent::Closed => info!("Bolt closed"),
+        BoltEvent::Idle => {}
+    }
+    let rounds = weapon.rounds_to_fire(&stats, dt);
     if rounds > 0 {
         let eye_height = eye
             .single()
@@ -712,6 +781,96 @@ fn fire(
     }
 }
 
+/// While aimed, drifts the view along a slow figure-eight (the Weapon's sway through the
+/// sight's `sway_scale`, stance and breath) and runs hold breath. The drift is added to the
+/// pose itself, so the sight points where the shots go. Also publishes the magnification
+/// others glint from.
+fn sway(
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<Bindings>,
+    captured: Res<MouseCaptured>,
+    life: Res<LocalLife>,
+    mut player: Query<(&mut PlayerPose, &mut HeldWeapon), With<LocalPlayer>>,
+) {
+    let Ok((mut pose, mut weapon)) = player.single_mut() else {
+        return;
+    };
+    let stats = Arc::clone(&weapon.stats);
+    let dt = time.delta_secs();
+    let alive = !life.is_dead();
+    let aimed = weapon.ads > SCOPE_MIN_ADS;
+    let wants_hold = alive
+        && captured.active()
+        && weapon.aiming
+        && aimed
+        && stats.steady_sight()
+        && bindings.sprint.pressed(&keys);
+    weapon.breath.tick(dt, wants_hold);
+
+    weapon.sway_time = (weapon.sway_time + dt).rem_euclid(aim::SWAY_PERIOD_SECS);
+    let target = if alive && weapon.switch.is_none() {
+        aim::sway_amplitude_deg(
+            stats.sway_deg,
+            stats.sway_scale,
+            pose.stance,
+            weapon.breath.sway_mul(),
+            weapon.ads_eased(),
+        )
+    } else {
+        0.0
+    };
+    weapon
+        .sway_amp
+        .smooth_nudge(&target, SWAY_FOLLOW_PER_SEC, dt);
+    weapon.sway_kick *= (-SWAY_KICK_DECAY_PER_SEC * dt).exp();
+    let offset =
+        aim::sway_curve(weapon.sway_time) * weapon.sway_amp.to_radians() + weapon.sway_kick;
+    let delta = offset - weapon.sway_applied;
+    if delta != Vec2::ZERO {
+        let pitch = (pose.pitch + delta.y).clamp(-PITCH_LIMIT, PITCH_LIMIT);
+        weapon.sway_applied += Vec2::new(delta.x, pitch - pose.pitch);
+        pose.yaw = wrap_angle(pose.yaw + delta.x);
+        pose.pitch = pitch;
+    }
+
+    let glint = if alive && weapon.ads_eased() > SCOPE_MIN_ADS && stats.steady_sight() {
+        stats.magnification
+    } else {
+        0.0
+    };
+    if pose.aim_magnification != glint {
+        pose.aim_magnification = glint;
+    }
+}
+
+/// A hit from the server kicks the view in a random direction by the Weapon's `flinch_deg`,
+/// scaled by the damage and reduced while aimed. It recovers like recoil.
+fn flinch(
+    mut hits: MessageReader<FromServer<Damaged>>,
+    life: Res<LocalLife>,
+    mut rng: ResMut<WeaponRng>,
+    mut player: Query<(&mut PlayerPose, &mut HeldWeapon), With<LocalPlayer>>,
+) {
+    let Ok((mut pose, mut weapon)) = player.single_mut() else {
+        hits.clear();
+        return;
+    };
+    for FromServer(hit) in hits.read() {
+        if life.is_dead() {
+            continue;
+        }
+        let kick =
+            aim::flinch_deg(weapon.stats.flinch_deg, hit.amount, weapon.ads_eased()).to_radians();
+        let angle = rng.next() * TAU;
+        let yaw_kick = kick * angle.cos();
+        let pitch = (pose.pitch + kick * angle.sin()).clamp(-PITCH_LIMIT, PITCH_LIMIT);
+        weapon.recoil += Vec2::new(yaw_kick, pitch - pose.pitch);
+        pose.pitch = pitch;
+        pose.yaw = wrap_angle(pose.yaw + yaw_kick);
+    }
+}
+
 /// Returns the view toward where the player was aiming before the kicks.
 fn recover_recoil(
     time: Res<Time>,
@@ -744,6 +903,7 @@ mod tests {
     /// One frame of `reload` then `fire`, as the systems are chained; returns rounds fired.
     fn frame(weapon: &mut HeldWeapon, stats: &WeaponStats, dt: f32) -> u32 {
         weapon.tick_reload(stats, dt, false);
+        weapon.step_bolt(stats, dt);
         weapon.rounds_to_fire(stats, dt)
     }
 
@@ -828,39 +988,99 @@ mod tests {
         assert_eq!(fired, 5);
 
         // Semi at 60 rpm: holding fires one round; the next needs a new pull and the 1 s
-        // cooldown, during which a bolt-action works its bolt off the sights.
+        // cooldown.
         let semi = WeaponStats {
             fire_mode: FireMode::Semi,
             rpm: 60.0,
             ads_rpm: 60.0,
-            bolt_action: true,
             ..WeaponStats::fixture()
         };
-        let mut bolt = held(WeaponId::SniperRifle, &semi);
-        bolt.trigger = true;
-        let held: u32 = (0..30).map(|_| frame(&mut bolt, &semi, 0.1)).sum();
+        let mut pistol = held(WeaponId::Pistol, &semi);
+        pistol.trigger = true;
+        let held: u32 = (0..30).map(|_| frame(&mut pistol, &semi, 0.1)).sum();
         assert_eq!(held, 1, "holding fires once");
-        bolt.trigger = false;
-        assert_eq!(frame(&mut bolt, &semi, 0.1), 0);
-        bolt.trigger = true;
-        assert_eq!(frame(&mut bolt, &semi, 0.1), 1, "a new pull fires");
-        assert!(
-            bolt.bolt_phase().is_none(),
-            "the bolt waits a moment after the shot"
-        );
-        frame(&mut bolt, &semi, 0.2);
-        assert!(bolt.bolt_phase().is_some(), "then works the bolt");
-        bolt.trigger = false;
-        frame(&mut bolt, &semi, 0.1);
-        bolt.trigger = true;
-        let early: u32 = (0..3).map(|_| frame(&mut bolt, &semi, 0.1)).sum();
+        pistol.trigger = false;
+        assert_eq!(frame(&mut pistol, &semi, 0.1), 0);
+        pistol.trigger = true;
+        assert_eq!(frame(&mut pistol, &semi, 0.1), 1, "a new pull fires");
+        frame(&mut pistol, &semi, 0.2);
+        pistol.trigger = false;
+        frame(&mut pistol, &semi, 0.1);
+        pistol.trigger = true;
+        let early: u32 = (0..3).map(|_| frame(&mut pistol, &semi, 0.1)).sum();
         assert_eq!(early, 0, "no round before the cooldown ends");
-        let late: u32 = (0..4).map(|_| frame(&mut bolt, &semi, 0.1)).sum();
+        let late: u32 = (0..4).map(|_| frame(&mut pistol, &semi, 0.1)).sum();
         assert_eq!(
             late, 1,
             "a pull held through the cooldown fires once it ends"
         );
-        assert!(bolt.bolt_phase().is_none());
+    }
+
+    #[test]
+    fn a_bolt_action_needs_a_rack_between_shots() {
+        let stats = WeaponStats {
+            fire_mode: FireMode::Semi,
+            rpm: 50.0,
+            ads_rpm: 50.0,
+            bolt_action: true,
+            rack_secs_scoped: 1.4,
+            rack_secs_unscoped: 0.9,
+            ..WeaponStats::fixture()
+        };
+
+        // From the hip the open bolt racks itself in 0.9 s; holding the trigger never refires.
+        let mut gun = held(WeaponId::SniperRifle, &stats);
+        gun.trigger = true;
+        assert_eq!(frame(&mut gun, &stats, 0.1), 1);
+        assert!(!gun.bolt.can_fire());
+        let held_fire: u32 = (0..30).map(|_| frame(&mut gun, &stats, 0.1)).sum();
+        assert_eq!(held_fire, 0);
+        assert!(gun.bolt.can_fire(), "it racked itself");
+        gun.trigger = false;
+        frame(&mut gun, &stats, 0.1);
+        gun.trigger = true;
+        assert_eq!(frame(&mut gun, &stats, 0.1), 1, "the next click fires");
+
+        // Scoped: the shot leaves the sights up and the bolt open; a click racks only.
+        let mut gun = held(WeaponId::SniperRifle, &stats);
+        gun.aiming = true;
+        gun.ads = 1.0;
+        gun.trigger = true;
+        assert_eq!(frame(&mut gun, &stats, 0.1), 1);
+        gun.trigger = false;
+        assert_eq!(frame(&mut gun, &stats, 2.0), 0);
+        assert!(
+            gun.bolt.waiting_for_click(),
+            "it waits for a click while aimed"
+        );
+        gun.trigger = true;
+        assert_eq!(frame(&mut gun, &stats, 0.1), 0, "the click racks, no shot");
+        assert!(gun.bolt_phase().is_some());
+        let through_rack: u32 = (0..16).map(|_| frame(&mut gun, &stats, 0.1)).sum();
+        assert_eq!(through_rack, 0, "a held click doesn't fire either");
+        assert!(gun.bolt.can_fire());
+        gun.trigger = false;
+        frame(&mut gun, &stats, 0.1);
+        gun.trigger = true;
+        assert_eq!(frame(&mut gun, &stats, 0.1), 1, "the next click fires");
+
+        // Letting go of the aim mid-rack finishes at the faster rate: 0.7 s into the 1.4 s
+        // rack is half done, leaving 0.45 s.
+        let mut gun = held(WeaponId::SniperRifle, &stats);
+        gun.aiming = true;
+        gun.ads = 1.0;
+        gun.trigger = true;
+        frame(&mut gun, &stats, 0.1);
+        gun.trigger = false;
+        frame(&mut gun, &stats, 0.1);
+        gun.trigger = true;
+        frame(&mut gun, &stats, 0.01);
+        frame(&mut gun, &stats, 0.69);
+        gun.aiming = false;
+        frame(&mut gun, &stats, 0.4);
+        assert!(!gun.bolt.can_fire());
+        frame(&mut gun, &stats, 0.1);
+        assert!(gun.bolt.can_fire());
     }
 
     #[test]

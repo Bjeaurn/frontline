@@ -117,6 +117,7 @@ impl Plugin for RemotePlayerVisualsPlugin {
                 Update,
                 (
                     remote::follow_remote_poses,
+                    remote::update_glints,
                     corpse::spawn_corpses,
                     corpse::animate_corpses,
                 )

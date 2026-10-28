@@ -1,12 +1,13 @@
 //! Weapon HUD: centred crosshair (opening with spread, fading out when aiming), hitmarker,
-//! the ammo counter with the held Weapon's name, and the black scope mask of scoped Weapons.
+//! the ammo counter with the held Weapon's name, the black scope mask of scoped Weapons, the
+//! hold-breath vignette and the "click to rack" prompt of an open bolt.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::window::PrimaryWindow;
 
-use super::{HeldWeapon, WeaponSystems};
+use super::{HeldWeapon, WeaponSystems, ease};
 use crate::data::ActiveRules;
 use crate::flow::AppState;
 use crate::net::protocol::HitConfirm;
@@ -46,6 +47,21 @@ const SCOPE_POST: f32 = 7.0;
 /// How far the thick posts reach in from the lens edge, in percent of its diameter.
 const SCOPE_POST_LENGTH: f32 = 38.0;
 
+/// Side of the generated breath vignette texture, in pixels.
+const VIGNETTE_PX: u32 = 128;
+/// The vignette starts this far out (1 is the screen's edge midpoints) and is full in the corners.
+const VIGNETTE_INNER: f32 = 0.5;
+/// Vignette opacity while holding breath (from a full tank to an empty one), and while out of
+/// breath; it eases at this rate (1/s).
+const HOLD_VIGNETTE_ALPHA: (f32, f32) = (0.25, 0.6);
+const WINDED_VIGNETTE_ALPHA: f32 = 0.4;
+const VIGNETTE_FOLLOW_PER_SEC: f32 = 8.0;
+/// Out of breath, the vignette throbs this many times a second and this far (in alpha).
+const WINDED_PULSE_HZ: f32 = 3.0;
+const WINDED_PULSE_DEPTH: f32 = 0.1;
+const WINDED_COLOR: (f32, f32, f32) = (0.35, 0.0, 0.0);
+const RACK_PROMPT_SIZE: f32 = 18.0;
+
 impl Plugin for WeaponHudPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(AppState::InGame), spawn_weapon_hud)
@@ -57,6 +73,8 @@ impl Plugin for WeaponHudPlugin {
                     fade_hitmarker,
                     update_ammo,
                     update_scope,
+                    update_breath_cue,
+                    update_rack_prompt,
                 )
                     .after(WeaponSystems)
                     .run_if(in_state(AppState::InGame)),
@@ -66,6 +84,13 @@ impl Plugin for WeaponHudPlugin {
 
 #[derive(Component)]
 struct ScopeOverlay;
+
+/// Dark edges while holding breath, reddish and throbbing while out of it.
+#[derive(Component)]
+struct BreathVignette;
+
+#[derive(Component)]
+struct RackPrompt;
 
 /// The crosshair, centred: its arms sit at the edge of the hip spread cone on screen.
 #[derive(Component)]
@@ -169,6 +194,68 @@ fn scope_mask() -> Image {
     )
 }
 
+/// White with a transparent middle and an opaque rim: tinted and faded through the `ImageNode`.
+fn breath_vignette() -> Image {
+    let size = VIGNETTE_PX;
+    let half = size as f32 / 2.0;
+    let data = (0..size * size)
+        .flat_map(|i| {
+            let at = Vec2::new((i % size) as f32, (i / size) as f32) + 0.5 - half;
+            let edge =
+                ((at.length() / half - VIGNETTE_INNER) / (1.45 - VIGNETTE_INNER)).clamp(0.0, 1.0);
+            [255, 255, 255, (ease(edge) * 255.0) as u8]
+        })
+        .collect();
+    Image::new(
+        Extent3d {
+            width: size,
+            height: size,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+}
+
+/// The breath vignette and the rack prompt, above the scope view.
+fn spawn_aim_cues(commands: &mut Commands, vignette: Handle<Image>) {
+    commands.spawn((
+        Name::new("BreathVignette"),
+        BreathVignette,
+        DespawnOnExit(AppState::InGame),
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100.0),
+            height: percent(100.0),
+            ..default()
+        },
+        ImageNode::new(vignette).with_color(Color::srgba(0.0, 0.0, 0.0, 0.0)),
+    ));
+    commands.spawn((
+        Name::new("RackPrompt"),
+        DespawnOnExit(AppState::InGame),
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100.0),
+            top: percent(60.0),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        children![(
+            RackPrompt,
+            Text::new("CLICK TO RACK"),
+            TextFont {
+                font_size: FontSize::Px(RACK_PROMPT_SIZE),
+                ..default()
+            },
+            TextColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),
+            Visibility::Hidden,
+        )],
+    ));
+}
+
 /// A black reticle bar placed inside the lens square.
 fn reticle(node: Node) -> impl Bundle {
     (
@@ -267,6 +354,7 @@ fn spawn_scope(commands: &mut Commands, mask: Handle<Image>) {
 
 fn spawn_weapon_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     spawn_scope(&mut commands, images.add(scope_mask()));
+    spawn_aim_cues(&mut commands, images.add(breath_vignette()));
     commands.spawn((
         Name::new("Crosshair"),
         DespawnOnExit(AppState::InGame),
@@ -481,6 +569,57 @@ fn update_scope(
         .single()
         .is_ok_and(|weapon| !life.is_dead() && weapon.scoped(&weapon.stats));
     scope.set_if_neq(if scoped {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    });
+}
+
+/// Eases the vignette toward dark edges while holding breath or toward a throbbing red while
+/// out of breath, and away again otherwise.
+fn update_breath_cue(
+    time: Res<Time>,
+    life: Res<LocalLife>,
+    weapons: Query<&HeldWeapon, With<LocalPlayer>>,
+    mut vignette: Single<&mut ImageNode, With<BreathVignette>>,
+) {
+    let breath = weapons
+        .single()
+        .ok()
+        .filter(|_| !life.is_dead())
+        .map(|weapon| weapon.breath);
+    let (rgb, alpha) = match breath {
+        Some(breath) if breath.winded() => {
+            let pulse = (time.elapsed_secs() * WINDED_PULSE_HZ * std::f32::consts::TAU).sin();
+            (
+                WINDED_COLOR,
+                WINDED_VIGNETTE_ALPHA + pulse * WINDED_PULSE_DEPTH,
+            )
+        }
+        Some(breath) if breath.holding() => {
+            let (full, empty) = HOLD_VIGNETTE_ALPHA;
+            ((0.0, 0.0, 0.0), full.lerp(empty, 1.0 - breath.tank()))
+        }
+        _ => ((0.0, 0.0, 0.0), 0.0),
+    };
+    let mut color = vignette.color.to_srgba();
+    color
+        .alpha
+        .smooth_nudge(&alpha, VIGNETTE_FOLLOW_PER_SEC, time.delta_secs());
+    (color.red, color.green, color.blue) = rgb;
+    vignette.color = color.into();
+}
+
+/// "CLICK TO RACK" while looking through the scope with the bolt open.
+fn update_rack_prompt(
+    life: Res<LocalLife>,
+    weapons: Query<&HeldWeapon, With<LocalPlayer>>,
+    mut prompt: Single<&mut Visibility, With<RackPrompt>>,
+) {
+    let open = weapons.single().is_ok_and(|weapon| {
+        !life.is_dead() && weapon.scoped(&weapon.stats) && weapon.bolt.waiting_for_click()
+    });
+    prompt.set_if_neq(if open {
         Visibility::Inherited
     } else {
         Visibility::Hidden

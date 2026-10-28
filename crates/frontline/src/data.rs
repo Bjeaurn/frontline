@@ -90,6 +90,10 @@ pub enum SightKind {
     #[default]
     Irons,
     RedDot,
+    /// Rectangular window with a ring-and-dot reticle.
+    Holographic,
+    /// Short tube with a chevron reticle.
+    Prism,
     Acog,
     /// A scope tube; aiming looks through its mask.
     Scope,
@@ -177,8 +181,6 @@ pub struct WeaponStats {
     pub hip_spread_deg: f32,
     pub ads_spread_deg: f32,
     pub ads_secs: f32,
-    /// Camera FOV multiplier when fully aimed down sights.
-    pub ads_fov_scale: f32,
     /// Movement speed multiplier when fully aimed down sights.
     pub ads_move_scale: f32,
     pub recoil_pitch_deg: f32,
@@ -212,25 +214,48 @@ pub struct WeaponStats {
     /// on the screen centre `sight_eye_relief` in front of the eye, its axis on the aim line.
     pub sight_point: (f32, f32, f32),
     pub sight_eye_relief: f32,
-    /// Each shot is followed by working a bolt for the whole fire-rate cooldown: the gun
-    /// briefly comes off the sights.
+    /// Each shot opens the bolt; it has to be racked before the next round fires (see
+    /// `rack_secs_scoped`).
     pub bolt_action: bool,
     /// Aiming down sights looks through a scope (black mask, viewmodel hidden).
     pub scope: bool,
     /// Which Weapons a Loadout can put in which slot.
     pub class: WeaponClass,
-    /// The iron sights, used when no Optic is fitted: like `sight_point` and
+    /// The Weapon's own sight, used when no Optic is fitted (for the Sniper that is its
+    /// built-in scope, so these mirror `sight_point`): like `sight_point` and
     /// `sight_eye_relief` (which describe where an Optic sits), plus the front post's z.
     pub iron_point: (f32, f32, f32),
     pub iron_eye_relief: f32,
     pub iron_front_z: f32,
+    /// Magnification and sway scale of that own sight (see `magnification`, `sway_scale`).
+    pub iron_magnification: f32,
+    pub iron_sway_scale: f32,
+    /// Idle sway while aimed: the peak angle of the slow figure-eight drift, at an optic's
+    /// `sway_scale` of 1, standing and breathing.
+    pub sway_deg: f32,
+    /// How far a hit kicks the view at 50 damage hip-fired (halved-ish when aimed).
+    pub flinch_deg: f32,
+    /// Bolt-action: time to rack the bolt with a click while aimed (still zoomed), and the
+    /// faster automatic rack once the sights are released.
+    #[serde(default)]
+    pub rack_secs_scoped: f32,
+    #[serde(default)]
+    pub rack_secs_unscoped: f32,
+    /// Bolt-action: the sway kick a scoped rack gives, in degrees.
+    #[serde(default)]
+    pub rack_kick_deg: f32,
     /// Set by the fitted Attachments (`GameData::effective_weapon`), not by the data file.
     /// The sight in use; `sight_point` and `sight_eye_relief` then describe it.
     #[serde(skip_deserializing)]
     pub sight: SightKind,
-    /// Multiplies the gun motion that remains when aimed.
+    /// Magnification of the sight in use (`iron_magnification` of the Weapon's own sight, or
+    /// of the fitted Optic); drives the ADS field of view, hold breath and glint.
     #[serde(skip_deserializing, default = "one")]
-    pub ads_sway_scale: f32,
+    pub magnification: f32,
+    /// Multiplies the idle sway and the gun motion that remain when aimed through the sight in
+    /// use.
+    #[serde(skip_deserializing, default = "one")]
+    pub sway_scale: f32,
     /// A Silencer is fitted: no muzzle flash.
     #[serde(skip_deserializing)]
     pub silenced: bool,
@@ -259,6 +284,28 @@ impl WeaponStats {
     pub fn seconds_per_shot(&self, ads: f32) -> f32 {
         60.0 / self.rpm.lerp(self.ads_rpm, ads)
     }
+
+    /// The ADS field of view factor of the sight in use.
+    pub fn ads_fov_scale(&self) -> f32 {
+        ads_fov_scale(self.magnification)
+    }
+
+    /// Whether the sight in use is strong enough to hold breath and to glint.
+    pub fn steady_sight(&self) -> bool {
+        self.magnification >= STEADY_MAGNIFICATION
+    }
+}
+
+/// Magnification from which a sight allows hold breath and shows a scope glint.
+pub const STEADY_MAGNIFICATION: f32 = 3.0;
+
+/// ADS field of view factor at 1x: aimed through plain sights narrows the view by this much.
+const ADS_FOV_AT_1X: f32 = 0.8;
+
+/// The factor the horizontal field of view shrinks to when fully aimed through a sight of
+/// `magnification`: it narrows with the square root (4x gives 0.4, the 8x scope 0.28).
+pub fn ads_fov_scale(magnification: f32) -> f32 {
+    ADS_FOV_AT_1X / magnification.max(1.0).sqrt()
 }
 
 /// Damage multiplier per Hit Zone (CONTEXT.md: Hit Zone).
@@ -297,7 +344,6 @@ impl WeaponStats {
             hip_spread_deg: 2.0,
             ads_spread_deg: 0.5,
             ads_secs: 0.2,
-            ads_fov_scale: 0.8,
             ads_move_scale: 0.7,
             recoil_pitch_deg: 1.0,
             recoil_yaw_deg: 0.5,
@@ -321,8 +367,16 @@ impl WeaponStats {
             iron_point: (0.0, 0.06, 0.05),
             iron_eye_relief: 0.1,
             iron_front_z: -0.3,
+            iron_magnification: 1.0,
+            iron_sway_scale: 1.0,
+            sway_deg: 0.5,
+            flinch_deg: 2.0,
+            rack_secs_scoped: 1.4,
+            rack_secs_unscoped: 0.9,
+            rack_kick_deg: 0.0,
             sight: SightKind::Irons,
-            ads_sway_scale: 1.0,
+            magnification: 1.0,
+            sway_scale: 1.0,
             silenced: false,
             shot_volume: 1.0,
             shot_pitch: 1.0,
@@ -739,6 +793,18 @@ impl GameData {
                 "{WEAPONS_FILE} must define {id:?}"
             );
         }
+        for id in WeaponId::ALL {
+            let weapon = data.weapon(id);
+            assert!(
+                weapon.iron_magnification >= 1.0 && weapon.iron_sway_scale > 0.0,
+                "{WEAPONS_FILE}: {id:?} needs an iron_magnification of at least 1 and a positive iron_sway_scale"
+            );
+            assert!(
+                !weapon.bolt_action
+                    || (weapon.rack_secs_scoped > 0.0 && weapon.rack_secs_unscoped > 0.0),
+                "{WEAPONS_FILE}: bolt-action {id:?} needs rack_secs_scoped and rack_secs_unscoped"
+            );
+        }
         for class in [WeaponClass::Primary, WeaponClass::Secondary] {
             assert!(
                 WeaponId::ALL
@@ -807,6 +873,26 @@ mod tests {
         min_height: 4.0,
         max_height: 12.0,
     };
+
+    #[test]
+    fn the_field_of_view_narrows_with_magnification() {
+        assert!(
+            (ads_fov_scale(1.0) - 0.8).abs() < 1e-6,
+            "1x keeps most of the view"
+        );
+        assert!((ads_fov_scale(4.0) - 0.4).abs() < 1e-6, "ACOG");
+        assert!(
+            (ads_fov_scale(8.0) - 0.283).abs() < 1e-3,
+            "the sniper's scope"
+        );
+        assert_eq!(
+            ads_fov_scale(0.2),
+            ads_fov_scale(1.0),
+            "never wider than 1x"
+        );
+        let lineup = [1.0, 1.5, 2.0, 4.0, 8.0].map(ads_fov_scale);
+        assert!(lineup.windows(2).all(|pair| pair[1] < pair[0]));
+    }
 
     #[test]
     fn falls_hurt_nothing_then_linearly_then_kill() {

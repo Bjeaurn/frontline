@@ -30,6 +30,13 @@ The definition for a MVP would be Team deathmatch, 3-5 weapons with a different 
   - **Scope glint:** other players see a glare from scoped snipers and ACOGs aimed toward them.
   - **Projectile snipers:** sniper bullets become server-simulated projectiles with game-tuned speed (~550–650 m/s) and gravity, so drop shows only past ~80 m. ARs, SMGs and pistols stay hitscan. Comes after the bigger Maps land, with an ADR.
   - **Optics by magnification:** one number per optic drives field of view, sway visibility, hold-breath and glint (both unlock at ≥ 3×). Each optic also has a small `sway_scale`. Lineup: iron sights 1×, Red Dot 1×, Holographic 1.5×, Prism 2×, ACOG 4×, sniper scope 8×.
+- **Class points ("Pick 10", Black Ops 2 style):** every class has a 10-point budget.
+  - Costs: Primary 1, Secondary 1, each Attachment 1 (4×+ optics and the grenade launcher cost 2), each Perk 1, each piece of equipment (lethal/tactical) 1.
+  - **Wildcards** (1 point each) break the slot rules: Perk Greed (a second Perk in one slot), Gunfighter (a third Primary attachment), Overkill (two Primaries).
+  - Dropping things frees points: e.g. no Secondary means one more Perk.
+- **Two unlock tracks:** your account **Level** unlocks Weapons, Perks, equipment and Wildcards. Each Weapon's own level, from kills with it, unlocks that Weapon's Attachments, then its camo challenges.
+- **Equipment:** lethal frag grenade; tactical flashbang and smoke. Grenades are physical projectiles (bounce, fuse).
+- **M16A4:** a 3-round burst rifle. It is the only Weapon that takes the underslung grenade launcher (the "noob tube", 2 points, physical arcing projectile).
 - **Gunplay rules (per Weapon):** separate hip and ADS fire rates (ADS ~5% slower for most guns, equal for SMGs). Sprint-out delay before firing/aiming. Hip spread blooms while moving and more while airborne. Crouch/prone tighten spread and recoil. Weapon weight scales move speed.
 - **Hit Zones:** head, upper torso, lower torso and limbs, each with its own hitbox. Damage multipliers are set per Weapon (e.g. AR head 1.4, limbs 0.8; sniper upper torso 1.2, so chest shots one-shot and limb shots don't).
 - **Death presentation:** on death, a client-side body tips over and stays ~10 s, then fades (cosmetic, no hitbox). A respawn teleports with no visible glide; the player stays hidden until they're at the spawn.

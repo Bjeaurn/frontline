@@ -26,14 +26,18 @@ fn no_camo() -> String {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum AttachmentId {
     RedDot,
+    Holographic,
+    Prism,
     Acog,
     Silencer,
 }
 
 impl AttachmentId {
     /// Every Attachment, in the order menus list them.
-    pub const ALL: [AttachmentId; 3] = [
+    pub const ALL: [AttachmentId; 5] = [
         AttachmentId::RedDot,
+        AttachmentId::Holographic,
+        AttachmentId::Prism,
         AttachmentId::Acog,
         AttachmentId::Silencer,
     ];
@@ -54,10 +58,6 @@ pub struct StatMods {
     pub falloff_mul: f32,
     /// Scales the time to aim down sights: above 1 is slower.
     pub ads_secs_mul: f32,
-    /// Scales the ADS field of view factor: below 1 zooms in further.
-    pub ads_fov_scale_mul: f32,
-    /// Scales the gun's motion (bob and mouse sway) that remains when aimed: above 1 is swayier.
-    pub ads_sway_mul: f32,
 }
 
 impl Default for StatMods {
@@ -65,8 +65,6 @@ impl Default for StatMods {
         Self {
             falloff_mul: 1.0,
             ads_secs_mul: 1.0,
-            ads_fov_scale_mul: 1.0,
-            ads_sway_mul: 1.0,
         }
     }
 }
@@ -77,8 +75,6 @@ impl StatMods {
         StatMods {
             falloff_mul: self.falloff_mul * other.falloff_mul,
             ads_secs_mul: self.ads_secs_mul * other.ads_secs_mul,
-            ads_fov_scale_mul: self.ads_fov_scale_mul * other.ads_fov_scale_mul,
-            ads_sway_mul: self.ads_sway_mul * other.ads_sway_mul,
         }
     }
 
@@ -86,8 +82,6 @@ impl StatMods {
         stats.falloff_start *= self.falloff_mul;
         stats.falloff_end *= self.falloff_mul;
         stats.ads_secs *= self.ads_secs_mul;
-        stats.ads_fov_scale *= self.ads_fov_scale_mul;
-        stats.ads_sway_scale *= self.ads_sway_mul;
     }
 }
 
@@ -102,6 +96,12 @@ pub struct Attachment {
     /// The sight drawn and aimed through (Optics only).
     #[serde(default)]
     pub sight: SightKind,
+    /// Magnification of an Optic: drives the ADS field of view, hold breath and glint.
+    #[serde(default = "one")]
+    pub magnification: f32,
+    /// Multiplies the idle sway and gun motion while aimed through an Optic.
+    #[serde(default = "one")]
+    pub sway_scale: f32,
     /// No muzzle flash.
     #[serde(default)]
     pub silenced: bool,
@@ -361,12 +361,22 @@ impl GameData {
             .optic
             .filter(|_| stats.accepts(AttachmentSlot::Optic))
         {
-            Some(optic) => stats.sight = self.attachment(optic).sight,
-            None if stats.scope => stats.sight = SightKind::Scope,
+            Some(optic) => {
+                let optic = self.attachment(optic);
+                stats.sight = optic.sight;
+                stats.magnification = optic.magnification;
+                stats.sway_scale = optic.sway_scale;
+            }
             None => {
-                stats.sight = SightKind::Irons;
-                stats.sight_point = stats.iron_point;
-                stats.sight_eye_relief = stats.iron_eye_relief;
+                stats.magnification = stats.iron_magnification;
+                stats.sway_scale = stats.iron_sway_scale;
+                if stats.scope {
+                    stats.sight = SightKind::Scope;
+                } else {
+                    stats.sight = SightKind::Irons;
+                    stats.sight_point = stats.iron_point;
+                    stats.sight_eye_relief = stats.iron_eye_relief;
+                }
             }
         }
         if let Some(muzzle) = attachments
@@ -414,21 +424,47 @@ mod tests {
     }
 
     #[test]
-    fn acog_zooms_in_and_aims_slower() {
+    fn optics_set_magnification_sway_and_the_field_of_view() {
         let data = data();
-        let base = data.weapon(WeaponId::AssaultRifle);
-        let acog = data.effective_weapon(
-            WeaponId::AssaultRifle,
-            Attachments {
-                optic: Some(AttachmentId::Acog),
-                muzzle: None,
-            },
-            &PerkEffects::default(),
-        );
-        assert!(acog.ads_fov_scale < base.ads_fov_scale);
-        assert!(acog.ads_secs > base.ads_secs);
-        assert!(acog.ads_sway_scale > 1.0);
-        assert_eq!(acog.sight, SightKind::Acog);
+        let rifle = |optic: Option<AttachmentId>| {
+            data.effective_weapon(
+                WeaponId::AssaultRifle,
+                Attachments {
+                    optic,
+                    muzzle: None,
+                },
+                &PerkEffects::default(),
+            )
+        };
+        let irons = rifle(None);
+        let lineup = [
+            (None, SightKind::Irons, 1.0, 0.8),
+            (Some(AttachmentId::RedDot), SightKind::RedDot, 1.0, 0.9),
+            (
+                Some(AttachmentId::Holographic),
+                SightKind::Holographic,
+                1.5,
+                0.95,
+            ),
+            (Some(AttachmentId::Prism), SightKind::Prism, 2.0, 1.0),
+            (Some(AttachmentId::Acog), SightKind::Acog, 4.0, 1.15),
+        ];
+        for (optic, sight, magnification, sway_scale) in lineup {
+            let stats = rifle(optic);
+            assert_eq!(stats.sight, sight);
+            assert_eq!(stats.magnification, magnification, "{sight:?}");
+            assert_eq!(stats.sway_scale, sway_scale, "{sight:?}");
+            assert_eq!(
+                stats.steady_sight(),
+                magnification >= 3.0,
+                "hold breath and glint from 3x: {sight:?}"
+            );
+        }
+        let acog = rifle(Some(AttachmentId::Acog));
+        assert!(acog.ads_fov_scale() < irons.ads_fov_scale());
+        assert!(acog.ads_secs > irons.ads_secs);
+        let red_dot = rifle(Some(AttachmentId::RedDot));
+        assert!((red_dot.ads_fov_scale() - irons.ads_fov_scale()).abs() < 1e-6);
     }
 
     #[test]
@@ -446,6 +482,8 @@ mod tests {
         };
         let sniper = data.effective_weapon(WeaponId::SniperRifle, red_dot, &PerkEffects::default());
         assert_eq!(sniper.sight, SightKind::Scope);
+        assert_eq!((sniper.magnification, sniper.sway_scale), (8.0, 1.3));
+        assert!(sniper.steady_sight());
     }
 
     #[test]

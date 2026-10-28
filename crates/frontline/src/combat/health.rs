@@ -422,6 +422,7 @@ pub(super) fn respawn_players(
             yaw,
             pitch: 0.0,
             stance: Stance::Standing,
+            aim_magnification: 0.0,
         };
         if let Ok(mut sender) = senders.get_mut(link.owner) {
             sender.send::<EventChannel>(Respawn { position, yaw });

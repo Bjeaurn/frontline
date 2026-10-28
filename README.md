@@ -72,8 +72,9 @@ On joining, pick a Team (and then a Loadout). The mouse is grabbed while you pla
 | Mantle | Move into a ledge up to ~1.6 m (jumping helps); steps and ramps (stairs) up to 0.45 m per step are simply walked up at full speed |
 | Crouch | C |
 | Prone (while sprinting: dive) | Left Ctrl or Z |
-| Fire (full auto, or one round per click for semi/bolt-action) | Left mouse |
+| Fire (full auto, or one round per click for semi; a bolt-action click racks first, see Aiming below) | Left mouse |
 | Aim down sights | Right mouse (hold) |
+| Hold breath (aimed through a 3x or stronger sight; Shift is sprint otherwise) | Left Shift while aiming |
 | Reload | R (sprinting cancels it). Takes longer from an empty magazine (AR 2.5 / 3.1 s, SMG 2.4 / 2.9, Sniper 3.5 / 4.0, Pistol 1.7 / 2.1; Sleight of Hand x0.7) |
 | Scoreboard | Tab (hold) |
 | Plant / defuse the bomb (Search & Destroy; hold) | F |
@@ -83,9 +84,28 @@ On joining, pick a Team (and then a Loadout). The mouse is grabbed while you pla
 | Respawn early (dead, once `min_respawn_secs` have passed; the death screen says when) | Space or click |
 | Pause menu (Resume, Change Team, Change Loadout, Respawn, Settings, Leave Game) | Esc; Esc again steps back. RESPAWN is for getting unstuck: it kills you with no credit (a death in your stats, "X respawned" in the kill feed) and respawns you as usual; not in Search & Destroy |
 
+### Aiming
+
+Every sight has a **Magnification** and a **Sway Scale** in the data (`iron_magnification` / `iron_sway_scale` per Weapon in `weapons.ron` for its own sights, or the Sniper's built-in scope; `magnification` / `sway_scale` per Optic in `attachments.ron`). Magnification sets the ADS field of view (the view narrows with the square root of it: 1x keeps 80% of the Settings FOV, the ACOG 40%, the 8x scope 28%), and from 3x it allows hold breath and shows a glint:
+
+| Sight | Magnification | Sway Scale |
+|---|---|---|
+| Iron sights | 1x | 0.8 |
+| Red Dot | 1x | 0.9 |
+| Holographic (rectangular window, ring-and-dot reticle) | 1.5x | 0.95 |
+| Prism (short tube, chevron reticle) | 2x | 1.0 |
+| ACOG | 4x | 1.15 |
+| Sniper scope | 8x | 1.3 |
+
+- **Sway**: while aimed the view drifts along a slow figure-eight (6 s a lap), by a peak angle of the Weapon's `sway_deg` (Sniper 1.0, AR 0.5, SMG 0.15, Pistol 0.1) times the sight's Sway Scale, x0.7 crouched and x0.4 prone, blended in with the aim. The drift is added to your aim itself, so shots go where the sight points.
+- **Hold Breath**: Shift while aimed through a 3x or stronger sight. Sway x0.15 for up to 4 s; then you are out of breath for 2 s with sway x1.6 and can't hold. The 4 s tank only refills while you are not holding. A vignette darkens the screen edges while you hold (stronger as the tank drains) and throbs red while you are out of breath.
+- **Flinch**: taking a hit kicks your view by the Weapon's `flinch_deg` (a 50-damage hit, scaled by the damage), x0.6 while aimed, in a random direction; it recovers like recoil.
+- **Glint**: a player aimed through a 3x or stronger sight shows a bright star at their scope to anyone within about 25 degrees of where they aim (the pose carries `aim_magnification`).
+- **Rack** (Sniper): a shot leaves you aimed and the bolt open; you can't fire. While aimed a click racks it (`rack_secs_scoped`, 1.4 s, still zoomed, with a small sway kick, and the HUD asks `CLICK TO RACK`); the next click fires. Letting go of the aim racks automatically at `rack_secs_unscoped` (0.9 s), and letting go mid-rack finishes the rest at that faster rate.
+
 Fall damage (CoD style, from the peak of the fall): none below `min_height` (4.5 m by default, 3.5 m in hardcore), then linear up to a lethal fall at `max_height` (12 m, 8 m in hardcore). The kill feed says "X fell to their death". The Tab Scoreboard's header shows the win condition, e.g. `FIRST TO 50 · 10:00 LIMIT` (Search & Destroy: `FIRST TO 4 ROUNDS`), with the Host's limit overrides applied.
 
-Tuning lives in `data/`: `weapons.ron` (including per-Weapon Hit Zone damage multipliers), `attachments.ron` (Optics and Muzzles as stat modifiers), `perks.ron` (the six Perks and the ammo pack), `loadouts.ron` (Default Loadouts, the instant-swap window and the Weapon switch time), `movement.ron`, `match_rules.ron` (presets: health, regen, respawn delay and the earliest early respawn, damage scale, friendly fire, fall damage and the HUD block), `game_modes.ron` (score and time limits, capture, HQ and bomb tuning of every Game Mode), `factions.ron`, `maps.ron` (every built-in Map: file, look, Game Modes, and the two Factions its theater plays), `looks.ron` (per-Map look presets: grade, fog, sun, ambient, sky), `presentation.ron` (how long bodies stay and how many at once) and `progression.ron` (XP awards, the Level curve, unlocks and camo Challenges). The game reads them at startup from `./data/` (relative to where you launch it), so edit and restart to retune. Without that folder it uses the copies built into the binary. Both machines should use the same files: damage and score are decided on the server, but movement, recoil, spread and fire rate come from each client's own copy.
+Tuning lives in `data/`: `weapons.ron` (including per-Weapon Hit Zone damage multipliers), `attachments.ron` (Optics, with their magnification and sway scale, and Muzzles, as stat modifiers), `perks.ron` (the six Perks and the ammo pack), `loadouts.ron` (Default Loadouts, the instant-swap window and the Weapon switch time), `movement.ron`, `match_rules.ron` (presets: health, regen, respawn delay and the earliest early respawn, damage scale, friendly fire, fall damage and the HUD block), `game_modes.ron` (score and time limits, capture, HQ and bomb tuning of every Game Mode), `factions.ron`, `maps.ron` (every built-in Map: file, look, Game Modes, and the two Factions its theater plays), `looks.ron` (per-Map look presets: grade, fog, sun, ambient, sky), `presentation.ron` (how long bodies stay and how many at once) and `progression.ron` (XP awards, the Level curve, unlocks and camo Challenges). The game reads them at startup from `./data/` (relative to where you launch it), so edit and restart to retune. Without that folder it uses the copies built into the binary. Both machines should use the same files: damage and score are decided on the server, but movement, recoil, spread and fire rate come from each client's own copy.
 
 ## Loadouts
 
@@ -97,7 +117,7 @@ The Profile is a client-local file, `<config dir>/frontline/profile.ron`, next t
 
 | Slot | Choices |
 |---|---|
-| Optic | none (iron sights), Red Dot, ACOG (about 4x zoom, slower to aim, swayier; not on the Sniper) |
+| Optic | none (iron sights), Red Dot (1x), Holographic (1.5x), Prism (2x), ACOG (4x; slower to aim, swayier, allows hold breath and glints); none on the Sniper, which has its built-in 8x scope |
 | Muzzle | none, Silencer (no muzzle flash, a quieter and duller shot, damage falls off at 0.75x the distance) |
 | Perk 1 | Sleight of Hand (reload 30% faster), Scavenger (walk over a dead player's ammo pack to refill ammo) |
 | Perk 2 | Stopping Power (+25% bullet damage), Lightweight (+10% move speed) |
@@ -131,7 +151,8 @@ Level n+1 needs `n * 1500` XP in all (Level 2 at 1,500, Level 3 at 3,000, ...), 
 | 2 | Custom classes (editing and choosing the three custom slots) |
 | 3 | ACOG |
 | 4 | Silencer |
-| 5 / 6 / 8 | Scavenger / Lightweight / Ninja (the second Perks) |
+| 5 | Holographic, Scavenger |
+| 6 / 7 / 8 | Lightweight / Prism / Ninja |
 
 **Camos** are material variants of the Primary's body parts in the first-person viewmodel (barrel, sights and bolt stay bare; the third-person gun comes later with remote players' guns). Six ship: Woodland, Desert, Urban (grey digital), Tiger (stripes), Arctic and a metallic Gold. Each Weapon unlocks them separately by a **Challenge** counted in your Profile on that Weapon: Woodland 25 kills, Desert 50 kills, Urban 25 headshot kills, Tiger 100 kills, Arctic 50 headshot kills, and Gold once the other five are unlocked on it. The editor's Camo picker shows the progress of a locked one (`34/50 kills`). The textures are 128 px tiling PNGs under `crates/frontline/assets/camos/` (embedded in the binary), made by `tools/camos/camos.py`:
 
@@ -205,7 +226,7 @@ The kit has no vehicles, barriers or lamp posts, so the generators build those a
 - `crates/frontline/src/data.rs`: loads the `data/*.ron` tuning files
 - `crates/frontline/src/net/`: lightyear protocol, server, client, Host/Join/Leave sessions, LAN discovery
 - `crates/frontline/src/player/`: first-person controller, input bindings, damage/kill-feed/death HUD, remote player visuals and their bodies
-- `crates/frontline/src/weapon/`: local Weapon (firing, ammo, aiming, recoil, bolt cycle), per-weapon viewmodels, shot effects, crosshair/hitmarker/ammo/scope HUD
+- `crates/frontline/src/weapon/`: local Weapon (firing, ammo, aiming, recoil, sway, hold breath, flinch, the bolt rack), per-weapon viewmodels, shot effects, crosshair/hitmarker/ammo/scope/breath HUD
 - `crates/frontline/src/gear.rs`: Attachments, Perks and the Loadout, and the pure rules that turn them into effective Weapon stats and Perk effects (unit-tested)
 - `crates/frontline/src/profile.rs`: the Profile file (`profile.ron`): custom Loadouts, the chosen one, XP and per-Weapon kill counters, and applying an award to them
 - `crates/frontline/src/progression/`: XP values, the Level curve, the unlock table and camo Challenges (pure, unit-tested); client-side award handling, and the XP popups and toasts

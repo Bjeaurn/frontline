@@ -149,8 +149,32 @@ A modification fitted to one **Attachment Slot** on a **Weapon**.
 _Avoid_: Mod, upgrade
 
 **Attachment Slot**:
-A position on a **Weapon** that holds at most one **Attachment**: Optic (e.g. Red Dot, ACOG) or Muzzle (e.g. Silencer).
+A position on a **Weapon** that holds at most one **Attachment**: Optic (e.g. Red Dot, Holographic, Prism, ACOG) or Muzzle (e.g. Silencer).
 _Avoid_: Rail, socket
+
+**Magnification**:
+The zoom number of a sight (iron sights and Red Dot 1x, Holographic 1.5x, Prism 2x, ACOG 4x, the Sniper's scope 8x). It sets the aimed field of view, and from 3x it allows **Hold Breath** and shows a **Glint**. Each sight also has a **Sway Scale**.
+_Avoid_: Zoom level, scope power
+
+**Sway**:
+The slow figure-eight drift of the view while aimed, by a per-**Weapon** angle times the sight's **Sway Scale**, less while crouched or prone or holding breath. It moves the aim itself, so shots follow it.
+_Avoid_: Wobble, bob (bob is the viewmodel's walking motion)
+
+**Flinch**:
+The kick a hit gives the victim's view, by a per-**Weapon** angle scaled by the damage and reduced while aimed; it recovers like recoil.
+_Avoid_: Hit reaction, screen shake
+
+**Hold Breath**:
+Shift while aimed through a sight of 3x or more: **Sway** drops to 0.15 for up to 4 s, then 2 s out of breath with **Sway** at 1.6; the tank only refills while not holding.
+_Avoid_: Steady aim, breath control
+
+**Glint**:
+The bright star other players see at the scope of someone aimed through a sight of 3x or more, when they are within about 25 degrees of where that player aims.
+_Avoid_: Lens flare, scope flare
+
+**Rack**:
+Working the bolt of a bolt-action **Weapon** after a shot; it can't fire until the bolt is closed. A click while aimed racks slowly and keeps the sights up (the next click fires); letting go of the sights racks faster by itself.
+_Avoid_: Cycle, chamber
 
 **Hit Zone**:
 The part of a body a bullet strikes: head, upper torso, lower torso or limbs (arms and legs). Each **Weapon** sets its own damage multiplier per zone.
@@ -241,6 +265,7 @@ _Avoid_: Combo, double/triple (as the general term)
 - **Headquarters** needs at least one HQ site on the **Map**; **Search & Destroy** needs two **Bomb Sites** (A, B)
 - A **Rotation entry** only names a **Game Mode** its **Map** supports
 - A **Loadout** has one **Primary**, one **Secondary**, and one **Perk** per **Perk Slot**
+- A **Weapon** fires through exactly one sight at a time (its own, or the fitted Optic); that sight's **Magnification** and Sway Scale drive aiming
 - A **Primary** has an Optic and a Muzzle **Attachment Slot**, each optionally filled; a scoped Primary (the sniper rifle) has no Optic slot, and a **Secondary** has no Attachment Slots
 - A **Profile** belongs to one player and is independent of any **Host**
 - A **Profile** holds three custom and three default **Loadouts**; the default ones are read-only and the custom ones are edited through **Create a Class**

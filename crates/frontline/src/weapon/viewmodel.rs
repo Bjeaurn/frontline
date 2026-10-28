@@ -179,6 +179,19 @@ const ACOG_WINDOW: Vec2 = Vec2::new(0.026, 0.024);
 const ACOG_FRAME: f32 = 0.007;
 const ACOG_DEPTH: f32 = 0.09;
 const ACOG_RADIUS: f32 = 0.0007;
+/// Holographic window, frame bar thickness, housing length, reticle dot radius and the ring's
+/// inner and outer radii.
+const HOLO_WINDOW: Vec2 = Vec2::new(0.034, 0.026);
+const HOLO_FRAME: f32 = 0.002;
+const HOLO_DEPTH: f32 = 0.04;
+const HOLO_DOT: f32 = 0.0007;
+const HOLO_RING: (f32, f32) = (0.0062, 0.0072);
+/// Prism tube radii (inner, outer), length, objective bell growth and length, and the chevron's
+/// arm length and thickness.
+const PRISM_TUBE: (f32, f32) = (0.0125, 0.0165);
+const PRISM_DEPTH: f32 = 0.07;
+const PRISM_BELL: (f32, f32) = (0.004, 0.012);
+const PRISM_CHEVRON: (f32, f32) = (0.0075, 0.0009);
 /// Silencer girth relative to the barrel.
 const SUPPRESSOR_RADIUS_SCALE: f32 = 1.9;
 /// Rear aperture ring radii (hole, outside), front post width and height.
@@ -583,6 +596,68 @@ fn sight_parts(shape: &GunShape, stats: &WeaponStats) -> Vec<(Mesh, Furniture, T
             parts.push(mount(sight.y - window.y / 2.0 - t, sight.z, 0.012, 0.03));
             parts
         }
+        SightKind::Holographic => {
+            let (window, t) = (HOLO_WINDOW, HOLO_FRAME);
+            // The housing runs forward from the window.
+            let shift = -HOLO_DEPTH / 2.0 + 0.004;
+            let mut parts = optic_parts(sight, window, t, HOLO_DEPTH, shift, HOLO_DOT);
+            let (inner, outer) = HOLO_RING;
+            parts.push((
+                Mesh::from(Annulus::new(inner, outer)),
+                Furniture::Reticle,
+                Transform::from_translation(sight + Vec3::Z * 0.001),
+            ));
+            parts.push(mount(
+                sight.y - window.y / 2.0 - t,
+                sight.z + shift,
+                0.016,
+                0.035,
+            ));
+            parts
+        }
+        SightKind::Prism => {
+            let (inner, outer) = PRISM_TUBE;
+            let (bell, bell_depth) = PRISM_BELL;
+            let shift = -PRISM_DEPTH / 2.0 + 0.005;
+            let (arm, thickness) = PRISM_CHEVRON;
+            // An upward chevron: two arms from the apex down and out at 45 degrees.
+            let half = arm / 2.0 * std::f32::consts::FRAC_1_SQRT_2;
+            let apex = sight + Vec3::Z * 0.001;
+            let chevron = |side: f32| {
+                (
+                    Mesh::from(Rectangle::new(arm, thickness)),
+                    Furniture::Reticle,
+                    Transform::from_translation(apex + Vec3::new(side * half, -half, 0.0))
+                        .with_rotation(Quat::from_rotation_z(-side * std::f32::consts::FRAC_PI_4)),
+                )
+            };
+            vec![
+                (
+                    Mesh::from(Extrusion::new(Annulus::new(inner, outer), PRISM_DEPTH)),
+                    Furniture::Sight,
+                    Transform::from_translation(sight + Vec3::Z * shift),
+                ),
+                // The objective bell at the front end.
+                (
+                    Mesh::from(Extrusion::new(
+                        Annulus::new(inner, outer + bell),
+                        bell_depth,
+                    )),
+                    Furniture::Sight,
+                    Transform::from_translation(
+                        sight + Vec3::Z * (shift - PRISM_DEPTH / 2.0 + bell_depth / 2.0),
+                    ),
+                ),
+                (
+                    Mesh::from(Circle::new(inner)),
+                    Furniture::Glass,
+                    Transform::from_translation(sight),
+                ),
+                chevron(1.0),
+                chevron(-1.0),
+                mount(sight.y - outer, sight.z + shift, 0.02, 0.045),
+            ]
+        }
         SightKind::Acog => {
             let (window, t) = (ACOG_WINDOW, ACOG_FRAME);
             // The housing runs forward from the eyepiece; a rail block sits on its top.
@@ -861,7 +936,7 @@ fn animate_viewmodel(
     });
     let dt = time.delta_secs();
     let ads = weapon.ads_eased();
-    let motion_scale = 1.0_f32.lerp(ADS_MOTION_SCALE * stats.ads_sway_scale, ads);
+    let motion_scale = 1.0_f32.lerp(ADS_MOTION_SCALE * stats.sway_scale, ads);
 
     let velocity = motor.velocity();
     let speed = Vec2::new(velocity.x, velocity.z).length();

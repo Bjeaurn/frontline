@@ -260,6 +260,7 @@ fn lerp_pose(start: PlayerPose, end: PlayerPose, t: f32) -> PlayerPose {
         yaw: start.yaw + yaw_delta * t,
         pitch: start.pitch + (end.pitch - start.pitch) * t,
         stance: if t < 0.5 { start.stance } else { end.stance },
+        aim_magnification: end.aim_magnification,
     }
 }
 

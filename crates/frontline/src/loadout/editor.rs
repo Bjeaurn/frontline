@@ -619,12 +619,17 @@ mod tests {
         let data = GameData::load();
         let mut loadout = data.default_loadouts[0].clone();
 
-        // Optic: none -> Red Dot -> ACOG -> none.
+        // Optic: none -> Red Dot -> Holographic -> Prism -> ACOG -> none.
         loadout.attachments.optic = None;
-        cycle(&mut loadout, Field::Optic, 1, &data);
-        assert_eq!(loadout.attachments.optic, Some(AttachmentId::RedDot));
-        cycle(&mut loadout, Field::Optic, 1, &data);
-        assert_eq!(loadout.attachments.optic, Some(AttachmentId::Acog));
+        for optic in [
+            AttachmentId::RedDot,
+            AttachmentId::Holographic,
+            AttachmentId::Prism,
+            AttachmentId::Acog,
+        ] {
+            cycle(&mut loadout, Field::Optic, 1, &data);
+            assert_eq!(loadout.attachments.optic, Some(optic));
+        }
         cycle(&mut loadout, Field::Optic, 1, &data);
         assert_eq!(loadout.attachments.optic, None);
 

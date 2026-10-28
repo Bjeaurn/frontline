@@ -473,6 +473,14 @@ mod tests {
         let silencer = progression.unlock_level(UnlockItem::Attachment(AttachmentId::Silencer));
         assert!((3..=8).contains(&acog) && (3..=8).contains(&silencer));
         assert_eq!(
+            progression.unlock_level(UnlockItem::Attachment(AttachmentId::Holographic)),
+            5
+        );
+        assert_eq!(
+            progression.unlock_level(UnlockItem::Attachment(AttachmentId::Prism)),
+            7
+        );
+        assert_eq!(
             progression.unlocked_at(2).collect::<Vec<_>>(),
             [UnlockItem::CustomLoadouts]
         );

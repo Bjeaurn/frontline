@@ -44,6 +44,9 @@ pub struct PlayerPose {
     pub yaw: f32,
     pub pitch: f32,
     pub stance: Stance,
+    /// Magnification of the sight the player is aimed through when it is steady enough to
+    /// glint (see `STEADY_MAGNIFICATION`), else 0. Others see a scope glint from it.
+    pub aim_magnification: f32,
 }
 
 /// A player's position changing by more than this between two samples is a teleport (a

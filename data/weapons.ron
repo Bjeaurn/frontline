@@ -2,6 +2,14 @@
 // Distances in metres, angles in degrees, times in seconds. `damage_near`/`damage_far` are
 // scaled by the Hit Zone struck: head, upper torso (chest), lower torso (belly) or limbs.
 // `reload_secs` is the reload with rounds left, `empty_reload_secs` from an empty magazine.
+// Aim mechanics: `iron_magnification` / `iron_sway_scale` describe the Weapon's own sight (its
+// iron sights, or the Sniper's built-in scope); an Optic brings its own (attachments.ron). The ADS
+// field of view follows the magnification, and from 3x you can hold breath and show a glint.
+// `sway_deg` is the idle sway's peak angle at a sway scale of 1 (standing, breathing),
+// `flinch_deg` the view kick of a 50-damage hit from the hip (less when aimed).
+// Bolt-action (`bolt_action: true`): a shot opens the bolt; `rack_secs_scoped` is the click-to-rack
+// time while aimed (with a `rack_kick_deg` sway kick), `rack_secs_unscoped` the automatic rack
+// once the sights are released.
 {
     AssaultRifle: (
         name: "M4 (AR)",
@@ -20,7 +28,6 @@
         hip_spread_deg: 3.0,
         ads_spread_deg: 0.25,
         ads_secs: 0.25,
-        ads_fov_scale: 0.7,
         ads_move_scale: 0.6,
         recoil_pitch_deg: 0.9,
         recoil_yaw_deg: 0.35,
@@ -46,6 +53,10 @@
         iron_point: (0.0, 0.066, 0.06),
         iron_eye_relief: 0.14,
         iron_front_z: -0.4,
+        iron_magnification: 1.0,
+        iron_sway_scale: 0.8,
+        sway_deg: 0.5,
+        flinch_deg: 2.0,
     ),
     Smg: (
         name: "MP5 (SMG)",
@@ -64,7 +75,6 @@
         hip_spread_deg: 2.5,
         ads_spread_deg: 0.6,
         ads_secs: 0.18,
-        ads_fov_scale: 0.8,
         ads_move_scale: 0.75,
         recoil_pitch_deg: 0.7,
         recoil_yaw_deg: 0.45,
@@ -89,8 +99,12 @@
         iron_point: (0.0, 0.065, 0.09),
         iron_eye_relief: 0.09,
         iron_front_z: -0.2,
+        iron_magnification: 1.0,
+        iron_sway_scale: 0.8,
+        sway_deg: 0.15,
+        flinch_deg: 2.4,
     ),
-    // Bolt-action: `Semi` with a low rpm, so the rpm is the bolt cycle.
+    // Bolt-action: `Semi`; the rack (below) paces the shots, `rpm` is only its nominal rate.
     SniperRifle: (
         name: "M40 (Sniper)",
         fire_mode: Semi,
@@ -108,7 +122,6 @@
         hip_spread_deg: 8.0,
         ads_spread_deg: 0.0,
         ads_secs: 0.35,
-        ads_fov_scale: 0.3,
         ads_move_scale: 0.4,
         recoil_pitch_deg: 3.0,
         recoil_yaw_deg: 0.5,
@@ -133,6 +146,13 @@
         iron_point: (0.0, 0.085, 0.18),
         iron_eye_relief: 0.08,
         iron_front_z: -0.5,
+        iron_magnification: 8.0,
+        iron_sway_scale: 1.3,
+        sway_deg: 1.0,
+        flinch_deg: 2.5,
+        rack_secs_scoped: 1.4,
+        rack_secs_unscoped: 0.9,
+        rack_kick_deg: 0.35,
     ),
     // Secondary. Semi-auto: one round per pull at its `rpm`.
     Pistol: (
@@ -152,7 +172,6 @@
         hip_spread_deg: 1.6,
         ads_spread_deg: 0.5,
         ads_secs: 0.12,
-        ads_fov_scale: 0.9,
         ads_move_scale: 0.9,
         recoil_pitch_deg: 1.2,
         recoil_yaw_deg: 0.3,
@@ -177,5 +196,9 @@
         iron_point: (0.0, 0.034, 0.065),
         iron_eye_relief: 0.12,
         iron_front_z: -0.105,
+        iron_magnification: 1.0,
+        iron_sway_scale: 0.8,
+        sway_deg: 0.1,
+        flinch_deg: 1.6,
     ),
 }

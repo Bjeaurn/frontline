@@ -3,9 +3,9 @@
 // `mods` for damage falloff as the client does for everything else. `mods` are multipliers:
 //   falloff_mul        scales both falloff distances (below 1: damage drops off sooner)
 //   ads_secs_mul       scales the time to aim down sights (above 1: slower)
-//   ads_fov_scale_mul  scales the ADS field of view factor (below 1: zooms in further)
-//   ads_sway_mul       scales the gun motion that remains when aimed (above 1: swayier)
-// `sight` is what an Optic draws and aims through; `silenced` removes the muzzle flash, and
+// `sight` is what an Optic draws and aims through. `magnification` drives the ADS field of view
+// (it narrows with the square root of it) and, from 3x, hold breath and the scope glint;
+// `sway_scale` multiplies the idle sway and gun motion while aimed through it. `silenced` removes the muzzle flash, and
 // `shot_volume` / `shot_pitch` scale the gunshot's volume and playback speed.
 {
     RedDot: (
@@ -13,13 +13,35 @@
         description: "Clear dot sight. No handling penalty.",
         slot: Optic,
         sight: RedDot,
+        magnification: 1.0,
+        sway_scale: 0.9,
+    ),
+    Holographic: (
+        name: "Holographic",
+        description: "About 1.5x zoom with a ring-and-dot reticle. Slightly slower to aim.",
+        slot: Optic,
+        sight: Holographic,
+        magnification: 1.5,
+        sway_scale: 0.95,
+        mods: (ads_secs_mul: 1.05),
+    ),
+    Prism: (
+        name: "Prism",
+        description: "About 2x zoom with a chevron reticle. Slower to aim.",
+        slot: Optic,
+        sight: Prism,
+        magnification: 2.0,
+        sway_scale: 1.0,
+        mods: (ads_secs_mul: 1.12),
     ),
     Acog: (
         name: "ACOG",
-        description: "About 4x zoom. Slower to aim and swayier.",
+        description: "About 4x zoom. Slower to aim and swayier; hold breath steadies it.",
         slot: Optic,
         sight: Acog,
-        mods: (ads_fov_scale_mul: 0.55, ads_secs_mul: 1.3, ads_sway_mul: 1.4),
+        magnification: 4.0,
+        sway_scale: 1.15,
+        mods: (ads_secs_mul: 1.3),
     ),
     Silencer: (
         name: "Silencer",

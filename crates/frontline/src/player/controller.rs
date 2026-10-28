@@ -467,6 +467,7 @@ pub(super) fn spawn_local_player(
             yaw,
             pitch: 0.0,
             stance,
+            aim_magnification: 0.0,
         },
         Motor::new(&data.movement),
         ControllerModifiers::default(),
@@ -535,6 +536,7 @@ pub(super) fn apply_respawn(
         yaw: respawn.yaw,
         pitch: 0.0,
         stance: Stance::Standing,
+        aim_magnification: 0.0,
     };
     *motor = Motor::new(&data.movement);
     *transform =
