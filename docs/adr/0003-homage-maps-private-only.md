@@ -5,3 +5,4 @@ The first Maps (Backlot and Vacant) are Homage Maps: faithful recreations of Cal
 ## Consequences
 
 - Homage Map files live in a separate private repo, `frontline-private`, cloned into `content/private/` (git-ignored by the main repo). The game loads Maps from there when present, so the main repo can go public without scrubbing history.
+- Original CoD4 textures for Homage Maps are bring-your-own from the player's own install, never stored (see `0004-cod4-textures-bring-your-own.md`).
