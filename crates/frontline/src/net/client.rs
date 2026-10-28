@@ -2,7 +2,8 @@
 //! fixed tick, marks replicated players as `RemotePlayer` or `LocalPlayerReplica`, and bridges
 //! gameplay messages: server messages become `FromServer<M>`; `ToServer<FireShot>` and
 //! `ToServer<ChooseTeam>`, `ToServer<FallDamage>`, `ToServer<RequestRespawn>` and
-//! `ToServer<ForceRespawn>` are sent.
+//! `ToServer<ForceRespawn>` and `ToServer<SendChat>` are sent; the local Level is reported on
+//! joining and on every level-up.
 
 use std::hash::{BuildHasher, RandomState};
 use std::net::{Ipv4Addr, SocketAddr};
@@ -13,13 +14,15 @@ use lightyear::prelude::client::*;
 use lightyear::prelude::*;
 
 use super::protocol::{
-    AmmoRefill, BombExploded, CONNECTION_TIMEOUT_SECS, ChooseTeam, ControlChannel, Damaged,
-    EquipPerks, FallDamage, FireShot, ForceRespawn, Hello, HitConfirm, KillFeed, ObjectiveHold,
-    PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseChannel, PoseUpdate, RequestRespawn, Respawn,
-    ShotChannel, ShotTracer, XpAward,
+    AmmoRefill, BombExploded, CONNECTION_TIMEOUT_SECS, ChatLine, ChooseTeam, ControlChannel,
+    Damaged, EquipPerks, FallDamage, FireShot, ForceRespawn, Hello, HitConfirm, KillFeed,
+    ObjectiveHold, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseChannel, PoseUpdate, ReportLevel,
+    RequestRespawn, Respawn, SendChat, ShotChannel, ShotTracer, XpAward,
 };
+use crate::data::GameData;
 use crate::flow::Settings;
 use crate::gear::Perks;
+use crate::profile::Profile;
 use crate::shared::{
     FromServer, LocalPlayer, LocalPlayerReplica, PlayerPose, RemotePlayer, ToServer,
 };
@@ -37,12 +40,14 @@ impl Plugin for ClientNetPlugin {
             .add_message::<FromServer<BombExploded>>()
             .add_message::<FromServer<AmmoRefill>>()
             .add_message::<FromServer<XpAward>>()
+            .add_message::<FromServer<ChatLine>>()
             .add_message::<ToServer<FireShot>>()
             .add_message::<ToServer<ChooseTeam>>()
             .add_message::<ToServer<ObjectiveHold>>()
             .add_message::<ToServer<FallDamage>>()
             .add_message::<ToServer<RequestRespawn>>()
             .add_message::<ToServer<ForceRespawn>>()
+            .add_message::<ToServer<SendChat>>()
             .add_observer(on_connected)
             .add_observer(on_disconnected)
             .add_systems(FixedUpdate, send_pose)
@@ -57,6 +62,7 @@ impl Plugin for ClientNetPlugin {
                     forward_from_server::<BombExploded>,
                     forward_from_server::<AmmoRefill>,
                     forward_from_server::<XpAward>,
+                    forward_from_server::<ChatLine>,
                 )
                     .after(MessageSystems::Receive),
             )
@@ -65,11 +71,13 @@ impl Plugin for ClientNetPlugin {
                 (
                     send_shots,
                     send_perks,
+                    send_level,
                     send_team_choices,
                     send_objective_holds,
                     send_control::<FallDamage>,
                     send_control::<RequestRespawn>,
                     send_control::<ForceRespawn>,
+                    send_control::<SendChat>,
                 )
                     .before(MessageSystems::Send),
             )
@@ -244,6 +252,22 @@ fn send_perks(
         if *sent != Some((link, perks)) {
             sender.send::<ControlChannel>(EquipPerks(perks));
             *sent = Some((link, perks));
+        }
+    }
+}
+
+/// Tells the server the Profile's account Level: on connecting and on every level-up.
+fn send_level(
+    profile: Res<Profile>,
+    data: Res<GameData>,
+    mut senders: Query<(Entity, &mut MessageSender<ReportLevel>), (With<Client>, With<Connected>)>,
+    mut sent: Local<Option<(Entity, u32)>>,
+) {
+    let level = profile.level(&data);
+    for (link, mut sender) in &mut senders {
+        if *sent != Some((link, level)) {
+            sender.send::<ControlChannel>(ReportLevel(level));
+            *sent = Some((link, level));
         }
     }
 }

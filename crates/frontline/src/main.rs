@@ -3,6 +3,7 @@
 
 mod assets;
 mod atmosphere;
+mod chat;
 mod class;
 mod cli;
 mod combat;
@@ -128,6 +129,7 @@ fn main() -> AppExit {
             player::RemotePlayerVisualsPlugin,
             weapon::WeaponClientPlugin,
             match_hud::MatchHudPlugin,
+            chat::ChatPlugin,
             modes::ModeVisualsPlugin,
             loadout::LoadoutPlugin,
             profile::ProfilePlugin,

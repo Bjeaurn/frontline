@@ -62,6 +62,9 @@ pub enum Overlay {
     Settings,
     /// The Custom Match Rules editor, opened from the Settings over the game.
     Rules,
+    /// Typing a chat message (`chat`): the cursor is free and gameplay input ignored until
+    /// Enter sends it or Esc cancels.
+    Chat,
 }
 
 /// Requests that change what this process is doing; the flow owner reacts to them.

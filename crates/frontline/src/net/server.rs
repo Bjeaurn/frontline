@@ -7,13 +7,14 @@ use bevy::prelude::*;
 use lightyear::prelude::server::*;
 use lightyear::prelude::*;
 
+use super::chat::{self, ChatRate, SystemChat};
 use super::protocol::{
     CONNECTION_TIMEOUT_SECS, EquipPerks, Hello, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseUpdate,
 };
 use super::server_running;
 use crate::combat::PoseGate;
 use crate::gear::EquippedPerks;
-use crate::shared::{Health, PlayerName, PlayerPose, PlayerStats, PlayerTeam};
+use crate::shared::{Health, PlayerLevel, PlayerName, PlayerPose, PlayerStats, PlayerTeam};
 
 pub(super) struct ServerNetPlugin;
 
@@ -25,7 +26,14 @@ impl Plugin for ServerNetPlugin {
             .add_observer(log_disconnect)
             .add_systems(
                 Update,
-                (receive_hello, receive_perks, receive_poses).run_if(server_running),
+                (
+                    receive_hello,
+                    chat::receive_levels.after(receive_hello),
+                    chat::receive_chat.after(receive_hello),
+                    receive_perks,
+                    receive_poses,
+                )
+                    .run_if(server_running),
             );
     }
 }
@@ -103,6 +111,8 @@ fn spawn_player(
             PlayerName::default(),
             Health(0.0),
             PlayerStats::default(),
+            PlayerLevel::default(),
+            ChatRate::default(),
             PlayerTeam(None),
             PlayerOwner(peer),
             Replicate::to_clients(NetworkTarget::All),
@@ -130,6 +140,7 @@ fn log_disconnect(
         With<ClientOf>,
     >,
     names: Query<&PlayerName>,
+    mut chat: SystemChat,
 ) {
     let Ok((RemoteId(peer), disconnected, player, was_connected)) = links.get(trigger.entity)
     else {
@@ -145,15 +156,22 @@ fn log_disconnect(
         "Client {peer} \"{name}\" disconnected: {}",
         disconnected.reason
     );
+    if !name.is_empty() {
+        chat.say(format!("{name} left"));
+    }
 }
 
 fn receive_hello(
     mut links: Query<(&RemoteId, &LinkPlayer, &mut MessageReceiver<Hello>)>,
     mut names: Query<&mut PlayerName>,
+    mut chat: SystemChat,
 ) {
     for (RemoteId(peer), player, mut receiver) in &mut links {
         for hello in receiver.receive() {
             info!("Client {peer} joined as \"{}\"", hello.name);
+            if !hello.name.is_empty() {
+                chat.say(format!("{} joined", hello.name));
+            }
             if let Ok(mut name) = names.get_mut(player.0) {
                 name.0 = hello.name;
             }

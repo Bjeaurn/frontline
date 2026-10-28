@@ -103,8 +103,12 @@ The identity a **Team** plays as on a **Map**, set by the Map's theater: name, e
 _Avoid_: Team (for the identity), army, clan
 
 **Scoreboard**:
-The view, held open with Tab and forced open at **Match** end, listing every player by **Team** with their score, kills and deaths.
+The view, held open with Tab and forced open at **Match** end, listing every player by **Team** with their **Rank insignia**, **Level**, name, kills and deaths.
 _Avoid_: Leaderboard, stats screen
+
+**Chat**:
+Short text messages between players, typed with Y (to everyone) or U (to the player's **Team**) and shown in a small fading box at the bottom left, together with system lines: level-ups ("X reached Level N"), joins, leaves and **Team** switches. The server limits messages to 120 characters and about 3 per 3 seconds per player. A level-up line carries the **Level** a client reported (trusted, ADR 0002).
+_Avoid_: Messages, comms, text box
 
 ### Maps
 
@@ -237,6 +241,10 @@ _Avoid_: Score (that is the **Team** points), points, exp
 **Level**:
 A player's account progression rank, derived from their XP (level n+1 needs n×1500 XP in all), up to a maximum of 30; reaching it unlocks **Weapons**, **Perks**, equipment, **Wildcards** and custom **Loadouts**. Not to be confused with a **Weapon Level**.
 _Avoid_: Rank, prestige
+
+**Rank insignia**:
+The small worn cloth patch that shows a player's **Level** on the **Scoreboard**: chevrons for Levels 1-10, bars for 11-20 and stars for 21-30, with one more of them each Level inside a band. Drawn by `tools/ranks/ranks.py` in the style of the **Faction** emblems. Each client reports its **Level** to the server, which replicates it so everyone sees it.
+_Avoid_: Rank icon, badge, prestige
 
 **Weapon Level**:
 A **Weapon**'s own progression rank (0 to 5), derived from its **Weapon XP**: each kill with it gives 1 **Weapon XP** (+1 for a headshot) and the levels come at 5, 15, 30, 50 and 75. Each level unlocks that **Weapon**'s next **Attachments** (e.g. M4 level 3: Holographic); a **Weapon Level** is separate from the account **Level**.

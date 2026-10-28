@@ -11,7 +11,8 @@ use crate::gear::{AmmoPack, Attachments, EquippedPerks, Perks};
 use crate::modes::ModeView;
 use crate::progression::XpReason;
 use crate::shared::{
-    Health, MatchState, PlayerName, PlayerPose, PlayerStats, PlayerTeam, TELEPORT_DISTANCE, Team,
+    Health, MatchState, PlayerLevel, PlayerName, PlayerPose, PlayerStats, PlayerTeam,
+    TELEPORT_DISTANCE, Team,
 };
 
 /// Netcode protocol id; client and server must agree on it.
@@ -169,6 +170,39 @@ pub struct Respawn {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AmmoRefill;
 
+/// Client -> server (`ControlChannel`): the account Level of the sender's Profile, sent on
+/// joining and on every level-up. The server clamps it into the valid range and keeps it as the
+/// player's replicated `PlayerLevel` (docs/adr/0002).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReportLevel(pub u32);
+
+/// Client -> server (`ControlChannel`): a chat message, to everyone or (`team`) to the sender's
+/// Team. The server trims, validates and rate-limits it (`chat`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SendChat {
+    pub team: bool,
+    pub text: String,
+}
+
+/// Who a chat line is from and who got it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChatKind {
+    All,
+    /// Sent to the sender's Team only.
+    Team,
+    /// From the server: level-ups, joins and leaves, team switches. `name` is empty.
+    System,
+}
+
+/// Server -> clients (`EventChannel`): one chat line. Clients write it as `[ALL] name: text`,
+/// `[TEAM] name: text` or just `text` for `System`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatLine {
+    pub kind: ChatKind,
+    pub name: String,
+    pub text: String,
+}
+
 pub(super) fn register(app: &mut App) {
     app.component::<PlayerPose>()
         .replicate()
@@ -177,6 +211,7 @@ pub(super) fn register(app: &mut App) {
     app.component::<PlayerOwner>().replicate();
     app.component::<Health>().replicate();
     app.component::<PlayerStats>().replicate();
+    app.component::<PlayerLevel>().replicate();
     app.component::<PlayerTeam>().replicate();
     app.component::<MatchState>().replicate();
     app.component::<ModeView>().replicate();
@@ -209,6 +244,10 @@ pub(super) fn register(app: &mut App) {
     app.register_message::<RequestRespawn>()
         .add_direction(NetworkDirection::ClientToServer);
     app.register_message::<ForceRespawn>()
+        .add_direction(NetworkDirection::ClientToServer);
+    app.register_message::<ReportLevel>()
+        .add_direction(NetworkDirection::ClientToServer);
+    app.register_message::<SendChat>()
         .add_direction(NetworkDirection::ClientToServer);
 
     app.add_channel::<ShotChannel>(ChannelSettings {
@@ -244,6 +283,8 @@ pub(super) fn register(app: &mut App) {
     app.register_message::<BombExploded>()
         .add_direction(NetworkDirection::ServerToClient);
     app.register_message::<XpAward>()
+        .add_direction(NetworkDirection::ServerToClient);
+    app.register_message::<ChatLine>()
         .add_direction(NetworkDirection::ServerToClient);
 }
 

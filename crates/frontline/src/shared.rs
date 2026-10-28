@@ -85,6 +85,13 @@ pub struct PlayerStats {
     pub deaths: u32,
 }
 
+/// The account Level a player reported (docs/adr/0002: trusted). The server stores it, replicated
+/// to everyone for the Scoreboard's rank insignia; 0 until the client's first report.
+#[derive(
+    Component, Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Reflect,
+)]
+pub struct PlayerLevel(pub u32);
+
 /// One of the two sides in a team Game Mode. Shown to players relative to themselves
 /// (friendly vs enemy), never by these names' colours.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]

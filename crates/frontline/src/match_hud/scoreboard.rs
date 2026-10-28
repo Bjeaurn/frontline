@@ -8,6 +8,7 @@ use std::cmp::Reverse;
 use bevy::prelude::*;
 
 use super::{ENEMY_COLOR, FRIENDLY_COLOR, MatchQuery, own_side};
+use crate::assets::EMBEDDED_ROOT;
 use crate::data::{GameData, GameModeId};
 use crate::flow::AppState;
 use crate::maps::MapRegistry;
@@ -15,9 +16,9 @@ use crate::net::protocol::PlayerOwner;
 use crate::player::LocalLife;
 use crate::player::input::Bindings;
 use crate::profile::Profile;
-use crate::progression::{LevelProgress, MatchXp};
+use crate::progression::{LevelProgress, MatchXp, rank};
 use crate::shared::{
-    LocalPlayerReplica, MatchPhase, MatchState, PlayerName, PlayerStats, PlayerTeam,
+    LocalPlayerReplica, MatchPhase, MatchState, PlayerLevel, PlayerName, PlayerStats, PlayerTeam,
 };
 use crate::ui::{self, UiFonts};
 
@@ -27,6 +28,8 @@ const SECTION_SIZE: f32 = 24.0;
 const SECTION_EMBLEM_SIZE: f32 = 30.0;
 const ROW_SIZE: f32 = 18.0;
 const STAT_WIDTH: f32 = 48.0;
+const INSIGNIA_SIZE: f32 = 24.0;
+const LEVEL_WIDTH: f32 = 30.0;
 const SELF_BG: Color = Color::srgba(1.0, 1.0, 1.0, 0.12);
 const XP_BAR_HEIGHT: f32 = 10.0;
 const XP_BAR_BACK: Color = Color::srgba(0.0, 0.0, 0.0, 0.55);
@@ -129,6 +132,7 @@ struct Section {
 #[derive(PartialEq)]
 struct Row {
     name: String,
+    level: u32,
     kills: u32,
     deaths: u32,
     me: bool,
@@ -165,10 +169,14 @@ pub(super) fn spawn_scoreboard(mut commands: Commands) {
     ));
 }
 
-/// A row of a name column that takes the remaining width and two right-aligned stat columns.
+/// A row of a name column that takes the remaining width and two right-aligned stat columns. A
+/// player's row (`level`) puts their rank insignia and Level before the name; the header row
+/// leaves that space empty.
 fn columns(
     parent: &mut ChildSpawnerCommands,
     fonts: &UiFonts,
+    assets: &AssetServer,
+    level: Option<u32>,
     cells: [String; 3],
     color: Color,
     background: Color,
@@ -183,6 +191,35 @@ fn columns(
             BackgroundColor(background),
         ))
         .with_children(|row| {
+            row.spawn(Node {
+                width: px(INSIGNIA_SIZE + LEVEL_WIDTH + 12.0),
+                align_items: AlignItems::Center,
+                column_gap: px(6.0),
+                ..default()
+            })
+            .with_children(|lead| {
+                let Some(level) = level else {
+                    return;
+                };
+                lead.spawn((
+                    ImageNode::new(
+                        assets.load(format!("{EMBEDDED_ROOT}{}", rank::asset_path(level))),
+                    ),
+                    Node {
+                        width: px(INSIGNIA_SIZE),
+                        height: px(INSIGNIA_SIZE),
+                        ..default()
+                    },
+                ));
+                lead.spawn((
+                    Node {
+                        width: px(LEVEL_WIDTH),
+                        ..default()
+                    },
+                    ui::label(fonts, &level.to_string(), ROW_SIZE, ui::ACCENT),
+                    TextLayout::justify(Justify::Right),
+                ));
+            });
             row.spawn((
                 Node {
                     flex_grow: 1.0,
@@ -285,6 +322,8 @@ fn build(panel: &mut ChildSpawnerCommands, fonts: &UiFonts, assets: &AssetServer
         columns(
             panel,
             fonts,
+            assets,
+            None,
             ["Name".into(), "K".into(), "D".into()],
             ui::TEXT_DIM,
             Color::NONE,
@@ -293,6 +332,8 @@ fn build(panel: &mut ChildSpawnerCommands, fonts: &UiFonts, assets: &AssetServer
             columns(
                 panel,
                 fonts,
+                assets,
+                Some(row.level),
                 [
                     row.name.clone(),
                     row.kills.to_string(),
@@ -433,6 +474,7 @@ pub(super) fn update_scoreboard(
             &PlayerName,
             &PlayerTeam,
             &PlayerStats,
+            Option<&PlayerLevel>,
             Has<LocalPlayerReplica>,
         ),
         With<PlayerOwner>,
@@ -492,8 +534,9 @@ pub(super) fn update_scoreboard(
             let mut rows: Vec<Row> = players
                 .iter()
                 .filter(|(_, player_team, ..)| player_team.0 == Some(team))
-                .map(|(name, _, stats, me)| Row {
+                .map(|(name, _, stats, level, me)| Row {
                     name: display_name(name),
+                    level: level.map_or(1, |level| level.0.max(1)),
                     kills: stats.kills,
                     deaths: stats.deaths,
                     me,

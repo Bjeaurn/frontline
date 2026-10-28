@@ -39,7 +39,7 @@ Settings (name, mouse sensitivity, field of view, master volume) are saved to `<
 
 `--look <preset>` (dev/test) replaces the Map's own look with a preset from `data/looks.ron` for that run: `overcast_urban`, `desert_dust`, `dawn_cold`, `jungle_humid` or `night_ops`. It applies to the window of a Host; a Dedicated Server accepts it but has nothing to render, and it can't be combined with `--connect`. An unknown preset stops a windowed run at startup with the list.
 
-A shipped build needs its `assets/` folder (maps, models, fonts) next to the executable; only the surface textures and faction emblems are compiled in. Under `cargo run` the assets come from `crates/frontline/assets/`.
+A shipped build needs its `assets/` folder (maps, models, fonts) next to the executable; only the surface textures, faction emblems and rank insignia are compiled in. Under `cargo run` the assets come from `crates/frontline/assets/`.
 
 ## Game Modes
 
@@ -76,7 +76,8 @@ On joining, pick a Team (and then a Loadout). The mouse is grabbed while you pla
 | Aim down sights | Right mouse (hold) |
 | Hold breath (aimed through a 3x or stronger sight; Shift is sprint otherwise) | Left Shift while aiming |
 | Reload | R (sprinting cancels it). Takes longer from an empty magazine (AR 2.5 / 3.1 s, SMG 2.4 / 2.9, Sniper 3.5 / 4.0, Pistol 1.7 / 2.1; Sleight of Hand x0.7) |
-| Scoreboard | Tab (hold) |
+| Scoreboard (every row shows the player's rank insignia and Level before the name) | Tab (hold) |
+| Chat to everyone / to your Team | Y / U: a one-line input opens bottom left (gameplay input is blocked while you type); Enter sends, Esc cancels |
 | Plant / defuse the bomb (Search & Destroy; hold) | F |
 | Switch Team | T (switching kills you, no credit to anyone, and the death screen shows until you respawn on the new Team's spawns; in Search & Destroy you wait for the next round) |
 | Change Loadout (applies on next spawn, or at once within 5 s of spawning) | B |
@@ -153,6 +154,10 @@ The server awards XP for what you do and sends it to you as an `XpAward` (amount
 | Match played / Match won | 200 / +500 |
 
 Level n+1 needs `n * 1500` XP in all (Level 2 at 1,500, Level 3 at 3,000, ...), up to Level 30 for now. The HUD shows a `+100 KILL` popup stack under the crosshair for each award (it fades after about two seconds), a small LEVEL UP toast (the result banner at half size, naming what the Level unlocked) and a CAMO UNLOCKED toast. The end-of-Match Scoreboard ends with your XP summary: XP earned, your Level (`LEVEL 2 > 3  LEVEL UP` when it rose) and a progress bar. The Loadout screen shows your Level and XP.
+
+**Rank insignia.** Every Level has a small worn cloth patch: chevrons for Levels 1-10, bars for 11-20 and stars for 21-30, one more of them each Level inside a band. The Tab Scoreboard shows it, then the Level number, before each name (`[patch] 12  Bjeaurn`). Your client reports its Level to the server when you join and on every level-up (the server clamps it to 1 to 30 and replicates it as `PlayerLevel`; clients are trusted, docs/adr/0002), so the board updates live. The patches are 64x64 PNGs in `assets/icons/ranks/` (`chevrons_01.png` ... `stars_10.png`, compiled into the binary), made by `tools/ranks/ranks.py` on top of the emblem generator (`/tmp/emb/bin/python tools/ranks/ranks.py`, Pillow only; `--sheet out.png` writes a contact sheet); `progression/rank.rs` maps a Level to its patch.
+
+**Chat.** Y opens a one-line input bottom left for everyone, U for your Team (Enter sends, Esc cancels; gameplay input is blocked while you type). The server trims messages, drops any over 120 characters and allows 3 per 3 seconds per player; team chat reaches only your Team. The chat box shows the last 6 lines for about 8 seconds (they fade), and the last 30 while you type. Lines read `[ALL] Name: text` and `[TEAM] Name: text` (team chat in the friendly blue); system lines in a muted grey announce `Name reached Level N`, joins, leaves and Team switches.
 
 **Unlocks** come on two tracks. The **account Level** unlocks Weapons, Perks, equipment and Wildcards; it is a table in `progression.ron` (anything not listed is there from Level 1, and the Default Loadouts are always usable):
 
@@ -241,6 +246,7 @@ The kit has no vehicles, barriers or lamp posts, so the generators build those a
 - `crates/frontline/src/flow.rs`: screen states (main menu, in game, overlays), flow commands, Settings file
 - `crates/frontline/src/menus/`: title, Host setup, Server Browser, Connecting, Pause, Settings and Match Rules editor screens
 - `crates/frontline/src/ui/`: shared menu look: fonts, palette, buttons, panels, sliders, text fields
+- `crates/frontline/src/chat/`: the Y / U chat input and the fading chat box (client); the server side (validation, rate limit, system lines) is `net/chat.rs`
 - `crates/frontline/src/match_hud/`: team select (Faction cards), top-centre score with Faction emblems, the objective HUD, Tab Scoreboard and end screen, friendly name tags
 - `crates/frontline/src/combat/`: server-side shots, per-Hit-Zone hitboxes, damage, health/regen, death and respawn, spawn selection, the Match flow (Rotation, scores, end) and the Bevy systems of the objective modes (`mode_systems.rs`)
 - `crates/frontline/src/modes/`: pure, unit-tested rules of Domination, Headquarters and Search & Destroy (capture, scoring, rounds), the replicated `ModeView`, and the client visuals (zone rings, markers, explosion, spectating)
@@ -260,7 +266,7 @@ The kit has no vehicles, barriers or lamp posts, so the generators build those a
 - `crates/frontline/src/world.rs`: physics
 - `crates/frontline/src/materials.rs`: material library (one tinted material per `SurfaceKind` texture set)
 - `crates/frontline/src/atmosphere.rs`: camera look (tonemapping, bloom, SSAO) and per-Map look presets (`data/looks.ron`)
-- `crates/frontline/src/assets.rs`: files embedded in the binary (faction emblems, camo textures, surface textures; CC0 credits in `assets/textures/CREDITS.md`)
+- `crates/frontline/src/assets.rs`: files embedded in the binary (faction emblems, rank insignia, camo textures, surface textures; CC0 credits in `assets/textures/CREDITS.md`)
 - `tools/mapgen/`: Python generator for `.map` files (the arena, Crossroads) and its building kit
 - `tools/camos/`: generates the weapon camo textures (`camos.py`, Pillow only)
 - `tools/assets/`: imports prop models from raw asset packs (`import_props.py`, also their `bounds.json`)

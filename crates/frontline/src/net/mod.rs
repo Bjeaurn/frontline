@@ -6,6 +6,7 @@
 //! A Dedicated Server starts serving right away; a windowed game hosts, joins and leaves on
 //! `FlowCommand`s (`session`).
 
+mod chat;
 mod checkpoints;
 mod client;
 mod discovery;
@@ -17,6 +18,7 @@ use bevy::prelude::*;
 use lightyear::prelude::Server;
 use lightyear::prelude::server::Started;
 
+pub use chat::{MAX_CHAT_CHARS, SystemChat};
 pub use server::LinkPlayer;
 
 use crate::cli::Mode;

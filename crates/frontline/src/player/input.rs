@@ -50,6 +50,9 @@ pub struct Bindings {
     pub team_menu: Binding,
     /// Hold to show the Scoreboard.
     pub scoreboard: Binding,
+    /// Start typing a chat message to everyone / to the Team.
+    pub chat_all: Binding,
+    pub chat_team: Binding,
     /// Hold to plant or defuse the bomb.
     pub use_objective: Binding,
 }
@@ -74,6 +77,8 @@ impl Default for Bindings {
             secondary_weapon: Binding::keys(&[KeyCode::Digit2]),
             team_menu: Binding::keys(&[KeyCode::KeyT]),
             scoreboard: Binding::keys(&[KeyCode::Tab]),
+            chat_all: Binding::keys(&[KeyCode::KeyY]),
+            chat_team: Binding::keys(&[KeyCode::KeyU]),
             use_objective: Binding::keys(&[KeyCode::KeyF]),
         }
     }

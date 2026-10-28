@@ -6,6 +6,7 @@
 
 pub mod client;
 mod hud;
+pub mod rank;
 
 use std::collections::HashMap;
 
@@ -139,6 +140,11 @@ impl LevelCurve {
     /// Total XP at which `level` is reached.
     pub fn xp_to_reach(&self, level: u32) -> u32 {
         level.saturating_sub(1).saturating_mul(self.xp_per_level)
+    }
+
+    /// `level` brought into `1..=max_level`: what a server accepts of a reported Level.
+    pub fn clamp(&self, level: u32) -> u32 {
+        level.clamp(1, self.max_level)
     }
 
     pub fn level_for(&self, xp: u32) -> u32 {
