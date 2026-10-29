@@ -3,20 +3,20 @@
 //! odd bullet impact or ricochet where a shot ends.
 //!
 //! The local player's own sounds play flat (non-spatial). Other players' shots are spatial: they
-//! come from the shooter's muzzle and fade with distance, heard from the eye camera. Every
-//! gunshot gets a slight random pitch.
+//! come from the shooter's muzzle and fade with distance, heard from the eye camera (`rear_cue`,
+//! which also muffles sounds from behind). Every gunshot gets a slight random pitch.
 
 use std::collections::HashMap;
 
 use bevy::asset::LoadState;
-use bevy::audio::{AudioSource, SpatialListener, SpatialScale, Volume};
+use bevy::audio::{AudioSource, Volume};
 use bevy::prelude::*;
 
 use super::{HeldWeapon, ShotFired, WeaponRng, WeaponSystems};
 use crate::assets::EMBEDDED_ROOT;
 use crate::data::{GameData, WeaponId};
 use crate::net::protocol::ShotTracer;
-use crate::player::EyeCamera;
+use crate::rear_cue::RearCue;
 use crate::shared::{FromServer, LocalPlayer};
 
 const DRY_FIRE: &str = "sounds/dry_fire.ogg";
@@ -32,11 +32,6 @@ const MAG_VOLUME: f32 = 0.45;
 const IMPACT_VOLUME: f32 = 0.9;
 /// Gunshots play between `1 - PITCH_JITTER` and `1 + PITCH_JITTER` times their normal speed.
 const PITCH_JITTER: f32 = 0.05;
-/// Metres to sound distance: full volume within 1 / SPATIAL_SCALE metres, then inverse-square
-/// (about -20 dB at 45 m).
-const SPATIAL_SCALE: f32 = 0.07;
-/// Distance between the listener's ears, in metres.
-const EAR_GAP: f32 = 0.2;
 /// How far into a reload the magazine goes in.
 const MAG_INSERT_AT: f32 = 0.6;
 /// Chance a shot that ends against the World is heard hitting it, and (further) glancing off.
@@ -49,8 +44,7 @@ pub(super) struct WeaponAudioPlugin;
 
 impl Plugin for WeaponAudioPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(add_listener)
-            .add_systems(Startup, load_sounds)
+        app.add_systems(Startup, load_sounds)
             .add_systems(
                 Update,
                 (
@@ -126,42 +120,15 @@ fn log_sounds_loaded(
     }
 }
 
-/// The eye camera is the ears. The ear offsets are mirrored on purpose: rodio 0.22's `Spatial`
-/// (behind Bevy's spatial audio) makes the channel of the ear *farther* from the emitter louder,
-/// so `SpatialListener::new` puts sounds on the wrong side. Recheck on any bevy/rodio upgrade.
-fn add_listener(add: On<Add<EyeCamera>>, mut commands: Commands) {
-    commands.entity(add.entity).insert(SpatialListener {
-        left_ear_offset: Vec3::X * EAR_GAP / 2.0,
-        right_ear_offset: Vec3::X * EAR_GAP / -2.0,
-    });
-}
-
-/// Plays `sound` once; spatial at `at`, else flat. `speed` is the pitch.
-fn play(
-    commands: &mut Commands,
-    sound: &Handle<AudioSource>,
-    volume: f32,
-    speed: f32,
-    at: Option<Vec3>,
-) {
-    let settings = PlaybackSettings::DESPAWN
-        .with_volume(Volume::Linear(volume))
-        .with_speed(speed);
-    match at {
-        Some(position) => commands.spawn((
-            Name::new("Sound"),
-            AudioPlayer::new(sound.clone()),
-            settings
-                .with_spatial(true)
-                .with_spatial_scale(SpatialScale::new(SPATIAL_SCALE)),
-            Transform::from_translation(position),
-        )),
-        None => commands.spawn((
-            Name::new("Sound"),
-            AudioPlayer::new(sound.clone()),
-            settings,
-        )),
-    };
+/// Plays `sound` once, flat (not from a point in the World). `speed` is the pitch.
+fn play_flat(commands: &mut Commands, sound: &Handle<AudioSource>, volume: f32, speed: f32) {
+    commands.spawn((
+        Name::new("Sound"),
+        AudioPlayer::new(sound.clone()),
+        PlaybackSettings::DESPAWN
+            .with_volume(Volume::Linear(volume))
+            .with_speed(speed),
+    ));
 }
 
 fn pitch(rng: &mut WeaponRng) -> f32 {
@@ -169,7 +136,13 @@ fn pitch(rng: &mut WeaponRng) -> f32 {
 }
 
 /// A shot that ended `end` against the World is now and then heard hitting it.
-fn play_impact(commands: &mut Commands, sounds: &WeaponSounds, rng: &mut WeaponRng, end: Vec3) {
+fn play_impact(
+    commands: &mut Commands,
+    cue: &mut RearCue,
+    sounds: &WeaponSounds,
+    rng: &mut WeaponRng,
+    end: Vec3,
+) {
     let roll = rng.next();
     let sound = if roll < RICOCHET_CHANCE {
         &sounds.ricochet
@@ -178,13 +151,8 @@ fn play_impact(commands: &mut Commands, sounds: &WeaponSounds, rng: &mut WeaponR
     } else {
         return;
     };
-    play(
-        commands,
-        sound,
-        IMPACT_VOLUME,
-        0.9 + rng.next() * 0.2,
-        Some(end),
-    );
+    let speed = 0.9 + rng.next() * 0.2;
+    cue.play(commands, sound, IMPACT_VOLUME, speed, end);
 }
 
 fn play_local_shots(
@@ -192,20 +160,20 @@ fn play_local_shots(
     sounds: Res<WeaponSounds>,
     data: Res<GameData>,
     mut rng: ResMut<WeaponRng>,
+    mut cue: RearCue,
     mut commands: Commands,
 ) {
     for shot in fired.read() {
         let speed = pitch(&mut rng) * shot.pitch;
-        play(
+        play_flat(
             &mut commands,
             &sounds.shots[&shot.weapon],
             LOCAL_SHOT_VOLUME * shot.volume,
             speed,
-            None,
         );
         let range = data.weapon(shot.weapon).range;
         if shot.muzzle.distance(shot.end) < range - RANGE_MARGIN {
-            play_impact(&mut commands, &sounds, &mut rng, shot.end);
+            play_impact(&mut commands, &mut cue, &sounds, &mut rng, shot.end);
         }
     }
 }
@@ -215,21 +183,22 @@ fn play_remote_shots(
     sounds: Res<WeaponSounds>,
     data: Res<GameData>,
     mut rng: ResMut<WeaponRng>,
+    mut cue: RearCue,
     mut commands: Commands,
 ) {
     for FromServer(tracer) in tracers.read() {
         let (volume, shot_pitch) = data.shot_sound(tracer.attachments);
         let speed = pitch(&mut rng) * shot_pitch;
-        play(
+        cue.play(
             &mut commands,
             &sounds.shots[&tracer.weapon],
             REMOTE_SHOT_VOLUME * volume,
             speed,
-            Some(tracer.origin),
+            tracer.origin,
         );
         let range = data.weapon(tracer.weapon).range;
         if tracer.origin.distance(tracer.end) < range - RANGE_MARGIN {
-            play_impact(&mut commands, &sounds, &mut rng, tracer.end);
+            play_impact(&mut commands, &mut cue, &sounds, &mut rng, tracer.end);
         }
     }
 }
@@ -260,11 +229,11 @@ fn play_reload_sounds(
     if !watch.reloading {
         watch.reloading = true;
         if weapon.rounds == 0 {
-            play(&mut commands, &sounds.dry_fire, CLICK_VOLUME, 1.0, None);
+            play_flat(&mut commands, &sounds.dry_fire, CLICK_VOLUME, 1.0);
         }
     }
     if progress >= MAG_INSERT_AT && !watch.mag_played {
         watch.mag_played = true;
-        play(&mut commands, &sounds.mag_insert, MAG_VOLUME, 1.0, None);
+        play_flat(&mut commands, &sounds.mag_insert, MAG_VOLUME, 1.0);
     }
 }

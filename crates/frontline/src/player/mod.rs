@@ -106,7 +106,7 @@ impl Plugin for RemotePlayerVisualsPlugin {
                 Startup,
                 (
                     remote::load_remote_assets,
-                    footsteps::load_footstep_sound,
+                    footsteps::load_footstep_sounds,
                     packs::load_pack_assets,
                 ),
             )

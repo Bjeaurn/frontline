@@ -141,7 +141,7 @@ The Profile is a client-local file, `<config dir>/frontline/profile.ron`, next t
 | Perk 2 | Stopping Power (+25% bullet damage), Lightweight (+10% move speed) |
 | Perk 3 | Marathon (sprint 2.5x as long), Ninja (your footsteps make no sound) |
 
-Other players' footsteps are heard as a quiet thud while they walk or run; crouched and prone players, and Ninja, are silent. The server applies the Attachments' falloff and the Perks' damage (a Perk Greed pair both count); clients tell it their Attachments with every shot and their Perks when they spawn (clients are trusted on a LAN, docs/adr/0002). Fire Pings and the Minimap don't exist yet, so the Silencer only changes the flash, the sound and the damage range.
+Other players' footsteps are heard as concrete steps while they walk or run (about 2.2 a second walking, rising to about 3 sprinting); crouched and prone players, and Ninja, are silent. Positional sounds (other players' shots, impacts and footsteps) play low-passed and about 3 dB quieter when they come from behind you. The server applies the Attachments' falloff and the Perks' damage (a Perk Greed pair both count); clients tell it their Attachments with every shot and their Perks when they spawn (clients are trusted on a LAN, docs/adr/0002). Fire Pings and the Minimap don't exist yet, so the Silencer only changes the flash, the sound and the damage range.
 
 ## Progression
 

@@ -21,6 +21,7 @@ mod net;
 mod player;
 mod profile;
 mod progression;
+mod rear_cue;
 mod rotation;
 mod rules;
 mod shared;
@@ -131,6 +132,7 @@ fn main() -> AppExit {
             ui::UiPlugin,
             menus::MenusPlugin,
             player::LocalControllerPlugin,
+            rear_cue::RearCuePlugin,
             player::RemotePlayerVisualsPlugin,
             weapon::WeaponClientPlugin,
             match_hud::MatchHudPlugin,

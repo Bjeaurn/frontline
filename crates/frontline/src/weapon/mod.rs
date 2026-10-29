@@ -406,9 +406,9 @@ struct ShotFired {
     pitch: f32,
 }
 
-/// Small xorshift generator for spread, recoil and cosmetic jitter.
+/// Small xorshift generator for spread, recoil and cosmetic jitter (footsteps use it too).
 #[derive(Resource, Debug)]
-struct WeaponRng(u64);
+pub(crate) struct WeaponRng(u64);
 
 impl WeaponRng {
     fn seeded() -> Self {
@@ -416,7 +416,7 @@ impl WeaponRng {
     }
 
     /// Uniform in `[0, 1)`.
-    fn next(&mut self) -> f32 {
+    pub(crate) fn next(&mut self) -> f32 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
@@ -424,7 +424,7 @@ impl WeaponRng {
     }
 
     /// Uniform in `[-1, 1)`.
-    fn signed(&mut self) -> f32 {
+    pub(crate) fn signed(&mut self) -> f32 {
         self.next() * 2.0 - 1.0
     }
 }
