@@ -16,8 +16,9 @@ use lightyear::prelude::*;
 use super::protocol::{
     AmmoRefill, BombExploded, CONNECTION_TIMEOUT_SECS, ChatLine, ChooseTeam, ControlChannel,
     Damaged, EquipPerks, FallDamage, FireShot, ForceRespawn, Hello, HitConfirm, KillFeed,
-    ObjectiveHold, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseChannel, PoseUpdate, ReportLevel,
-    RequestRespawn, Respawn, SendChat, ShotChannel, ShotTracer, XpAward,
+    ObjectiveHold, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseChannel, PoseUpdate,
+    ProjectileFired, ProjectileLanded, ReportLevel, RequestRespawn, Respawn, SendChat,
+    ShotChannel, ShotTracer, XpAward,
 };
 use crate::data::GameData;
 use crate::flow::Settings;
@@ -37,6 +38,8 @@ impl Plugin for ClientNetPlugin {
             .add_message::<FromServer<KillFeed>>()
             .add_message::<FromServer<Respawn>>()
             .add_message::<FromServer<ShotTracer>>()
+            .add_message::<FromServer<ProjectileFired>>()
+            .add_message::<FromServer<ProjectileLanded>>()
             .add_message::<FromServer<BombExploded>>()
             .add_message::<FromServer<AmmoRefill>>()
             .add_message::<FromServer<XpAward>>()
@@ -59,6 +62,8 @@ impl Plugin for ClientNetPlugin {
                     forward_from_server::<KillFeed>,
                     forward_from_server::<Respawn>,
                     forward_from_server::<ShotTracer>,
+                    forward_from_server::<ProjectileFired>,
+                    forward_from_server::<ProjectileLanded>,
                     forward_from_server::<BombExploded>,
                     forward_from_server::<AmmoRefill>,
                     forward_from_server::<XpAward>,

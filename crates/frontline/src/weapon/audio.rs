@@ -11,11 +11,13 @@ use std::collections::HashMap;
 use bevy::asset::LoadState;
 use bevy::audio::{AudioSource, Volume};
 use bevy::prelude::*;
+use lightyear::prelude::LocalId;
+use lightyear::prelude::client::{Client, Connected};
 
 use super::{HeldWeapon, ShotFired, WeaponRng, WeaponSystems};
 use crate::assets::EMBEDDED_ROOT;
 use crate::data::{GameData, WeaponId};
-use crate::net::protocol::ShotTracer;
+use crate::net::protocol::{ProjectileFired, ProjectileLanded, ShotTracer};
 use crate::rear_cue::RearCue;
 use crate::shared::{FromServer, LocalPlayer};
 
@@ -50,6 +52,7 @@ impl Plugin for WeaponAudioPlugin {
                 (
                     play_local_shots,
                     play_remote_shots,
+                    play_projectile_sounds,
                     play_reload_sounds,
                     log_sounds_loaded,
                 )
@@ -172,8 +175,10 @@ fn play_local_shots(
             speed,
         );
         let range = data.weapon(shot.weapon).range;
-        if shot.muzzle.distance(shot.end) < range - RANGE_MARGIN {
-            play_impact(&mut commands, &mut cue, &sounds, &mut rng, shot.end);
+        if let Some(end) = shot.end
+            && shot.muzzle.distance(end) < range - RANGE_MARGIN
+        {
+            play_impact(&mut commands, &mut cue, &sounds, &mut rng, end);
         }
     }
 }
@@ -199,6 +204,40 @@ fn play_remote_shots(
         let range = data.weapon(tracer.weapon).range;
         if tracer.origin.distance(tracer.end) < range - RANGE_MARGIN {
             play_impact(&mut commands, &mut cue, &sounds, &mut rng, tracer.end);
+        }
+    }
+}
+
+/// Server-simulated bullets: other players' shots are heard as the bullet leaves the muzzle
+/// (the shooter's own gunshot already played), and the odd impact where any bullet lands.
+fn play_projectile_sounds(
+    mut fired: MessageReader<FromServer<ProjectileFired>>,
+    mut landed: MessageReader<FromServer<ProjectileLanded>>,
+    local: Query<&LocalId, (With<Client>, With<Connected>)>,
+    sounds: Res<WeaponSounds>,
+    data: Res<GameData>,
+    mut rng: ResMut<WeaponRng>,
+    mut cue: RearCue,
+    mut commands: Commands,
+) {
+    let own = local.single().ok().map(|id| id.0);
+    for FromServer(shot) in fired.read() {
+        if Some(shot.shooter) == own {
+            continue;
+        }
+        let (volume, shot_pitch) = data.shot_sound(shot.attachments);
+        let speed = pitch(&mut rng) * shot_pitch;
+        cue.play(
+            &mut commands,
+            &sounds.shots[&shot.weapon],
+            REMOTE_SHOT_VOLUME * volume,
+            speed,
+            shot.origin,
+        );
+    }
+    for FromServer(landing) in landed.read() {
+        if landing.struck {
+            play_impact(&mut commands, &mut cue, &sounds, &mut rng, landing.position);
         }
     }
 }

@@ -38,8 +38,7 @@ pub struct LocalControllerPlugin;
 
 impl Plugin for LocalControllerPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<input::Bindings>()
-            .init_resource::<controller::MouseCaptured>()
+        app.init_resource::<controller::MouseCaptured>()
             .init_resource::<controller::MenuOpen>()
             .init_resource::<controller::StanceShapes>()
             .init_resource::<LocalLife>()

@@ -174,7 +174,7 @@ pub struct WeaponStats {
     pub falloff_start: f32,
     pub falloff_end: f32,
     pub zone_multipliers: ZoneMultipliers,
-    /// Maximum hitscan distance.
+    /// Maximum distance: of the hitscan ray, or of a projectile's path.
     pub range: f32,
     pub magazine: u32,
     /// Reload time with rounds left in the magazine (a tactical reload).
@@ -247,6 +247,10 @@ pub struct WeaponStats {
     /// Bolt-action: the sway kick a scoped rack gives, in degrees.
     #[serde(default)]
     pub rack_kick_deg: f32,
+    /// Fired as a server-simulated bullet with travel time and drop instead of a hitscan ray
+    /// (docs/adr/0005). `range` then bounds the length of its path.
+    #[serde(default)]
+    pub projectile: Option<ProjectileModel>,
     /// Set by the fitted Attachments (`GameData::effective_weapon`), not by the data file.
     /// The sight in use; `sight_point` and `sight_eye_relief` then describe it.
     #[serde(skip_deserializing)]
@@ -297,6 +301,16 @@ impl WeaponStats {
     pub fn steady_sight(&self) -> bool {
         self.magnification >= STEADY_MAGNIFICATION
     }
+}
+
+/// How a Weapon's bullet flies when it isn't hitscan: leaves the muzzle at `muzzle_speed` and
+/// is pulled down by `gravity` (game-tuned, not physical).
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+pub struct ProjectileModel {
+    /// Metres per second.
+    pub muzzle_speed: f32,
+    /// Downward acceleration in metres per second squared.
+    pub gravity: f32,
 }
 
 /// Magnification from which a sight allows hold breath and shows a scope glint.
@@ -377,6 +391,7 @@ impl WeaponStats {
             rack_secs_scoped: 1.4,
             rack_secs_unscoped: 0.9,
             rack_kick_deg: 0.0,
+            projectile: None,
             sight: SightKind::Irons,
             magnification: 1.0,
             sway_scale: 1.0,
@@ -487,6 +502,14 @@ pub struct MovementTuning {
     /// How far ahead of the body a ledge is looked for.
     pub mantle_reach: f32,
     pub mantle_secs: f32,
+    /// Vaulting a thin wall or window sill: the sill top must be this high at least and
+    /// `vault_max_height` at most above the feet, the wall at most `vault_max_thickness` thick,
+    /// and the floor behind at most `vault_max_drop` below the feet.
+    pub vault_min_height: f32,
+    pub vault_max_height: f32,
+    pub vault_max_thickness: f32,
+    pub vault_max_drop: f32,
+    pub vault_secs: f32,
     /// Prone pressed mid-sprint dives: a lunge at `dive_speed` for `dive_secs`, with a hop of
     /// `dive_hop_height`.
     pub dive_speed: f32,
@@ -520,6 +543,11 @@ impl MovementTuning {
             mantle_max_height: 1.5,
             mantle_reach: 0.5,
             mantle_secs: 0.5,
+            vault_min_height: 0.6,
+            vault_max_height: 1.2,
+            vault_max_thickness: 0.6,
+            vault_max_drop: 1.0,
+            vault_secs: 0.5,
             dive_speed: 4.0,
             dive_secs: 0.4,
             dive_hop_height: 0.1,
@@ -811,6 +839,12 @@ impl GameData {
                     || (weapon.rack_secs_scoped > 0.0 && weapon.rack_secs_unscoped > 0.0),
                 "{WEAPONS_FILE}: bolt-action {id:?} needs rack_secs_scoped and rack_secs_unscoped"
             );
+            if let Some(projectile) = weapon.projectile {
+                assert!(
+                    projectile.muzzle_speed > 0.0 && projectile.gravity >= 0.0,
+                    "{WEAPONS_FILE}: {id:?}'s projectile needs a positive muzzle_speed and a non-negative gravity"
+                );
+            }
         }
         for class in [WeaponClass::Primary, WeaponClass::Secondary] {
             assert!(
@@ -958,6 +992,20 @@ mod tests {
             ..rules
         };
         assert_eq!(slow.early_respawn_secs(), slow.respawn_delay_secs);
+    }
+
+    #[test]
+    fn only_the_sniper_is_a_projectile_and_its_speed_is_game_tuned() {
+        let data = GameData::load();
+        for id in WeaponId::ALL {
+            let projectile = data.weapon(id).projectile;
+            if id == WeaponId::SniperRifle {
+                let model = projectile.expect("the sniper flies as a projectile");
+                assert!((550.0..=650.0).contains(&model.muzzle_speed));
+            } else {
+                assert_eq!(projectile, None, "{id:?} stays hitscan");
+            }
+        }
     }
 
     #[test]

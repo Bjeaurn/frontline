@@ -18,6 +18,14 @@
     mantle_max_height: 1.6,
     mantle_reach: 0.6,
     mantle_secs: 0.4,
+    // Vault (over a thin wall or window sill; a jump into it, like a mantle): sill top between
+    // the min and max height above the feet, wall at most max_thickness thick, the floor behind
+    // at most max_drop below the feet.
+    vault_min_height: 0.6,
+    vault_max_height: 1.2,
+    vault_max_thickness: 0.6,
+    vault_max_drop: 1.0,
+    vault_secs: 0.5,
     // Dive to prone (prone pressed while sprinting): lunge, then no movement/fire/stand, then a
     // short wait before the prone player may stand or sprint again.
     dive_speed: 4.0,

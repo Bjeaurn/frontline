@@ -1,5 +1,6 @@
-//! Hitscan: turns each `FireShot` into a raycast, a tracer for everyone else and, on a player
-//! hit, a `PlayerHit` for `health::apply_hits`.
+//! Turns each `FireShot` into a hit: hitscan Weapons get a raycast, a tracer for everyone else
+//! and, on a player hit, a `PlayerHit` for `health::apply_hits`; Weapons with a `projectile`
+//! model launch a bullet instead (`projectiles`, docs/adr/0005).
 
 use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
 use bevy::prelude::*;
@@ -9,10 +10,13 @@ use lightyear::prelude::*;
 use super::damage::HitZone;
 use super::hitbox::{Hitbox, HitboxOf, Hitboxes};
 use super::match_flow::is_live;
+use super::projectiles::Bullets;
 use crate::data::{GameData, WeaponId};
 use crate::gear::Attachments;
 use crate::net::LinkPlayer;
-use crate::net::protocol::{EffectChannel, FireShot, PlayerOwner, ShotTracer};
+use crate::net::protocol::{
+    EffectChannel, EventChannel, FireShot, PlayerOwner, ProjectileFired, ShotTracer,
+};
 use crate::shared::{GameLayer, Health, MatchState};
 
 /// A shot struck a player's hitbox.
@@ -39,6 +43,11 @@ pub(super) fn resolve_shots(
         (Entity, &mut MessageSender<ShotTracer>),
         (With<ClientOf>, With<Connected>),
     >,
+    mut fired_senders: Query<
+        &mut MessageSender<ProjectileFired>,
+        (With<ClientOf>, With<Connected>),
+    >,
+    mut bullets: ResMut<Bullets>,
     state: Single<&MatchState>,
     spatial: SpatialQuery,
     data: Res<GameData>,
@@ -56,6 +65,13 @@ pub(super) fn resolve_shots(
             let Ok(direction) = Dir3::new(shot.direction) else {
                 continue;
             };
+            if let Some(model) = data.weapon(shot.weapon).projectile {
+                let fired = bullets.launch(player.0, owner.0, &shot, direction, model);
+                for mut sender in &mut fired_senders {
+                    sender.send::<EventChannel>(fired);
+                }
+                continue;
+            }
             let range = data.weapon(shot.weapon).range;
             let filter = SpatialQueryFilter::from_mask([GameLayer::World, GameLayer::Hitbox])
                 .with_excluded_entities(own_hitboxes.entities());

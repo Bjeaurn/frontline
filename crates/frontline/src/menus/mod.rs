@@ -14,20 +14,19 @@ mod title;
 use bevy::prelude::*;
 
 use crate::flow::{AppState, MenuScreen, Overlay};
-use crate::player::input::Bindings;
+use crate::player::input::{Bindings, Rebinding};
 
 pub struct MenusPlugin;
 
 impl Plugin for MenusPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(AppState::MainMenu), title::spawn_menu_camera)
+        app.add_plugins(settings::SettingsPlugin)
+            .add_systems(OnEnter(AppState::MainMenu), title::spawn_menu_camera)
             .add_systems(OnEnter(MenuScreen::Title), title::spawn_title)
             .add_systems(OnEnter(MenuScreen::HostSetup), host_setup::spawn_host_setup)
             .add_systems(OnEnter(MenuScreen::ServerBrowser), browser::spawn_browser)
-            .add_systems(OnEnter(MenuScreen::Settings), settings::spawn_menu_settings)
             .add_systems(OnEnter(MenuScreen::Rules), rules_editor::spawn_menu_rules)
             .add_systems(OnEnter(Overlay::Pause), pause::spawn_pause)
-            .add_systems(OnEnter(Overlay::Settings), settings::spawn_overlay_settings)
             .add_systems(OnEnter(Overlay::Rules), rules_editor::spawn_overlay_rules)
             .add_systems(
                 Update,
@@ -51,7 +50,6 @@ impl Plugin for MenusPlugin {
                         .chain()
                         .run_if(rules_editor_open)
                         .run_if(resource_exists::<rules_editor::Editor>),
-                    (settings::show_readouts, settings::show_cod4_status),
                     connecting::show_connecting.run_if(in_state(AppState::InGame)),
                 ),
             );
@@ -63,9 +61,13 @@ impl Plugin for MenusPlugin {
 fn back_to_title(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<Bindings>,
+    rebinding: Res<Rebinding>,
     screen: Res<State<MenuScreen>>,
     mut next: ResMut<NextState<MenuScreen>>,
 ) {
+    if rebinding.active() {
+        return;
+    }
     if !matches!(
         *screen.get(),
         MenuScreen::Title | MenuScreen::Rules | MenuScreen::CreateAClass

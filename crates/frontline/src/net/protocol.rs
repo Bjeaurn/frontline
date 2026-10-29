@@ -99,6 +99,30 @@ pub struct ShotTracer {
     pub end: Vec3,
 }
 
+/// Server -> all clients, shooter included (`EventChannel`): a projectile Weapon's bullet left
+/// the muzzle (docs/adr/0005). Every client draws it flying along
+/// `ballistics::position_at(origin, velocity, ..)` until the matching `ProjectileLanded`;
+/// everyone but the shooter also hears the shot.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProjectileFired {
+    /// Names the bullet for its `ProjectileLanded`.
+    pub id: u32,
+    pub shooter: PeerId,
+    pub weapon: WeaponId,
+    pub attachments: Attachments,
+    pub origin: Vec3,
+    pub velocity: Vec3,
+}
+
+/// Server -> all clients (`EventChannel`): the bullet `id` ended at `position`; `struck` is
+/// false when it ran out of range in the air.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProjectileLanded {
+    pub id: u32,
+    pub position: Vec3,
+    pub struck: bool,
+}
+
 /// Server -> shooter: one of their shots hit a player (hitmarker).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HitConfirm {
@@ -269,6 +293,10 @@ pub(super) fn register(app: &mut App) {
     app.register_message::<FireShot>()
         .add_direction(NetworkDirection::ClientToServer);
     app.register_message::<ShotTracer>()
+        .add_direction(NetworkDirection::ServerToClient);
+    app.register_message::<ProjectileFired>()
+        .add_direction(NetworkDirection::ServerToClient);
+    app.register_message::<ProjectileLanded>()
         .add_direction(NetworkDirection::ServerToClient);
     app.register_message::<HitConfirm>()
         .add_direction(NetworkDirection::ServerToClient);

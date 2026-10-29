@@ -1,5 +1,6 @@
-//! Server-side combat (Dedicated and Host): Teams, hitboxes, hitscan shots, damage, health
-//! regen, death (shots, falls) and respawn, the Match flow (Rotation, scores, end) and the objective Game Modes.
+//! Server-side combat (Dedicated and Host): Teams, hitboxes, hitscan shots and projectile
+//! bullets, damage, health regen, death (shots, falls) and respawn, the Match flow (Rotation,
+//! scores, end) and the objective Game Modes.
 //! The server is the only writer of `Health`, `PlayerStats`, `PlayerTeam`, `MatchState` and
 //! `ModeView` (docs/adr/0002).
 //!
@@ -13,6 +14,7 @@ mod lives;
 mod match_flow;
 mod mode_systems;
 mod packs;
+mod projectiles;
 mod shots;
 mod spawn;
 mod teams;
@@ -30,6 +32,7 @@ pub struct CombatServerPlugin;
 impl Plugin for CombatServerPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<shots::PlayerHit>()
+            .init_resource::<projectiles::Bullets>()
             .add_observer(health::init_player)
             .add_observer(match_flow::start_match)
             .add_observer(match_flow::end_match)
@@ -50,6 +53,7 @@ impl Plugin for CombatServerPlugin {
                     health::respawn_players.run_if(match_map_ready),
                     packs::tick_packs,
                     hitbox::sync_hitboxes,
+                    projectiles::fly_bullets,
                 )
                     .chain()
                     .run_if(server_running),

@@ -1,16 +1,20 @@
-//! Camera look and per-Map mood. Fixed for every Map: TonyMcMapface tonemapping (HDR), mild
-//! bloom and SSAO, added to every world-rendering `Camera3d` (gameplay eye, main menu orbit) when
-//! it spawns. Per Map: a look preset from `data/looks.ron` (grade, fog, sun, ambient, sky),
-//! applied when the Map is ready. The viewmodel camera only shares the tone curve and grade (see
-//! `weapon::viewmodel`). Client/Host only.
+//! Camera look and per-Map mood. Fixed for every Map: TonyMcMapface tonemapping (HDR), added to
+//! every world-rendering `Camera3d` (gameplay eye, main menu orbit) when it spawns. Bloom, SSAO,
+//! anti-aliasing and the sun's shadows follow Settings > Video (`video::Quality`) and apply
+//! live. Per Map: a look preset from `data/looks.ron` (grade, fog, sun, ambient, sky), applied
+//! when the Map is ready; the Video brightness setting offsets its exposure. The viewmodel
+//! camera only shares the tone curve and grade (see `weapon::viewmodel`). Client/Host only.
 //!
-//! SSAO (Medium) needs `Msaa::Off`, so world cameras anti-alias with FXAA instead: the cheapest
-//! option, where TAA would also need motion vectors and ghosts on fast flicks.
+//! SSAO needs `Msaa::Off`, so world cameras anti-alias in post: FXAA (cheapest) or SMAA, where
+//! TAA would also need motion vectors and ghosts on fast flicks.
 
 use std::collections::HashMap;
 
 use bevy::anti_alias::fxaa::Fxaa;
+use bevy::anti_alias::smaa::Smaa;
+use bevy::core_pipeline::prepass::{DepthPrepass, NormalPrepass};
 use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::light::DirectionalLightShadowMap;
 use bevy::pbr::{
     DistanceFog, FogFalloff, ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel,
 };
@@ -20,6 +24,7 @@ use bevy::render::view::{ColorGrading, ColorGradingGlobal, ColorGradingSection};
 use serde::Deserialize;
 
 use crate::maps::MapReady;
+use crate::video::{ActiveVideo, AntiAliasing, Quality, SsaoQuality};
 use crate::weapon::ViewmodelCamera;
 
 const LOOKS_FILE: &str = "looks.ron";
@@ -60,10 +65,11 @@ fn srgb((r, g, b): Rgb) -> Color {
 }
 
 impl LookPreset {
-    pub fn color_grading(&self) -> ColorGrading {
+    /// The look's grade with `brightness_ev` (Settings > Video) added to its exposure.
+    pub fn color_grading(&self, brightness_ev: f32) -> ColorGrading {
         ColorGrading {
             global: ColorGradingGlobal {
-                exposure: self.exposure,
+                exposure: self.exposure + brightness_ev,
                 temperature: self.temperature,
                 tint: self.tint,
                 post_saturation: self.saturation,
@@ -87,17 +93,21 @@ impl LookPreset {
         }
     }
 
-    fn sun(&self) -> (DirectionalLight, Transform) {
+    fn sun(&self, shadows: bool) -> (DirectionalLight, Transform) {
         let light = DirectionalLight {
             color: srgb(self.sun_color),
             illuminance: self.sun_illuminance,
-            shadow_maps_enabled: true,
+            shadow_maps_enabled: shadows,
             ..default()
         };
         let direction = Vec3::from(self.sun_direction);
         (light, Transform::default().looking_to(direction, Vec3::Y))
     }
 }
+
+/// The Map's sun, the one light whose shadows Settings > Video switches.
+#[derive(Component)]
+struct Sun;
 
 /// Every look preset by name, from `data/looks.ron`.
 #[derive(Resource, Debug)]
@@ -140,7 +150,58 @@ impl Plugin for AtmospherePlugin {
             .insert_resource(ActiveLook(default_look))
             .add_observer(add_atmosphere)
             .add_observer(apply_map_look)
-            .add_systems(Update, scale_practical_lights);
+            .add_systems(
+                Update,
+                (
+                    scale_practical_lights,
+                    apply_video.run_if(resource_changed::<ActiveVideo>),
+                ),
+            );
+    }
+}
+
+fn bloom() -> Bloom {
+    Bloom {
+        intensity: 0.08,
+        ..Bloom::NATURAL
+    }
+}
+
+/// Puts the quality settings' camera effects on a world camera, and takes the off ones away.
+/// SSAO brings its depth and normal prepasses along, so they go with it.
+fn set_quality(camera: &mut EntityCommands, quality: &Quality) {
+    if quality.bloom {
+        camera.insert(bloom());
+    } else {
+        camera.remove::<Bloom>();
+    }
+    let ssao_level = match quality.ssao {
+        SsaoQuality::Off => None,
+        SsaoQuality::Low => Some(ScreenSpaceAmbientOcclusionQualityLevel::Low),
+        SsaoQuality::Medium => Some(ScreenSpaceAmbientOcclusionQualityLevel::Medium),
+        SsaoQuality::High => Some(ScreenSpaceAmbientOcclusionQualityLevel::High),
+    };
+    match ssao_level {
+        Some(quality_level) => {
+            camera.insert(ScreenSpaceAmbientOcclusion {
+                quality_level,
+                ..default()
+            });
+        }
+        None => {
+            camera.remove::<(ScreenSpaceAmbientOcclusion, DepthPrepass, NormalPrepass)>();
+        }
+    }
+    match quality.aa {
+        AntiAliasing::Off => {
+            camera.remove::<(Fxaa, Smaa)>();
+        }
+        AntiAliasing::Fxaa => {
+            camera.insert(Fxaa::default()).remove::<Smaa>();
+        }
+        AntiAliasing::Smaa => {
+            camera.insert(Smaa::default()).remove::<Fxaa>();
+        }
     }
 }
 
@@ -148,28 +209,53 @@ fn add_atmosphere(
     add: On<Add<Camera3d>>,
     viewmodels: Query<(), With<ViewmodelCamera>>,
     look: Res<ActiveLook>,
+    video: Res<ActiveVideo>,
     mut commands: Commands,
 ) {
-    let grading = look.0.color_grading();
+    let grading = look.0.color_grading(video.0.exposure_offset());
+    let mut camera = commands.entity(add.entity);
     if viewmodels.contains(add.entity) {
-        commands.entity(add.entity).insert(grading);
+        camera.insert(grading);
         return;
     }
-    commands.entity(add.entity).insert((
-        TONEMAPPING,
-        grading,
-        Bloom {
-            intensity: 0.08,
-            ..Bloom::NATURAL
-        },
-        Msaa::Off,
-        Fxaa::default(),
-        ScreenSpaceAmbientOcclusion {
-            quality_level: ScreenSpaceAmbientOcclusionQualityLevel::Medium,
-            ..default()
-        },
-        look.0.fog(),
-    ));
+    camera.insert((TONEMAPPING, grading, Msaa::Off, look.0.fog()));
+    set_quality(&mut camera, &video.0.quality);
+}
+
+/// Carries out a change of the Video settings on the cameras and the sun: exposure (brightness)
+/// everywhere, the quality effects on the world cameras, shadows on the sun.
+fn apply_video(
+    video: Res<ActiveVideo>,
+    look: Res<ActiveLook>,
+    mut shadow_map: ResMut<DirectionalLightShadowMap>,
+    mut cameras: Query<(Entity, &mut ColorGrading, Has<ViewmodelCamera>), With<Camera3d>>,
+    mut suns: Query<&mut DirectionalLight, With<Sun>>,
+    mut commands: Commands,
+    mut applied: Local<Option<Quality>>,
+) {
+    let video = &video.0;
+    let exposure = look.0.exposure + video.exposure_offset();
+    // Cameras keep their effects through a brightness drag; only a quality change touches them.
+    let quality_changed = *applied != Some(video.quality);
+    *applied = Some(video.quality);
+    for (entity, mut grading, viewmodel) in &mut cameras {
+        if grading.global.exposure != exposure {
+            grading.global.exposure = exposure;
+        }
+        if !viewmodel && quality_changed {
+            set_quality(&mut commands.entity(entity), &video.quality);
+        }
+    }
+    let size = video.quality.shadows.map_size();
+    if shadow_map.size != size {
+        shadow_map.size = size;
+    }
+    let shadows = video.quality.shadows.enabled();
+    for mut sun in &mut suns {
+        if sun.shadow_maps_enabled != shadows {
+            sun.shadow_maps_enabled = shadows;
+        }
+    }
 }
 
 /// Applies the ready Map's look: sky, ambient, a sun that goes with the Map, and every camera's
@@ -179,6 +265,7 @@ fn apply_map_look(
     maps: Query<&MapReady>,
     looks: Res<Looks>,
     look_override: Res<LookOverride>,
+    video: Res<ActiveVideo>,
     mut active: ResMut<ActiveLook>,
     mut cameras: Query<(&mut ColorGrading, Option<&mut DistanceFog>), With<Camera3d>>,
     mut commands: Commands,
@@ -209,10 +296,10 @@ fn apply_map_look(
         brightness: look.ambient_brightness,
         ..default()
     });
-    let (sun, transform) = look.sun();
-    commands.spawn((Name::new("Sun"), sun, transform, ChildOf(add.entity)));
+    let (sun, transform) = look.sun(video.0.quality.shadows.enabled());
+    commands.spawn((Name::new("Sun"), Sun, sun, transform, ChildOf(add.entity)));
     for (mut grading, fog) in &mut cameras {
-        *grading = look.color_grading();
+        *grading = look.color_grading(video.0.exposure_offset());
         if let Some(mut fog) = fog {
             *fog = look.fog();
         }
@@ -289,9 +376,18 @@ mod tests {
     fn preset_drives_the_grade() {
         let looks: HashMap<String, LookPreset> = ron::from_str(BUILTIN_LOOKS).unwrap();
         let look = &looks["desert_dust"];
-        let grading = look.color_grading();
+        let grading = look.color_grading(0.0);
         assert_eq!(grading.global.exposure, look.exposure);
         assert_eq!(grading.global.post_saturation, look.saturation);
         assert_eq!(grading.midtones.contrast, look.contrast);
+    }
+
+    #[test]
+    fn brightness_offsets_the_looks_exposure() {
+        let looks: HashMap<String, LookPreset> = ron::from_str(BUILTIN_LOOKS).unwrap();
+        let look = &looks["night_ops"];
+        let brighter = look.color_grading(1.0);
+        assert_eq!(brighter.global.exposure, look.exposure + 1.0);
+        assert_eq!(brighter.global.temperature, look.temperature);
     }
 }

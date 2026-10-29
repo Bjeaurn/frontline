@@ -16,10 +16,11 @@ use serde::{Deserialize, Serialize};
 use crate::cli::Mode;
 use crate::data::GameModeId;
 use crate::match_hud::PendingTeam;
-use crate::player::input::Bindings;
+use crate::player::input::{Bindings, Rebinding};
 use crate::player::{ControllerSystems, MenuOpen};
 use crate::rotation::HostSetup;
 use crate::shared::{LocalPlayerReplica, PlayerTeam};
+use crate::video::VideoSettings;
 
 const SETTINGS_FILE: &str = "settings.ron";
 
@@ -107,8 +108,10 @@ pub struct DiscoveredServer {
 #[derive(Resource, Default, Debug)]
 pub struct DiscoveredServers(pub Vec<DiscoveredServer>);
 
-/// Player preferences, saved to the user's config directory and loaded at startup.
+/// Player preferences, saved to the user's config directory and loaded at startup. A file
+/// from an older version loads with the defaults for what it lacks.
 #[derive(Resource, Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     pub name: String,
     /// Radians of view rotation per unit of mouse motion.
@@ -119,15 +122,21 @@ pub struct Settings {
     pub master_volume: f32,
     /// The Default Loadout chosen before Profiles existed (an index into
     /// `GameData::default_loadouts`). Only read to seed a new Profile; never written back.
-    #[serde(default, skip_serializing)]
+    #[serde(skip_serializing)]
     pub loadout: usize,
     /// The Host setup screen's choices.
-    #[serde(default)]
     pub host: HostSetup,
     /// Where the player's own CoD4 images are (docs/adr/0004): an install, a folder of
     /// `iw_*.iwd` or a zip of them. Homage Maps use them when set.
-    #[serde(default)]
     pub cod4_path: Option<PathBuf>,
+    /// Mouse sensitivity multiplier while aiming down sights; 1.0 is the same as the hip.
+    pub ads_sensitivity: f32,
+    /// Moving the mouse up looks down.
+    pub invert_y: bool,
+    /// Settings > Video.
+    pub video: VideoSettings,
+    /// Settings > Controls: the key and mouse bindings.
+    pub bindings: Bindings,
 }
 
 impl Default for Settings {
@@ -140,6 +149,10 @@ impl Default for Settings {
             loadout: 0,
             host: HostSetup::default(),
             cod4_path: None,
+            ads_sensitivity: 1.0,
+            invert_y: false,
+            video: VideoSettings::default(),
+            bindings: Bindings::default(),
         }
     }
 }
@@ -180,6 +193,8 @@ impl Plugin for FlowPlugin {
             .add_sub_state::<Overlay>()
             .add_message::<FlowCommand>()
             .insert_resource(GlobalVolume::from(Volume::Linear(settings.master_volume)))
+            .insert_resource(settings.bindings.clone())
+            .init_resource::<Rebinding>()
             .insert_resource(settings)
             .init_resource::<DiscoveredServers>()
             .init_resource::<ConnectionError>()
@@ -187,7 +202,7 @@ impl Plugin for FlowPlugin {
                 Update,
                 (
                     quit,
-                    (save_settings, apply_volume)
+                    (save_settings, apply_volume, apply_bindings)
                         .run_if(resource_changed::<Settings>)
                         .run_if(not(resource_added::<Settings>)),
                     (switch_overlays, open_team_select)
@@ -261,6 +276,10 @@ fn apply_volume(settings: Res<Settings>, mut volume: ResMut<GlobalVolume>) {
     volume.volume = Volume::Linear(settings.master_volume);
 }
 
+fn apply_bindings(settings: Res<Settings>, mut bindings: ResMut<Bindings>) {
+    bindings.set_if_neq(settings.bindings.clone());
+}
+
 fn quit(mut flow: MessageReader<FlowCommand>, mut exit: MessageWriter<AppExit>) {
     if flow
         .read()
@@ -291,11 +310,12 @@ fn sync_menu_open(
 fn switch_overlays(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<Bindings>,
+    rebinding: Res<Rebinding>,
     overlay: Res<State<Overlay>>,
     connected: Query<(), (With<Client>, With<Connected>)>,
     mut next: ResMut<NextState<Overlay>>,
 ) {
-    if connected.is_empty() {
+    if connected.is_empty() || rebinding.active() {
         return;
     }
     let target = match overlay.get() {
@@ -320,5 +340,61 @@ fn open_team_select(
         && replica.single().is_ok_and(|team| team.0.is_none())
     {
         next.set(Overlay::TeamSelect);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A settings.ron as written before Video, Controls and ADS sensitivity existed.
+    const OLD_FILE: &str = r#"(
+        name: "Mac",
+        mouse_sensitivity: 0.003,
+        fov_deg: 90.0,
+        master_volume: 0.5,
+        host: (
+            server_name: "Mac's Server",
+            max_players: 16,
+            rotation: [(map: "backlot", mode: tdm, rules: "hardcore")],
+            limits: {hq: (score_limit: 93, time_limit_secs: 600)},
+        ),
+    )"#;
+
+    #[test]
+    fn an_old_settings_file_loads_with_the_new_settings_at_their_defaults() {
+        let settings: Settings = ron::from_str(OLD_FILE).unwrap();
+        assert_eq!(settings.name, "Mac");
+        assert_eq!(settings.mouse_sensitivity, 0.003);
+        assert_eq!(settings.fov_deg, 90.0);
+        assert_eq!(settings.host.server_name, "Mac's Server");
+        let defaults = Settings::default();
+        assert_eq!(settings.video, defaults.video);
+        assert_eq!(settings.bindings, defaults.bindings);
+        assert_eq!(settings.ads_sensitivity, defaults.ads_sensitivity);
+        assert!(!settings.invert_y);
+    }
+
+    #[test]
+    fn a_file_with_only_some_fields_loads() {
+        let settings: Settings = ron::from_str("(fov_deg: 100.0)").unwrap();
+        assert_eq!(settings.fov_deg, 100.0);
+        assert_eq!(settings.name, Settings::default().name);
+    }
+
+    #[test]
+    fn settings_round_trip_through_ron() {
+        let mut settings = Settings {
+            ads_sensitivity: 0.6,
+            invert_y: true,
+            ..default()
+        };
+        settings.video.fps_cap = 144;
+        settings
+            .bindings
+            .rebind_key(crate::player::input::Action::Reload, KeyCode::KeyE);
+        let text =
+            ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default()).unwrap();
+        assert_eq!(ron::from_str::<Settings>(&text).unwrap(), settings);
     }
 }

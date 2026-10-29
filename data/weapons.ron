@@ -153,6 +153,8 @@
         rack_secs_scoped: 1.4,
         rack_secs_unscoped: 0.9,
         rack_kick_deg: 0.35,
+        // Server-simulated bullet (docs/adr/0005): travel time and drop; other Weapons stay hitscan.
+        projectile: Some((muzzle_speed: 600.0, gravity: 12.0)),
     ),
     // Secondary. Semi-auto: one round per pull at its `rpm`.
     Pistol: (

@@ -3,6 +3,7 @@
 
 mod assets;
 mod atmosphere;
+mod ballistics;
 mod chat;
 mod class;
 mod cli;
@@ -26,6 +27,7 @@ mod rotation;
 mod rules;
 mod shared;
 mod ui;
+mod video;
 mod weapon;
 mod world;
 
@@ -129,6 +131,7 @@ fn main() -> AppExit {
         }
         app.add_plugins((
             flow::FlowPlugin,
+            video::VideoPlugin,
             ui::UiPlugin,
             menus::MenusPlugin,
             player::LocalControllerPlugin,

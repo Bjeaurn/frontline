@@ -394,12 +394,13 @@ impl HeldWeapon {
 }
 
 /// One local round left the barrel: `muzzle` is the viewmodel muzzle in world space and
-/// `end` where the client-side ray met the World (or maximum range).
+/// `end` where the client-side ray met the World (or maximum range); `None` for a projectile
+/// Weapon, whose bullet and impact come from the server (docs/adr/0005).
 #[derive(Message, Clone, Copy, Debug)]
 struct ShotFired {
     weapon: WeaponId,
     muzzle: Vec3,
-    end: Vec3,
+    end: Option<Vec3>,
     /// A Silencer is fitted: no muzzle flash, and the gunshot's volume and pitch below.
     silenced: bool,
     volume: f32,
@@ -696,7 +697,7 @@ fn aim(
     };
     let stats = Arc::clone(&weapon.stats);
     let in_control = captured.active() && !life.is_dead();
-    let wants = in_control && mouse.pressed(bindings.aim) && weapon.reload_left.is_none();
+    let wants = in_control && bindings.aim.pressed(&mouse) && weapon.reload_left.is_none();
     let step = time.delta_secs() / stats.ads_secs.max(f32::EPSILON);
     weapon.aiming = wants;
     weapon.ads = if wants && weapon.ready() {
@@ -705,10 +706,11 @@ fn aim(
         (weapon.ads - step).max(0.0)
     };
     let t = weapon.ads_eased();
+    modifiers.ads = t;
     modifiers.fov_scale = 1.0_f32.lerp(stats.ads_fov_scale(), t);
     modifiers.move_scale = stats.move_scale * 1.0_f32.lerp(stats.ads_move_scale, t);
     modifiers.stamina_scale = kit.effects.sprint_stamina_mul;
-    modifiers.sprint_blocked = wants || (in_control && mouse.pressed(bindings.fire));
+    modifiers.sprint_blocked = wants || (in_control && bindings.fire.pressed(&mouse));
 }
 
 /// R reloads; sprinting cancels a reload in progress.
@@ -754,8 +756,8 @@ fn fire(
         return;
     };
     let stats = Arc::clone(&weapon.stats);
-    let held = captured.active() && mouse.pressed(bindings.fire);
-    let pulled = mouse.just_pressed(bindings.fire) && !captured.is_changed();
+    let held = captured.active() && bindings.fire.pressed(&mouse);
+    let pulled = bindings.fire.just_pressed(&mouse) && !captured.is_changed();
     weapon.trigger = held && !life.is_dead() && (weapon.trigger || pulled);
 
     let dt = time.delta_secs();
@@ -808,16 +810,20 @@ fn fire(
                 origin,
                 direction: *direction,
             }));
-            let end = spatial
-                .cast_ray(origin, direction, stats.range, true, &filter)
-                .map_or(stats.range, |hit| hit.distance);
+            // A projectile Weapon's bullet flies for real on the server: no instant tracer or impact.
+            let end = stats.projectile.is_none().then(|| {
+                let distance = spatial
+                    .cast_ray(origin, direction, stats.range, true, &filter)
+                    .map_or(stats.range, |hit| hit.distance);
+                origin + *direction * distance
+            });
             let muzzle = Transform::from_translation(origin)
                 .with_rotation(aim)
                 .transform_point(gun.transform_point(Vec3::from(stats.muzzle_offset)));
             fired.write(ShotFired {
                 weapon: weapon.id,
                 muzzle,
-                end: origin + *direction * end,
+                end,
                 silenced: stats.silenced,
                 volume: stats.shot_volume,
                 pitch: stats.shot_pitch,

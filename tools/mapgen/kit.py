@@ -41,10 +41,19 @@ def door(a: float, b: float, height: float = 2.4) -> tuple[float, float, float, 
     return (a, b, 0.0, height)
 
 
-def window(a: float, b: float, sill: float = 1.0, head: float = 2.4) -> tuple[float, float, float, float]:
-    """A window gap from `a` to `b` along a wall, `sill` to `head` metres above the floor (a
-    1 m sill can be vaulted or mantled)."""
-    return (a, b, sill, head)
+# The one standard window opening: a 0.9 m sill and a 2.3 m head leave a 1.4 m gap, enough to
+# cross crouched (1.2 m), and every window is at least 1.0 m wide, so any of them can be
+# vaulted (data/movement.ron vault_*: sills 0.6-1.2 m, walls up to 0.6 m thick).
+VAULT_SILL = 0.9
+VAULT_HEAD = 2.3
+VAULT_MIN_WIDTH = 1.0
+
+
+def window(a: float, b: float) -> tuple[float, float, float, float]:
+    """A vaultable window gap from `a` to `b` (at least `VAULT_MIN_WIDTH` wide) along a wall,
+    the standard `VAULT_SILL` to `VAULT_HEAD` metres above the floor."""
+    assert b - a >= VAULT_MIN_WIDTH - 1e-9, f"window {a}..{b} is narrower than {VAULT_MIN_WIDTH} m"
+    return (a, b, VAULT_SILL, VAULT_HEAD)
 
 
 def _planes(brush: Brush) -> list[tuple[Vec3, float]]:

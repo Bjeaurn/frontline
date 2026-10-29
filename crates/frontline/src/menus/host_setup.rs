@@ -466,7 +466,7 @@ fn row_of(commands: &mut Commands, fonts: &UiFonts, panel: Entity, caption: &str
 
 /// A picker of `width` px under `parent`: ◀, the current value, ▶. Returns the two arrow
 /// buttons (to observe) and the value's text entity.
-fn picker(
+pub(super) fn picker(
     commands: &mut Commands,
     fonts: &UiFonts,
     icon: &ArrowIcon,

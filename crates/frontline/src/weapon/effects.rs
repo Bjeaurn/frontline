@@ -5,7 +5,9 @@ use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
 use super::{ShotFired, WeaponRng, WeaponSystems};
-use crate::net::protocol::ShotTracer;
+use crate::ballistics;
+use crate::data::{GameData, ProjectileModel};
+use crate::net::protocol::{ProjectileFired, ProjectileLanded, ShotTracer};
 use crate::shared::FromServer;
 
 const FLASH_SECS: f32 = 0.05;
@@ -15,6 +17,11 @@ const TRACER_SECS: f32 = 0.06;
 const TRACER_WIDTH: f32 = 0.012;
 /// Shots ending closer than this to the muzzle draw no tracer.
 const MIN_TRACER_LENGTH: f32 = 0.5;
+/// A server-simulated bullet's streak shows this many seconds of its path behind its head
+/// (about 12 m at 600 m/s), a touch wider than a hitscan tracer.
+const BULLET_STREAK_SECS: f32 = 0.02;
+const BULLET_TRACER_WIDTH: f32 = 0.02;
+const MIN_STREAK_LENGTH: f32 = 0.01;
 
 pub(super) struct EffectsPlugin;
 
@@ -26,6 +33,7 @@ impl Plugin for EffectsPlugin {
                 show_muzzle_flash,
                 spawn_local_tracers,
                 spawn_remote_tracers,
+                fly_bullet_tracers,
                 fade_muzzle_flash,
                 fade_tracers,
             )
@@ -120,7 +128,9 @@ fn spawn_local_tracers(
     mut commands: Commands,
 ) {
     for shot in fired.read() {
-        spawn_tracer(&mut commands, &assets, shot.muzzle, shot.end);
+        if let Some(end) = shot.end {
+            spawn_tracer(&mut commands, &assets, shot.muzzle, end);
+        }
     }
 }
 
@@ -131,6 +141,81 @@ fn spawn_remote_tracers(
 ) {
     for FromServer(tracer) in tracers.read() {
         spawn_tracer(&mut commands, &assets, tracer.origin, tracer.end);
+    }
+}
+
+/// A server-simulated bullet in flight, drawn as a short streak along the path the server
+/// steps it through (`ballistics::position_at`). It ends when the server says the bullet
+/// landed (`ProjectileLanded`), or by itself if that never arrives.
+#[derive(Component, Debug)]
+struct BulletTracer {
+    id: u32,
+    origin: Vec3,
+    velocity: Vec3,
+    model: ProjectileModel,
+    age: f32,
+    expires: f32,
+}
+
+/// Spawns a streak per `ProjectileFired`, flies them and removes the landed ones.
+fn fly_bullet_tracers(
+    time: Res<Time>,
+    mut fired: MessageReader<FromServer<ProjectileFired>>,
+    mut landed: MessageReader<FromServer<ProjectileLanded>>,
+    data: Res<GameData>,
+    assets: Res<EffectAssets>,
+    mut tracers: Query<(Entity, &mut BulletTracer, &mut Transform)>,
+    mut commands: Commands,
+) {
+    let landed: Vec<u32> = landed
+        .read()
+        .map(|FromServer(landing)| landing.id)
+        .collect();
+    for FromServer(shot) in fired.read() {
+        let stats = data.weapon(shot.weapon);
+        let Some(model) = stats.projectile else {
+            continue;
+        };
+        if landed.contains(&shot.id) {
+            continue;
+        }
+        commands.spawn((
+            Name::new("Bullet tracer"),
+            BulletTracer {
+                id: shot.id,
+                origin: shot.origin,
+                velocity: shot.velocity,
+                model,
+                age: 0.0,
+                expires: ballistics::tracer_expiry_secs(model, stats.range),
+            },
+            Mesh3d(assets.tracer_mesh.clone()),
+            MeshMaterial3d(assets.tracer_material.clone()),
+            Transform::from_translation(shot.origin).with_scale(Vec3::new(
+                BULLET_TRACER_WIDTH,
+                BULLET_TRACER_WIDTH,
+                MIN_STREAK_LENGTH,
+            )),
+            NotShadowCaster,
+        ));
+    }
+    for (entity, mut tracer, mut transform) in &mut tracers {
+        tracer.age += time.delta_secs();
+        if landed.contains(&tracer.id) || tracer.age > tracer.expires {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let at = |t: f32| {
+            ballistics::position_at(tracer.origin, tracer.velocity, tracer.model, t.max(0.0))
+        };
+        let (tail, head) = (at(tracer.age - BULLET_STREAK_SECS), at(tracer.age));
+        let along = head - tail;
+        let length = along.length().max(MIN_STREAK_LENGTH);
+        if let Ok(direction) = Dir3::new(along) {
+            transform.rotation = Quat::from_rotation_arc(Vec3::Z, *direction);
+        }
+        transform.translation = tail + along / 2.0;
+        transform.scale.z = length;
     }
 }
 

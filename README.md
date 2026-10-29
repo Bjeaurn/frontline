@@ -24,7 +24,7 @@ cargo run -- --host --look night_ops                     # Host with another loo
 
 Servers listen on UDP 5000 (`--port <n>` changes it; it's also the port HOST GAME uses). Every server answers LAN discovery on UDP 5001; a second server on the same machine can't take that port, so it logs a warning and only shows up when joined by IP. `--name` sets your player name for this run (overriding Settings) or a Dedicated Server's name in the browser. `--rules <preset>` picks the Match Rules set a server (Dedicated, or Host) runs: `default` unless given, `hardcore` (30 HP, no regen, friendly fire, no crosshair, hitmarkers or damage direction, kill feed 6 s late), or one of your custom sets (Match Rules, below). An unknown name stops it at startup with the list of sets. The server sends the rule *values* to every client with the Match state, so a client needs neither the preset file nor your custom set. For faster rebuilds during development, add `--features dev` (dynamic linking).
 
-Settings (name, mouse sensitivity, field of view, master volume) are saved to `<config dir>/frontline/settings.ron`: `~/Library/Application Support/` on macOS, `~/.config/` on Linux, `%APPDATA%` on Windows. The Profile (custom Loadouts and the chosen Loadout) is saved next to it as `profile.ron`.
+Settings are saved to `<config dir>/frontline/settings.ron`: `~/Library/Application Support/` on macOS, `~/.config/` on Linux, `%APPDATA%` on Windows. A file from an older version loads, with the defaults for anything it lacks. The Profile (custom Loadouts and the chosen Loadout) is saved next to it as `profile.ron`. See Settings below for what the four tabs hold.
 
 `--mode <key>` picks the Game Mode of a single-entry game: `tdm` (Team Deathmatch, the default), `dom` (Domination), `hq` (Headquarters) or `sd` (Search & Destroy). The Map must support it (`modes` in `data/maps.ron`; an unsupported pair stops at startup with the list). `--rotation <file.ron>` replaces `--map`, `--mode` and `--rules` with a Rotation: a RON list of entries that the server plays in order, one per Match, then repeats, e.g.
 
@@ -62,7 +62,7 @@ The built-in presets (`default`, `hardcore`, from `data/match_rules.ron`) are re
 
 ## Controls
 
-On joining, pick a Team (and then a Loadout). The mouse is grabbed while you play and freed whenever a menu is open; left-click grabs it again if the window lost focus.
+On joining, pick a Team (and then a Loadout). The mouse is grabbed while you play and freed whenever a menu is open; left-click grabs it again if the window lost focus. The keys below are the defaults: SETTINGS > CONTROLS rebinds them.
 
 | Action | Key |
 |---|---|
@@ -70,6 +70,7 @@ On joining, pick a Team (and then a Loadout). The mouse is grabbed while you pla
 | Sprint | Left Shift (forward only, limited stamina) |
 | Jump / stand up | Space |
 | Mantle | Move into a ledge up to ~1.6 m (jumping helps); steps and ramps (stairs) up to 0.45 m per step are simply walked up at full speed |
+| Vault | Jump into a thin wall or window sill (0.6–1.2 m high, up to 0.6 m thick) with floor behind it: you cross it crouched in ~0.5 s and land on the far side. Every generated window is vaultable |
 | Crouch | C |
 | Prone (while sprinting: dive) | Left Ctrl or Z |
 | Fire (full auto, or one round per click for semi; a bolt-action click racks first, see Aiming below) | Left mouse |
@@ -103,6 +104,7 @@ Every sight has a **Magnification** and a **Sway Scale** in the data (`iron_magn
 - **Flinch**: taking a hit kicks your view by the Weapon's `flinch_deg` (a 50-damage hit, scaled by the damage), x0.6 while aimed, in a random direction; it recovers like recoil.
 - **Glint**: a player aimed through a 3x or stronger sight shows a bright star at their scope to anyone within about 25 degrees of where they aim (the pose carries `aim_magnification`).
 - **Rack** (Sniper): a shot leaves you aimed and the bolt open; you can't fire. While aimed a click racks it (`rack_secs_scoped`, 1.4 s, still zoomed, with a small sway kick, and the HUD asks `CLICK TO RACK`); the next click fires. Letting go of the aim racks automatically at `rack_secs_unscoped` (0.9 s), and letting go mid-rack finishes the rest at that faster rate.
+- **Bullet flight** (Sniper): the Sniper's bullet is not hitscan. The server flies it from your eye at 600 m/s with 12 m/s² of gravity (`projectile: Some((muzzle_speed, gravity))` in `weapons.ron`; every other Weapon has none and stays hitscan), so a target at 240 m is hit 0.4 s after the click and the bullet has dropped 0.96 m by then (0.1 m at 80 m, 2.7 m at the 400 m `range`): lead movers and hold over. It ends at the first World or hitbox it crosses, or at `range` metres of flight, and damage falloff counts the path flown. Everyone sees a bright streak fly the same path, your own too, and hears the impact where it lands; your own gunshot and flash stay instant. Hits use the hitboxes as they are when the bullet arrives (`docs/adr/0005`, no lag compensation on a LAN).
 
 Fall damage (CoD style, from the peak of the fall): none below `min_height` (4.5 m by default, 3.5 m in hardcore), then linear up to a lethal fall at `max_height` (12 m, 8 m in hardcore). The kill feed says "X fell to their death". The Tab Scoreboard's header shows the win condition, e.g. `FIRST TO 50 · 10:00 LIMIT` (Search & Destroy: `FIRST TO 4 ROUNDS`), with the Host's limit overrides applied.
 
@@ -251,7 +253,7 @@ The kit has no vehicles, barriers or lamp posts, so the generators build those a
 
 Homage Maps can use Call of Duty 4's own textures, read from **your** copy of the game. They are Activision's files, so Frontline never stores or ships them (`docs/adr/0004`): they are read and decoded in memory while the game runs, and nothing is written to disk, into either repo or into a build.
 
-Set **Settings > CoD4 textures** to one of:
+Set **Settings > Gameplay > CoD4 textures** to one of:
 
 - your CoD4 install folder (its `main/iw_*.iwd` archives are used),
 - a folder that holds `iw_*.iwd`,
@@ -261,10 +263,19 @@ Press CHECK (or APPLY): the status line shows what was found, e.g. `Found 7 arch
 
 It only affects **Homage Maps** (the private ones, `content/private/cod4_textures.ron` maps each Map's brush textures like `brick/color` to CoD4 image names; names only). Remix Maps, props, weapons and everything else stay on the CC0 textures, as does any surface whose image isn't in your files, and the whole game when no path is set; players without CoD4 see CC0 surfaces on the same geometry. Textures larger than 1024 px are downscaled, and a Dedicated Server never loads textures.
 
+## Settings
+
+SETTINGS (title menu, or the pause menu in game) has four tabs. Edits wait for APPLY, which saves them to `settings.ron` and goes back; BACK or Esc discards them, the Video changes included.
+
+- **Video:** display mode (windowed, borderless fullscreen, exclusive fullscreen), resolution (the sizes the monitor's video modes offer; borderless always uses the monitor's), vsync, an FPS cap (30 to 240 or unlimited, sleep-based; no effect above the refresh rate while vsync is on), a quality preset (Low, Medium, High, Custom) and its four settings: sun shadows (off, 1024 or 2048 px), ambient occlusion (off, low, medium, high), bloom and anti-aliasing (off, FXAA, SMAA), and brightness (50 to 150%, an exposure offset on the Map's look). Medium is what the game looked like before these settings existed. Changing a single quality setting switches the preset to Custom. Everything applies live as you change it. Changing the display mode or the resolution also asks "Keep these settings?" and puts the old ones back after 10 s unless you answer KEEP. There is no render scale: Bevy 0.20 has no supported way to render the 3D view below the window's size.
+- **Audio:** master volume. (There are no music or voice sounds yet, so no other sliders.)
+- **Controls:** mouse sensitivity, an ADS sensitivity multiplier (0.25x to 1.5x; the view blends to it as you aim down sights), invert Y, and the key-rebinding list. Click an action, then press the new key (or mouse button for Fire and Aim); Esc cancels. A key another action already uses is taken from it, and that action shows UNBOUND. Rebinding replaces all of an action's keys (Prone has two by default). RESET ALL restores the defaults. Esc stays the Pause / back key, and clicking the game still grabs the mouse; neither is in the list. Keys outside the usual letters, digits, F-keys, arrows, numpad, modifier and punctuation set can't be bound.
+- **Gameplay:** your name, the field of view, the CoD4 texture path (CHECK applies it and the status line says what was found) and the Custom Match Rules editor.
+
 ## Layout
 
 - `crates/frontline/src/flow.rs`: screen states (main menu, in game, overlays), flow commands, Settings file
-- `crates/frontline/src/menus/`: title, Host setup, Server Browser, Connecting, Pause, Settings and Match Rules editor screens
+- `crates/frontline/src/menus/`: title, Host setup, Server Browser, Connecting, Pause, Settings (`settings/`: one file per tab) and Match Rules editor screens
 - `crates/frontline/src/ui/`: shared menu look: fonts, palette, buttons, panels, sliders, text fields
 - `crates/frontline/src/chat/`: the Y / U chat input and the fading chat box (client); the server side (validation, rate limit, system lines) is `net/chat.rs`
 - `crates/frontline/src/match_hud/`: team select (Faction cards), top-centre score with Faction emblems, the objective HUD, Tab Scoreboard and end screen, friendly name tags
@@ -274,19 +285,21 @@ It only affects **Homage Maps** (the private ones, `content/private/cod4_texture
 - `crates/frontline/src/rules.rs`: Custom Match Rules: the `rules.ron` file, validation, naming, merging the custom sets into `GameData` (unit-tested)
 - `crates/frontline/src/data.rs`: loads the `data/*.ron` tuning files
 - `crates/frontline/src/net/`: lightyear protocol, server, client, Host/Join/Leave sessions, LAN discovery
-- `crates/frontline/src/player/`: first-person controller, input bindings, damage/kill-feed/death HUD, remote player visuals and their bodies
+- `crates/frontline/src/player/`: first-person controller, input bindings (rebindable, saved in Settings; `input.rs`), damage/kill-feed/death HUD, remote player visuals and their bodies
 - `crates/frontline/src/weapon/`: local Weapon (firing, ammo, aiming, recoil, sway, hold breath, flinch, the bolt rack), per-weapon viewmodels, shot effects, crosshair/hitmarker/ammo/scope/breath HUD
 - `crates/frontline/src/gear.rs`: Attachments, Perks and the Loadout, and the pure rules that turn them into effective Weapon stats and Perk effects (unit-tested)
 - `crates/frontline/src/class.rs`: Pick 10: the point budget and costs, Wildcards, equipment slots, class validation (budget, slot rules, Wildcard rules, unlocks) and trimming a class that doesn't fit (unit-tested)
 - `crates/frontline/src/profile.rs`: the Profile file (`profile.ron`): custom Loadouts, the chosen one, XP and per-Weapon kill counters and Weapon XP, migrating old Profiles, and applying an award to them
 - `crates/frontline/src/progression/`: XP values, the Level curve, the unlock table, Weapon Levels and camo Challenges (pure, unit-tested); client-side award handling, and the XP popups and toasts
 - `crates/frontline/src/combat/xp.rs`: server XP awarding, the per-life damage ledger (Assists) and the Multikill chain
+- `crates/frontline/src/ballistics.rs`: pure bullet flight for projectile Weapons (the exact gravity step, the closed-form path the clients draw tracers along, time of flight and drop), unit-tested; `combat/projectiles.rs` flies the server's bullets with it (`docs/adr/0005`)
 - `crates/frontline/src/loadout/`: the Loadout screen, the Create a Class screens (`editor/`: rules in `model.rs`, drawing in `view.rs`), stat bars, the CoD swap rule
 - `crates/frontline/src/maps/`: Map registry (`data/maps.ron`, private Maps), TrenchBroom loading (units, textures, colliders, entity classes), loading the Match's Map and swapping it (`ChangeMap`), spawn points
 - `crates/frontline/src/world.rs`: physics
 - `crates/frontline/src/cod4/`: bring-your-own CoD4 textures for Homage Maps: the archive index (`source.rs`), the IWI image decoder (`iwi.rs`, unit-tested) and the per-Map decode/override plumbing
 - `crates/frontline/src/materials.rs`: material library (one tinted material per `SurfaceKind` texture set)
-- `crates/frontline/src/atmosphere.rs`: camera look (tonemapping, bloom, SSAO) and per-Map look presets (`data/looks.ron`)
+- `crates/frontline/src/atmosphere.rs`: camera look (tonemapping, plus bloom, SSAO, anti-aliasing and sun shadows from the Video quality settings) and per-Map look presets (`data/looks.ron`); brightness offsets the look's exposure
+- `crates/frontline/src/video.rs`: the Video settings (display mode, resolution, vsync, FPS cap, quality, brightness), applying them to the window, the "Keep these settings?" revert timer and the FPS limiter
 - `crates/frontline/src/assets.rs`: files embedded in the binary (faction emblems, rank insignia, camo textures, surface textures; CC0 credits in `assets/textures/CREDITS.md`)
 - `tools/mapgen/`: Python generator for `.map` files (the arena, Crossroads) and its building kit
 - `tools/camos/`: generates the weapon camo textures (`camos.py`, Pillow only)

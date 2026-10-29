@@ -1,5 +1,5 @@
 //! First-person kinematic controller for the `LocalPlayer`: mouse look, stances, sprint,
-//! move-and-slide against the loaded Map, landing slowdown, mantling, dive to prone, and
+//! move-and-slide against the loaded Map, landing slowdown, mantling and vaulting, dive to prone, and
 //! server-ordered respawns. Movement tuning comes from `GameData::movement`
 //! (`data/movement.ron`).
 
@@ -58,6 +58,14 @@ const LEDGE_PROBE_MARGIN: f32 = 0.05;
 /// move over the ledge starts at `MANTLE_OVER_START`.
 const MANTLE_RISE_END: f32 = 0.6;
 const MANTLE_OVER_START: f32 = 0.35;
+/// A vault probes the sill top and the wall's thickness this far in from its face and down from
+/// its top, and lands this far clear of the wall's far face (body radius on top).
+const VAULT_PROBE_DEPTH: f32 = 0.05;
+const VAULT_LANDING_GAP: f32 = 0.1;
+/// Vault path shape, as fractions of its duration: the feet reach the sill top at
+/// `VAULT_APEX` and the move across starts at `VAULT_OVER_START`.
+const VAULT_APEX: f32 = 0.45;
+const VAULT_OVER_START: f32 = 0.2;
 
 // View tuning.
 /// Furthest the view may pitch up or down, in radians.
@@ -198,11 +206,14 @@ impl Motor {
     }
 }
 
-/// An ongoing mantle: the feet travel from `from` up to the ledge height, then over it to `to`.
+/// An ongoing mantle or vault: the feet travel from `from` up to the ledge height, then over it
+/// to `to`. A vault (`crest` is the feet height over the sill) rises to the sill top and drops
+/// again on the far side instead.
 #[derive(Clone, Copy, Debug)]
 struct Mantle {
     from: Vec3,
     to: Vec3,
+    crest: Option<f32>,
     elapsed: f32,
     secs: f32,
 }
@@ -220,6 +231,9 @@ impl Mantle {
     /// Feet position at `progress`: a quick rise that eases out, overlapped by a smooth move
     /// over the ledge once the body is mostly up.
     fn feet(&self, progress: f32) -> Vec3 {
+        if let Some(crest) = self.crest {
+            return self.vault_feet(crest, progress);
+        }
         let rise = 1.0 - (1.0 - (progress / MANTLE_RISE_END).min(1.0)).powi(3);
         let over = ((progress - MANTLE_OVER_START) / (1.0 - MANTLE_OVER_START)).clamp(0.0, 1.0);
         let over = over * over * (3.0 - 2.0 * over);
@@ -229,6 +243,22 @@ impl Mantle {
             self.from.y + (self.to.y - self.from.y) * rise,
             horizontal.z,
         )
+    }
+
+    /// A vault's feet at `progress`: up to `crest` (ease out), then down to the landing (ease
+    /// in), with the move across starting once the feet are mostly up.
+    fn vault_feet(&self, crest: f32, progress: f32) -> Vec3 {
+        let y = if progress < VAULT_APEX {
+            let up = 1.0 - (1.0 - progress / VAULT_APEX).powi(3);
+            self.from.y + (crest - self.from.y) * up
+        } else {
+            let down = (progress - VAULT_APEX) / (1.0 - VAULT_APEX);
+            crest + (self.to.y - crest) * down * down
+        };
+        let over = ((progress - VAULT_OVER_START) / (1.0 - VAULT_OVER_START)).clamp(0.0, 1.0);
+        let over = over * over * (3.0 - 2.0 * over);
+        let horizontal = self.from.lerp(self.to, over);
+        Vec3::new(horizontal.x, y, horizontal.z)
     }
 }
 
@@ -262,6 +292,9 @@ impl Dive {
 pub struct ControllerModifiers {
     /// Multiplies movement speed.
     pub move_scale: f32,
+    /// How far into aiming down sights the weapon is, 0..1 (eased); blends the ADS mouse
+    /// sensitivity multiplier in.
+    pub ads: f32,
     /// Multiplies the horizontal field of view.
     pub fov_scale: f32,
     /// Multiplies the sprint stamina tank.
@@ -276,6 +309,7 @@ impl Default for ControllerModifiers {
     fn default() -> Self {
         Self {
             move_scale: 1.0,
+            ads: 0.0,
             fov_scale: 1.0,
             stamina_scale: 1.0,
             sprint_blocked: false,
@@ -437,6 +471,101 @@ fn find_ledge(
     Some(ledge + Vec3::Y * HEADROOM_LIFT)
 }
 
+/// Where a vault from `feet` towards `facing` ends, if a thin wall or window sill is within
+/// reach: its top `vault_min_height` to `vault_max_height` above `base_y`, at most
+/// `vault_max_thickness` thick, with room to cross it crouched and a floor to land on behind
+/// it (no more than a step higher than the feet, at most `vault_max_drop` lower). Gives the
+/// landing feet position and the feet height over the sill.
+fn find_vault(
+    shapes: &StanceShapes,
+    spatial: &SpatialQuery,
+    feet: Vec3,
+    facing: Dir3,
+    base_y: f32,
+    tuning: &MovementTuning,
+) -> Option<(Vec3, f32)> {
+    let wall = shapes.sweep(spatial, Stance::Standing, feet, facing, tuning.mantle_reach)?;
+    if wall.distance <= 0.0 || wall.normal1.y >= MIN_GROUND_NORMAL_Y {
+        return None;
+    }
+    let into_wall = Dir3::new(Vec3::new(-wall.normal1.x, 0.0, -wall.normal1.z)).ok()?;
+    let face = feet + facing * wall.distance + into_wall * (BODY_RADIUS - HEADROOM_SHRINK);
+    let filter = SpatialQueryFilter::from_mask(GameLayer::World);
+
+    // The sill top, just inside the wall face. A zero distance means the probe started inside
+    // the wall: it is too tall.
+    let highest = base_y + tuning.vault_max_height;
+    let probe = face + into_wall * VAULT_PROBE_DEPTH;
+    let probe = Vec3::new(probe.x, highest + LEDGE_PROBE_MARGIN, probe.z);
+    let reach = probe.y - (feet.y + MANTLE_MIN_RISE);
+    if reach <= 0.0 {
+        return None;
+    }
+    let top = spatial.cast_ray(probe, Dir3::NEG_Y, reach, true, &filter)?;
+    let crest = probe.y - top.distance;
+    if top.distance <= 0.0
+        || top.normal.y < MIN_GROUND_NORMAL_Y
+        || crest > highest
+        || crest < base_y + tuning.vault_min_height
+    {
+        return None;
+    }
+
+    // Thickness: from beyond the thickest vaultable wall, back towards it. It hits the far
+    // face, or starts inside the wall when the wall is too thick.
+    let beyond = face + into_wall * tuning.vault_max_thickness;
+    let beyond = Vec3::new(beyond.x, crest - VAULT_PROBE_DEPTH, beyond.z);
+    let far_face = spatial.cast_ray(
+        beyond,
+        -into_wall,
+        tuning.vault_max_thickness,
+        true,
+        &filter,
+    )?;
+    if far_face.distance <= 0.0 {
+        return None;
+    }
+    let thickness = tuning.vault_max_thickness - far_face.distance;
+
+    // The floor behind: no higher than a step, no deeper than the drop allowed.
+    let over = face + into_wall * (thickness + BODY_RADIUS + VAULT_LANDING_GAP);
+    let drop = Vec3::new(over.x, crest + HEADROOM_LIFT, over.z);
+    let floor = spatial.cast_ray(
+        drop,
+        Dir3::NEG_Y,
+        drop.y - (feet.y - tuning.vault_max_drop),
+        true,
+        &filter,
+    )?;
+    let floor_y = drop.y - floor.distance;
+    if floor.distance <= 0.0
+        || floor.normal.y < MIN_GROUND_NORMAL_Y
+        || floor_y > feet.y + STEP_HEIGHT
+    {
+        return None;
+    }
+
+    // Crouched across the sill, then standing room to land in.
+    let crouch = Stance::Crouching;
+    let raised = Vec3::new(feet.x, crest, feet.z);
+    let across = Vec3::new(over.x, crest, over.z);
+    let landing = Vec3::new(over.x, floor_y, over.z);
+    if !shapes.fits(spatial, crouch, raised)
+        || !shapes.fits(spatial, crouch, across)
+        || !shapes.fits(spatial, Stance::Standing, landing)
+    {
+        return None;
+    }
+    if let Ok((direction, distance)) = Dir3::new_and_length(across - raised)
+        && shapes
+            .sweep(spatial, crouch, raised, direction, distance)
+            .is_some()
+    {
+        return None;
+    }
+    Some((landing + Vec3::Y * HEADROOM_LIFT, crest + HEADROOM_LIFT))
+}
+
 /// Feet position and yaw of a random spawn point of the loaded Map (any Team's); the origin
 /// before a Map is ready.
 fn random_spawn(spawns: Option<&MapSpawns>) -> (Vec3, f32) {
@@ -543,20 +672,45 @@ pub(super) fn apply_respawn(
         Transform::from_translation(pose.position).with_rotation(Quat::from_rotation_y(pose.yaw));
 }
 
+/// Radians of view rotation `motion` (mouse counts) turns the view by: yaw then pitch, positive
+/// to the right and down. `ads` (0..1) blends from the hip sensitivity to `ads_multiplier`
+/// times it; `invert_y` flips the pitch.
+fn look_delta(
+    motion: Vec2,
+    sensitivity: f32,
+    ads_multiplier: f32,
+    ads: f32,
+    invert_y: bool,
+) -> Vec2 {
+    let scale = sensitivity * 1.0_f32.lerp(ads_multiplier, ads);
+    let delta = motion * scale;
+    if invert_y {
+        Vec2::new(delta.x, -delta.y)
+    } else {
+        delta
+    }
+}
+
 pub(super) fn mouse_look(
     captured: Res<MouseCaptured>,
     life: Res<LocalLife>,
     motion: Res<AccumulatedMouseMotion>,
     settings: Res<Settings>,
-    mut player: Query<&mut PlayerPose, With<LocalPlayer>>,
+    mut player: Query<(&mut PlayerPose, &ControllerModifiers), With<LocalPlayer>>,
 ) {
     if !captured.0 || life.is_dead() || motion.delta == Vec2::ZERO {
         return;
     }
-    let Ok(mut pose) = player.single_mut() else {
+    let Ok((mut pose, modifiers)) = player.single_mut() else {
         return;
     };
-    let delta = motion.delta * settings.mouse_sensitivity;
+    let delta = look_delta(
+        motion.delta,
+        settings.mouse_sensitivity,
+        settings.ads_sensitivity,
+        modifiers.ads,
+        settings.invert_y,
+    );
     pose.yaw = (pose.yaw - delta.x + PI).rem_euclid(TAU) - PI;
     pose.pitch = (pose.pitch - delta.y).clamp(-PITCH_LIMIT, PITCH_LIMIT);
 }
@@ -654,8 +808,8 @@ fn axis(negative: bool, positive: bool) -> f32 {
     f32::from(u8::from(positive)) - f32::from(u8::from(negative))
 }
 
-/// Walks, jumps and falls, or advances a mantle. Holding forward into a ledge mantles it: from
-/// the air on contact, from the ground with a jump.
+/// Walks, jumps and falls, or advances a mantle or vault. Holding forward into a thin wall
+/// vaults it, into a ledge mantles it: from the air on contact, from the ground with a jump.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn move_player(
     time: Res<Time>,
@@ -702,23 +856,27 @@ pub(super) fn move_player(
     );
     let facing = Quat::from_rotation_y(pose.yaw);
 
-    if forward
-        && !back
-        && (!motor.grounded || motor.jump_requested)
-        && let Some(to) = find_ledge(
-            &shapes,
-            &move_and_slide.spatial_query,
-            pose.position,
-            Dir3::new_unchecked(facing * Vec3::NEG_Z),
-            motor.ground_y.min(pose.position.y),
-            tuning,
-        )
-    {
+    let climb = if forward && !back && (!motor.grounded || motor.jump_requested) {
+        let ahead = Dir3::new_unchecked(facing * Vec3::NEG_Z);
+        let base_y = motor.ground_y.min(pose.position.y);
+        let spatial = &move_and_slide.spatial_query;
+        // A thin wall is vaulted; anything else, or a thin wall with no room behind, mantled.
+        find_vault(&shapes, spatial, pose.position, ahead, base_y, tuning)
+            .map(|(to, crest)| (to, Some(crest), tuning.vault_secs))
+            .or_else(|| {
+                find_ledge(&shapes, spatial, pose.position, ahead, base_y, tuning)
+                    .map(|to| (to, None, tuning.mantle_secs))
+            })
+    } else {
+        None
+    };
+    if let Some((to, crest, secs)) = climb {
         motor.mantle = Some(Mantle {
             from: pose.position,
             to,
+            crest,
             elapsed: 0.0,
-            secs: tuning.mantle_secs,
+            secs,
         });
         motor.velocity = Vec3::ZERO;
         motor.sprinting = false;
@@ -1054,6 +1212,31 @@ pub(super) fn apply_horizontal_fov(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn ads_blends_the_sensitivity_multiplier_in() {
+        let motion = Vec2::new(10.0, 4.0);
+        let close = |a: Vec2, b: Vec2| (a - b).abs().max_element() < 1e-6;
+        assert!(close(
+            look_delta(motion, 0.002, 0.5, 0.0, false),
+            motion * 0.002
+        ));
+        assert!(close(
+            look_delta(motion, 0.002, 0.5, 1.0, false),
+            motion * 0.001
+        ));
+        assert!(close(
+            look_delta(motion, 0.002, 0.5, 0.5, false),
+            motion * 0.0015
+        ));
+    }
+
+    #[test]
+    fn invert_y_flips_only_the_pitch() {
+        let delta = look_delta(Vec2::new(10.0, 4.0), 0.002, 1.0, 0.0, true);
+        assert!((delta - Vec2::new(0.02, -0.008)).abs().max_element() < 1e-6);
+    }
 
     #[test]
     fn standing_up_falls_back_to_the_tallest_stance_with_headroom() {
@@ -1210,5 +1393,212 @@ mod tests {
         let locked = tuning.dive_secs + tuning.dive_recover_secs + tuning.dive_getup_secs;
         // Over the time a dive locks you out, sprinting covers more ground than the lunge.
         assert!(tuning.sprint_speed * locked > tuning.dive_speed * tuning.dive_secs);
+    }
+
+    // ---- vault ----------------------------------------------------------------------------
+
+    /// Static boxes as (min, max) corners on the World layer, in an app with physics.
+    fn world(boxes: &[(Vec3, Vec3)]) -> App {
+        use bevy::time::TimeUpdateStrategy;
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, crate::world::WorldPlugin));
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+            20,
+        )));
+        // Plugins register part of their resources in `finish`, which `App::run` would call.
+        app.finish();
+        app.cleanup();
+        for (min, max) in boxes {
+            let size = max - min;
+            app.world_mut().spawn((
+                RigidBody::Static,
+                Collider::cuboid(size.x, size.y, size.z),
+                Transform::from_translation((min + max) / 2.0),
+                CollisionLayers::new(GameLayer::World, LayerMask::ALL),
+            ));
+        }
+        for _ in 0..4 {
+            app.update();
+        }
+        app
+    }
+
+    /// A vault from the origin towards -z, where the floor is the top of the box under y = 0.
+    fn vault(app: &mut App) -> Option<(Vec3, f32)> {
+        app.world_mut()
+            .run_system_once(|spatial: SpatialQuery| {
+                find_vault(
+                    &StanceShapes::default(),
+                    &spatial,
+                    Vec3::ZERO,
+                    Dir3::NEG_Z,
+                    0.0,
+                    &MovementTuning::fixture(),
+                )
+            })
+            .unwrap()
+    }
+
+    /// A wall across -z (its near face 0.4 m ahead of the player, `thick` deep, `sill` high)
+    /// with a window above the sill up to `head` when given, over a floor that runs to
+    /// `far_floor` (its top height) behind the wall.
+    fn window_world(
+        sill: f32,
+        thick: f32,
+        head: Option<f32>,
+        far_floor: f32,
+        extra: &[(Vec3, Vec3)],
+    ) -> App {
+        let near = -0.4;
+        let far = near - thick;
+        let mut boxes = vec![
+            (Vec3::new(-5.0, -1.0, -0.5), Vec3::new(5.0, 0.0, 0.0)),
+            (
+                Vec3::new(-5.0, far_floor - 3.0, far - 5.0),
+                Vec3::new(5.0, far_floor, far),
+            ),
+            (Vec3::new(-2.0, 0.0, far), Vec3::new(2.0, sill, near)),
+        ];
+        if let Some(head) = head {
+            boxes.push((Vec3::new(-2.0, head, far), Vec3::new(2.0, head + 1.0, near)));
+        }
+        boxes.extend_from_slice(extra);
+        world(&boxes)
+    }
+
+    #[test]
+    fn a_window_sill_is_vaulted_to_the_floor_behind() {
+        let mut app = window_world(0.9, 0.4, Some(2.3), 0.0, &[]);
+        let (landing, crest) = vault(&mut app).expect("a 0.9 m sill in a 0.4 m wall");
+        // Over the sill top, landing past the far face (-0.8) by the body radius and a gap.
+        assert!((crest - (0.9 + HEADROOM_LIFT)).abs() < 1e-3, "{crest}");
+        assert!(
+            (landing.z - (-0.8 - BODY_RADIUS - VAULT_LANDING_GAP)).abs() < 0.02,
+            "{landing}"
+        );
+        assert!((landing.y - HEADROOM_LIFT).abs() < 1e-3, "{landing}");
+    }
+
+    #[test]
+    fn a_low_thin_wall_needs_no_window() {
+        let mut app = window_world(1.0, 0.3, None, 0.0, &[]);
+        assert!(vault(&mut app).is_some());
+    }
+
+    #[test]
+    fn only_sills_between_the_min_and_max_height_are_vaulted() {
+        let tuning = MovementTuning::fixture();
+        // A step-high wall is walked, a chest-high one mantled; neither is vaulted.
+        for (sill, vaulted) in [
+            (0.4, false),
+            (tuning.vault_min_height - 0.05, false),
+            (tuning.vault_min_height + 0.05, true),
+            (tuning.vault_max_height - 0.05, true),
+            (tuning.vault_max_height + 0.1, false),
+            (1.6, false),
+        ] {
+            let mut app = window_world(sill, 0.4, None, 0.0, &[]);
+            assert_eq!(vault(&mut app).is_some(), vaulted, "sill {sill}");
+        }
+    }
+
+    #[test]
+    fn only_thin_walls_are_vaulted() {
+        let tuning = MovementTuning::fixture();
+        for (thick, vaulted) in [
+            (0.1, true),
+            (tuning.vault_max_thickness - 0.05, true),
+            (tuning.vault_max_thickness + 0.1, false),
+            (2.0, false),
+        ] {
+            let mut app = window_world(0.9, thick, None, 0.0, &[]);
+            assert_eq!(vault(&mut app).is_some(), vaulted, "thickness {thick}");
+        }
+    }
+
+    #[test]
+    fn a_window_must_leave_room_to_cross_crouched() {
+        let crouch = Stance::Crouching.body_height();
+        let mut tight = window_world(0.9, 0.4, Some(0.9 + crouch - 0.1), 0.0, &[]);
+        assert!(vault(&mut tight).is_none());
+        let mut roomy = window_world(0.9, 0.4, Some(0.9 + crouch + 0.2), 0.0, &[]);
+        assert!(vault(&mut roomy).is_some());
+    }
+
+    #[test]
+    fn a_blocked_landing_is_not_vaulted() {
+        // A crate right behind the wall, where the body would land.
+        let landing_zone = (Vec3::new(-1.0, 0.0, -1.6), Vec3::new(1.0, 1.0, -0.9));
+        let mut app = window_world(0.9, 0.4, Some(2.3), 0.0, &[landing_zone]);
+        assert!(vault(&mut app).is_none());
+        // The same crate well clear of it leaves the vault open.
+        let clear = (Vec3::new(-1.0, 0.0, -3.0), Vec3::new(1.0, 1.0, -2.5));
+        let mut app = window_world(0.9, 0.4, Some(2.3), 0.0, &[clear]);
+        assert!(vault(&mut app).is_some());
+    }
+
+    #[test]
+    fn the_floor_behind_must_be_within_a_step_up_and_the_max_drop_down() {
+        let tuning = MovementTuning::fixture();
+        for (far_floor, vaulted) in [
+            (0.3, true),
+            (STEP_HEIGHT + 0.2, false),
+            (1.0, false),
+            (-0.5, true),
+            (-(tuning.vault_max_drop - 0.1), true),
+            (-(tuning.vault_max_drop + 0.5), false),
+        ] {
+            let mut app = window_world(0.9, 0.4, Some(2.3), far_floor, &[]);
+            assert_eq!(vault(&mut app).is_some(), vaulted, "far floor {far_floor}");
+        }
+    }
+
+    #[test]
+    fn a_parapet_over_a_deep_drop_is_not_vaulted() {
+        // From the roof, the street behind the parapet is 3 m down: not a landing.
+        let mut roof = window_world(0.9, 0.4, None, -3.0, &[]);
+        assert!(vault(&mut roof).is_none());
+    }
+
+    #[test]
+    fn a_wall_met_end_on_is_not_vaulted() {
+        // Facing along the 4 m wall from its end: "thickness" far beyond a sill's.
+        let mut app = window_world(0.9, 0.4, Some(2.3), 0.0, &[]);
+        let found = app
+            .world_mut()
+            .run_system_once(|spatial: SpatialQuery| {
+                find_vault(
+                    &StanceShapes::default(),
+                    &spatial,
+                    Vec3::new(2.5, 0.0, -0.6),
+                    Dir3::NEG_X,
+                    0.0,
+                    &MovementTuning::fixture(),
+                )
+            })
+            .unwrap();
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn a_vault_rises_to_the_sill_and_lands_on_the_far_side() {
+        let vault = Mantle {
+            from: Vec3::ZERO,
+            to: Vec3::new(0.0, 0.1, -1.2),
+            crest: Some(0.92),
+            elapsed: 0.0,
+            secs: 0.5,
+        };
+        assert_eq!(vault.feet(0.0), Vec3::ZERO);
+        assert!((vault.feet(VAULT_APEX).y - 0.92).abs() < 1e-5);
+        assert!((vault.feet(1.0) - vault.to).length() < 1e-5);
+        // Never above the sill top on the way, and the move across waits until it is nearly up.
+        let samples = (0..=100).map(|i| vault.feet(i as f32 / 100.0));
+        assert!(
+            samples
+                .clone()
+                .all(|feet| feet.y <= 0.92 + 1e-5 && feet.y >= -1e-5)
+        );
+        assert!(samples.take(10).all(|feet| feet.z > -0.05));
     }
 }

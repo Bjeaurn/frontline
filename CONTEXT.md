@@ -128,7 +128,11 @@ _Avoid_: Inspired map, clone
 
 **Mantle**:
 Climbing onto a ledge up to about chest height by moving into it. Steps and ramps up to 0.45 m (the stairs) are not Mantles: they are simply walked.
-_Avoid_: Vault, climb, ledge grab
+_Avoid_: Climb, ledge grab
+
+**Vault**:
+Crossing a thin wall or window sill (sill 0.6 to 1.2 m high, wall up to 0.6 m thick) in one move by jumping into it, with floor to land on behind. A thin wall is vaulted, anything else is Mantled. Every generated window has the standard sill (0.9 m) and opening (1.4 m tall, 1 m wide at least), so any of them can be vaulted.
+_Avoid_: Window climb
 
 **Dive**:
 Pressing prone while sprinting: a short forward lunge into the prone stance, then a brief recovery with no moving, firing or standing.
@@ -139,6 +143,10 @@ _Avoid_: Slide, roll
 **Weapon**:
 A gun a player carries, either a **Primary** or a **Secondary**.
 _Avoid_: Gun (in docs), item
+
+**Projectile Weapon**:
+A **Weapon** whose bullet the server simulates with travel time and drop instead of landing instantly (hitscan): today only the sniper rifle (ADR 0005). Targets at range must be led and held over.
+_Avoid_: Ballistic weapon
 
 **Primary**:
 The main **Weapon** in a **Loadout**: assault rifle, SMG, sniper rifle or shotgun.
