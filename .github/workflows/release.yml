@@ -1,0 +1,98 @@
+name: Release
+
+# Push a tag `vX.Y.Z` (matching the version in crates/frontline/Cargo.toml) and this runs CI, builds
+# Frontline for Linux, Windows and macOS (Apple silicon and Intel) and publishes a GitHub release
+# with the archives. Run it by hand (Actions > Release > Run workflow) to build the archives
+# without releasing: they are attached to the run as artifacts.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: ci
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-gnu }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: macos-latest, target: aarch64-apple-darwin }
+          # Cross-compiled from the Apple silicon runner.
+          - { os: macos-latest, target: x86_64-apple-darwin }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Name the build
+        id: meta
+        shell: bash
+        run: |
+          version=$(grep -m1 '^version' crates/frontline/Cargo.toml | cut -d'"' -f2)
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match the crate version ${version}; bump crates/frontline/Cargo.toml and tag again"
+            exit 1
+          fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then label="${GITHUB_REF_NAME}"; else label="v${version}-${GITHUB_SHA::7}"; fi
+          echo "name=frontline-${label}-${{ matrix.target }}" >> "$GITHUB_OUTPUT"
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          targets: ${{ matrix.target }}
+          cache-key: release-${{ matrix.target }}
+
+      - name: Build
+        shell: bash
+        run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - name: Package
+        id: package
+        shell: bash
+        run: echo "archive=$(tools/ci/package.sh ${{ matrix.target }} ${{ steps.meta.outputs.name }})" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.name }}
+          path: ${{ steps.package.outputs.archive }}
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: archives
+          merge-multiple: true
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          flags=(--generate-notes --title "Frontline ${GITHUB_REF_NAME}")
+          # A tag with a suffix (v0.2.0-rc1) is a pre-release.
+          [[ ${GITHUB_REF_NAME} == *-* ]] && flags+=(--prerelease)
+          gh release create "${GITHUB_REF_NAME}" archives/* "${flags[@]}"

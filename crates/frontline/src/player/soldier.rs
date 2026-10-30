@@ -79,8 +79,8 @@ impl Gait {
     /// speeds of the movement data.
     pub fn advance(&mut self, speed: f32, walk_speed: f32, sprint_speed: f32, dt: f32) {
         self.walk = (speed / walk_speed.max(f32::EPSILON)).clamp(0.0, 1.0);
-        self.run = ((speed - walk_speed) / (sprint_speed - walk_speed).max(f32::EPSILON))
-            .clamp(0.0, 1.0);
+        self.run =
+            ((speed - walk_speed) / (sprint_speed - walk_speed).max(f32::EPSILON)).clamp(0.0, 1.0);
         self.phase = (self.phase + TAU * speed / STRIDE_LENGTH * dt) % TAU;
     }
 }
@@ -100,8 +100,8 @@ pub(super) fn pose(stance: Stance, gait: Gait, pitch: f32) -> [Transform; PART_C
     let (torso, head, aim, thighs, shins) = match stance {
         Stance::Standing => {
             let hip = Vec3::new(0.0, STAND_HIP + 0.018 * w * (2.0 * phase).cos(), 0.0);
-            let torso = Transform::from_translation(hip)
-                .with_rotation(rot_x(-(0.03 * w + 0.2 * r)));
+            let torso =
+                Transform::from_translation(hip).with_rotation(rot_x(-(0.03 * w + 0.2 * r)));
             let swing = (0.45 + 0.3 * r) * w;
             let knee = (0.8 + 0.5 * r) * w;
             let legs = [1.0, -1.0].map(|side| {
@@ -123,8 +123,8 @@ pub(super) fn pose(stance: Stance, gait: Gait, pitch: f32) -> [Transform; PART_C
         }
         Stance::Crouching => {
             let hip = CROUCH_HIP + Vec3::Y * 0.01 * w * (2.0 * phase).cos();
-            let torso = Transform::from_translation(hip)
-                .with_rotation(rot_x(CROUCH_LEAN - 0.05 * w));
+            let torso =
+                Transform::from_translation(hip).with_rotation(rot_x(CROUCH_LEAN - 0.05 * w));
             let legs = [1.0, -1.0].map(|side| {
                 leg(
                     hip,
@@ -143,8 +143,7 @@ pub(super) fn pose(stance: Stance, gait: Gait, pitch: f32) -> [Transform; PART_C
             )
         }
         Stance::Prone => {
-            let torso =
-                Transform::from_translation(PRONE_HIP).with_rotation(rot_x(-FRAC_PI_2));
+            let torso = Transform::from_translation(PRONE_HIP).with_rotation(rot_x(-FRAC_PI_2));
             let legs = [1.0, -1.0].map(|side| {
                 leg(
                     PRONE_HIP,
@@ -170,9 +169,7 @@ pub(super) fn pose(stance: Stance, gait: Gait, pitch: f32) -> [Transform; PART_C
     let aim_lift = if stance == Stance::Prone { 0.17 } else { 0.0 };
     let aim = Transform::from_translation(torso.transform_point(SHOULDER) + Vec3::Y * aim_lift)
         .with_rotation(aim);
-    [
-        torso, head, aim, thighs[0], shins[0], thighs[1], shins[1],
-    ]
+    [torso, head, aim, thighs[0], shins[0], thighs[1], shins[1]]
 }
 
 /// A thigh and its shin: the hip joint `hip` and the joint's side (`x` sign), the thigh's
@@ -292,10 +289,7 @@ impl Builder {
         let mut mesh = mesh.transformed_by(at);
         let linear = color.to_linear();
         let rgba = [linear.red, linear.green, linear.blue, linear.alpha];
-        mesh.insert_attribute(
-            Mesh::ATTRIBUTE_COLOR,
-            vec![rgba; mesh.count_vertices()],
-        );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![rgba; mesh.count_vertices()]);
         match &mut self.0 {
             None => self.0 = Some(mesh),
             Some(all) => all.merge(&mesh).expect("primitives share their attributes"),
@@ -341,7 +335,14 @@ impl Builder {
     }
 
     /// A tube along Y centred at `at`, turned by `rotation`.
-    fn tube(&mut self, radius: f32, height: f32, at: Vec3, rotation: Quat, color: Color) -> &mut Self {
+    fn tube(
+        &mut self,
+        radius: f32,
+        height: f32,
+        at: Vec3,
+        rotation: Quat,
+        color: Color,
+    ) -> &mut Self {
         self.add(
             Cylinder::new(radius, height).mesh().resolution(10).build(),
             Transform::from_translation(at).with_rotation(rotation),
@@ -420,10 +421,24 @@ fn build_part(part: Part, look: &SoldierLook) -> Mesh {
 fn build_thigh(look: &SoldierLook) -> Mesh {
     let uniform = rgb(look.uniform);
     let mut b = Builder::default();
-    b.limb(v(0.0, -THIGH_LENGTH, 0.0), Vec3::ZERO, 0.077, 0.105, uniform)
-        // Cargo pocket and knee pad.
-        .cuboid(v(0.12, 0.12, 0.04), v(0.0, -0.2, -0.085), shade(uniform, 0.8))
-        .cuboid(v(0.1, 0.1, 0.05), v(0.0, -0.455, -0.07), shade(rgb(look.vest), 0.7));
+    b.limb(
+        v(0.0, -THIGH_LENGTH, 0.0),
+        Vec3::ZERO,
+        0.077,
+        0.105,
+        uniform,
+    )
+    // Cargo pocket and knee pad.
+    .cuboid(
+        v(0.12, 0.12, 0.04),
+        v(0.0, -0.2, -0.085),
+        shade(uniform, 0.8),
+    )
+    .cuboid(
+        v(0.1, 0.1, 0.05),
+        v(0.0, -0.455, -0.07),
+        shade(rgb(look.vest), 0.7),
+    );
     b.build()
 }
 
@@ -434,7 +449,11 @@ fn build_shin(look: &SoldierLook) -> Mesh {
     b.limb(v(0.0, -0.3, 0.0), Vec3::ZERO, 0.062, 0.077, uniform)
         .limb(v(0.0, -0.46, 0.0), v(0.0, -0.28, 0.0), 0.062, 0.07, BOOT)
         .cuboid(v(0.11, 0.07, 0.2), v(0.0, -0.43, -0.06), BOOT)
-        .cuboid(v(0.125, 0.03, 0.27), v(0.0, -0.455, -0.045), shade(BOOT, 0.5));
+        .cuboid(
+            v(0.125, 0.03, 0.27),
+            v(0.0, -0.455, -0.045),
+            shade(BOOT, 0.5),
+        );
     b.build()
 }
 
@@ -459,7 +478,13 @@ fn build_torso(look: &SoldierLook) -> Mesh {
         .tube(0.05, 0.1, v(0.0, 0.62, 0.0), Quat::IDENTITY, rgb(look.skin))
         // Assault pack with a rolled mat on top, and hip pouches.
         .cuboid(v(0.3, 0.34, 0.13), v(0.0, 0.4, 0.19), pack)
-        .tube(0.055, 0.28, v(0.0, 0.6, 0.2), Quat::from_rotation_z(FRAC_PI_2), shade(vest, 0.6))
+        .tube(
+            0.055,
+            0.28,
+            v(0.0, 0.6, 0.2),
+            Quat::from_rotation_z(FRAC_PI_2),
+            shade(vest, 0.6),
+        )
         .cuboid(v(0.06, 0.1, 0.1), v(-0.205, 0.08, 0.04), pouch)
         .cuboid(v(0.06, 0.1, 0.1), v(0.205, 0.08, 0.04), pouch);
     b.build()
@@ -472,8 +497,11 @@ fn build_head(look: &SoldierLook) -> Mesh {
     let dark = Color::srgb(0.06, 0.06, 0.07);
     let centre = v(0.0, HEAD_CENTRE, 0.0);
     let mut b = Builder::default();
-    b.ball(v(0.088, 0.108, 0.1), centre, skin)
-        .cuboid(v(0.02, 0.03, 0.03), centre + v(0.0, -0.01, -0.1), shade(skin, 0.9));
+    b.ball(v(0.088, 0.108, 0.1), centre, skin).cuboid(
+        v(0.02, 0.03, 0.03),
+        centre + v(0.0, -0.01, -0.1),
+        shade(skin, 0.9),
+    );
     if look.mask {
         // Balaclava over the lower face, leaving a strip for the eyes.
         let mut mask = Sphere::new(1.0).mesh().uv(12, 8);
@@ -495,9 +523,22 @@ fn build_head(look: &SoldierLook) -> Mesh {
     let top = HEAD_CENTRE + 0.02;
     match look.headgear {
         Headgear::Helmet => {
-            b.dome(v(0.126, 0.115, 0.135), v(0.0, top, 0.01), Quat::IDENTITY, cloth)
-                .cuboid(v(0.05, 0.04, 0.03), v(0.0, top + 0.07, -0.125), shade(cloth, 0.4))
-                .cuboid(v(0.19, 0.035, 0.04), v(0.0, top + 0.01, 0.135), shade(cloth, 0.9));
+            b.dome(
+                v(0.126, 0.115, 0.135),
+                v(0.0, top, 0.01),
+                Quat::IDENTITY,
+                cloth,
+            )
+            .cuboid(
+                v(0.05, 0.04, 0.03),
+                v(0.0, top + 0.07, -0.125),
+                shade(cloth, 0.4),
+            )
+            .cuboid(
+                v(0.19, 0.035, 0.04),
+                v(0.0, top + 0.01, 0.135),
+                shade(cloth, 0.9),
+            );
         }
         Headgear::Beret => {
             b.dome(
@@ -506,40 +547,99 @@ fn build_head(look: &SoldierLook) -> Mesh {
                 Quat::from_rotation_z(-0.18),
                 cloth,
             )
-            .cuboid(v(0.015, 0.03, 0.015), v(0.0, top + 0.08, 0.0), shade(cloth, 0.7));
+            .cuboid(
+                v(0.015, 0.03, 0.015),
+                v(0.0, top + 0.08, 0.0),
+                shade(cloth, 0.7),
+            );
         }
         Headgear::Boonie => {
-            b.dome(v(0.108, 0.09, 0.118), v(0.0, top, 0.0), Quat::IDENTITY, cloth)
-                .tube(0.19, 0.012, v(0.0, top + 0.002, 0.0), Quat::IDENTITY, shade(cloth, 0.9));
+            b.dome(
+                v(0.108, 0.09, 0.118),
+                v(0.0, top, 0.0),
+                Quat::IDENTITY,
+                cloth,
+            )
+            .tube(
+                0.19,
+                0.012,
+                v(0.0, top + 0.002, 0.0),
+                Quat::IDENTITY,
+                shade(cloth, 0.9),
+            );
         }
         Headgear::Cap => {
-            b.dome(v(0.108, 0.09, 0.118), v(0.0, top, 0.0), Quat::IDENTITY, cloth)
-                .cuboid_rotated(
-                    v(0.15, 0.012, 0.1),
-                    v(0.0, top + 0.01, -0.135),
-                    Quat::from_rotation_x(0.22),
-                    shade(cloth, 0.85),
-                );
+            b.dome(
+                v(0.108, 0.09, 0.118),
+                v(0.0, top, 0.0),
+                Quat::IDENTITY,
+                cloth,
+            )
+            .cuboid_rotated(
+                v(0.15, 0.012, 0.1),
+                v(0.0, top + 0.01, -0.135),
+                Quat::from_rotation_x(0.22),
+                shade(cloth, 0.85),
+            );
         }
         Headgear::Beanie => {
-            b.dome(v(0.106, 0.1, 0.116), v(0.0, top - 0.005, 0.0), Quat::IDENTITY, cloth)
-                .tube(0.108, 0.04, v(0.0, top + 0.005, 0.0), Quat::IDENTITY, shade(cloth, 1.4));
+            b.dome(
+                v(0.106, 0.1, 0.116),
+                v(0.0, top - 0.005, 0.0),
+                Quat::IDENTITY,
+                cloth,
+            )
+            .tube(
+                0.108,
+                0.04,
+                v(0.0, top + 0.005, 0.0),
+                Quat::IDENTITY,
+                shade(cloth, 1.4),
+            );
         }
         Headgear::Shemagh => {
-            b.dome(v(0.115, 0.1, 0.125), v(0.0, top - 0.01, 0.005), Quat::IDENTITY, cloth)
-                .tube(0.1, 0.07, v(0.0, 0.03, 0.0), Quat::IDENTITY, shade(cloth, 0.9))
-                .cuboid_rotated(
-                    v(0.2, 0.15, 0.03),
-                    v(0.0, 0.09, 0.115),
-                    Quat::from_rotation_x(-0.2),
-                    shade(cloth, 0.95),
-                );
+            b.dome(
+                v(0.115, 0.1, 0.125),
+                v(0.0, top - 0.01, 0.005),
+                Quat::IDENTITY,
+                cloth,
+            )
+            .tube(
+                0.1,
+                0.07,
+                v(0.0, 0.03, 0.0),
+                Quat::IDENTITY,
+                shade(cloth, 0.9),
+            )
+            .cuboid_rotated(
+                v(0.2, 0.15, 0.03),
+                v(0.0, 0.09, 0.115),
+                Quat::from_rotation_x(-0.2),
+                shade(cloth, 0.95),
+            );
         }
         Headgear::Ushanka => {
-            b.dome(v(0.12, 0.1, 0.13), v(0.0, top - 0.005, 0.005), Quat::IDENTITY, cloth)
-                .cuboid(v(0.2, 0.045, 0.04), v(0.0, top + 0.015, -0.12), shade(cloth, 1.3))
-                .cuboid(v(0.035, 0.11, 0.13), v(-0.118, top - 0.06, 0.01), shade(cloth, 1.25))
-                .cuboid(v(0.035, 0.11, 0.13), v(0.118, top - 0.06, 0.01), shade(cloth, 1.25));
+            b.dome(
+                v(0.12, 0.1, 0.13),
+                v(0.0, top - 0.005, 0.005),
+                Quat::IDENTITY,
+                cloth,
+            )
+            .cuboid(
+                v(0.2, 0.045, 0.04),
+                v(0.0, top + 0.015, -0.12),
+                shade(cloth, 1.3),
+            )
+            .cuboid(
+                v(0.035, 0.11, 0.13),
+                v(-0.118, top - 0.06, 0.01),
+                shade(cloth, 1.25),
+            )
+            .cuboid(
+                v(0.035, 0.11, 0.13),
+                v(0.118, top - 0.06, 0.01),
+                shade(cloth, 1.25),
+            );
         }
     }
     b.build()
@@ -611,7 +711,13 @@ fn build_mark_aim() -> Mesh {
         let along = |t: f32| shoulder.lerp(elbow, t);
         // The upper arm tapers from 0.062 to 0.05.
         let radius = |t: f32| 0.062 + (0.05 - 0.062) * t + 0.005;
-        b.limb(along(0.35), along(0.55), radius(0.35), radius(0.55), Color::WHITE);
+        b.limb(
+            along(0.35),
+            along(0.55),
+            radius(0.35),
+            radius(0.55),
+            Color::WHITE,
+        );
     }
     b.build()
 }

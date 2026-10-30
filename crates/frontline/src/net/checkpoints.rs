@@ -164,6 +164,9 @@ mod tests {
             newest.insert(RepliconTick::new(replicon_tick), Tick(replicon_tick));
         }
         let kept: Vec<u32> = newest.0.iter().map(|&(_, tick)| tick.0).collect();
-        assert_eq!(kept, (100 - PROTECTED_CHECKPOINTS as u32..100).collect::<Vec<_>>());
+        assert_eq!(
+            kept,
+            (100 - PROTECTED_CHECKPOINTS as u32..100).collect::<Vec<_>>()
+        );
     }
 }

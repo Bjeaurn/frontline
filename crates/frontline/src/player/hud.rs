@@ -151,7 +151,9 @@ fn value_noise(x: f32, y: f32) -> f32 {
 
 /// Three octaves of value noise, `0..1`.
 fn fbm(x: f32, y: f32) -> f32 {
-    (value_noise(x, y) * 0.5 + value_noise(x * 2.1, y * 2.1) * 0.3 + value_noise(x * 4.3, y * 4.3) * 0.2)
+    (value_noise(x, y) * 0.5
+        + value_noise(x * 2.1, y * 2.1) * 0.3
+        + value_noise(x * 4.3, y * 4.3) * 0.2)
         .clamp(0.0, 1.0)
 }
 
@@ -169,7 +171,8 @@ fn blood_edges() -> Image {
             let mut alpha = edge * edge * (3.0 - 2.0 * edge);
             let drops = fbm(u * 9.0 + 1.0, v * 9.0 + 11.0);
             if r > 0.5 && drops > 0.68 {
-                alpha = alpha.max(((drops - 0.68) / 0.08).min(1.0) * 0.8 * ((r - 0.5) * 3.0).min(1.0));
+                alpha =
+                    alpha.max(((drops - 0.68) / 0.08).min(1.0) * 0.8 * ((r - 0.5) * 3.0).min(1.0));
             }
             let shade = 1.0 - 0.45 * alpha;
             [
@@ -195,11 +198,7 @@ fn blood_edges() -> Image {
 
 /// A black fade at the top or bottom edge of the death screen (letterbox).
 fn death_bar(to_bottom: bool) -> impl Bundle {
-    let (from, to) = if to_bottom {
-        (0.9, 0.0)
-    } else {
-        (0.0, 0.9)
-    };
+    let (from, to) = if to_bottom { (0.9, 0.0) } else { (0.0, 0.9) };
     (
         Node {
             width: percent(100.0),
@@ -366,8 +365,9 @@ pub(super) fn update_damage_vignette(
 
     let low = ((missing - (1.0 - HEARTBEAT_BELOW)) / HEARTBEAT_BELOW).clamp(0.0, 1.0);
     let beat = (time.elapsed_secs() * HEARTBEAT_HZ * std::f32::consts::TAU).sin() * 0.5 + 0.5;
-    let alpha = (missing * BLOOD_HEALTH_ALPHA + *flash * BLOOD_HIT_ALPHA + beat.powi(3) * 0.2 * low)
-        .clamp(0.0, 1.0);
+    let alpha =
+        (missing * BLOOD_HEALTH_ALPHA + *flash * BLOOD_HIT_ALPHA + beat.powi(3) * 0.2 * low)
+            .clamp(0.0, 1.0);
     let (image, visibility) = &mut *blood;
     image.color = Color::srgba(1.0, 1.0, 1.0, alpha);
     visibility.set_if_neq(if alpha > 0.01 {

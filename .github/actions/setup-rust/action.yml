@@ -1,0 +1,51 @@
+name: Set up Rust
+description: >
+  Installs the Rust toolchain named by `rust-version` in the workspace Cargo.toml (one place to
+  bump it), the Linux system libraries Bevy needs, and a cargo cache. Run actions/checkout first.
+
+inputs:
+  components:
+    description: Comma-separated rustup components, e.g. "rustfmt" or "clippy".
+    default: ""
+  targets:
+    description: Comma-separated extra rustup targets, e.g. "x86_64-apple-darwin".
+    default: ""
+  cache:
+    description: Restore and save the cargo cache (off for jobs that compile nothing).
+    default: "true"
+  cache-key:
+    description: Extra cache key part, to keep different jobs' caches apart.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust
+      shell: bash
+      env:
+        COMPONENTS: ${{ inputs.components }}
+        TARGETS: ${{ inputs.targets }}
+      run: |
+        version=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
+        args=(--profile minimal --no-self-update)
+        [ -n "$COMPONENTS" ] && args+=(--component "$COMPONENTS")
+        [ -n "$TARGETS" ] && args+=(--target "$TARGETS")
+        rustup toolchain install "$version" "${args[@]}"
+        rustup default "$version"
+        rustc --version --verbose
+
+    # Bevy's Linux build dependencies: ALSA (audio), udev (gamepads), Wayland and X11 (windowing).
+    - name: Install Linux libraries
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev \
+          libx11-dev libxcursor-dev libxi-dev libxrandr-dev
+
+    - name: Cache cargo
+      if: inputs.cache == 'true'
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ inputs.cache-key }}

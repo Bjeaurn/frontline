@@ -90,7 +90,9 @@ pub fn sky_color(sky: &SkyParams, dir: Vec3) -> Vec3 {
         // Lit from the sun's side: compare density a step towards the sun.
         let towards_sun = Vec2::new(sky.to_sun.x, sky.to_sun.z).normalize_or_zero() * 0.12;
         let lit = (density_noise - fbm(plane + towards_sun)).clamp(-0.3, 0.3) * 1.6;
-        let base = sky.horizon.lerp(Vec3::ONE * sky.horizon.max_element().max(0.3), 0.45);
+        let base = sky
+            .horizon
+            .lerp(Vec3::ONE * sky.horizon.max_element().max(0.3), 0.45);
         let shade = (0.78 + lit - 0.22 * density_noise).clamp(0.35, 1.25);
         let cloud = base * shade + sky.sun_color * sun.powi(8) * 0.25;
         // Clouds thin into the haze at the horizon.

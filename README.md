@@ -286,6 +286,23 @@ SETTINGS (title menu, or the pause menu in game) has four tabs. Edits wait for A
 - **Controls:** mouse sensitivity, an ADS sensitivity multiplier (0.25x to 1.5x; the view blends to it as you aim down sights), invert Y, and the key-rebinding list. Click an action, then press the new key (or mouse button for Fire and Aim); Esc cancels. A key another action already uses is taken from it, and that action shows UNBOUND. Rebinding replaces all of an action's keys (Prone has two by default). RESET ALL restores the defaults. Esc stays the Pause / back key, and clicking the game still grabs the mouse; neither is in the list. Keys outside the usual letters, digits, F-keys, arrows, numpad, modifier and punctuation set can't be bound.
 - **Gameplay:** your name, the field of view, Auto reload (off by default: an empty magazine only clicks and R reloads; on, pulling the trigger on it reloads), the CoD4 texture path (CHECK applies it and the status line says what was found) and the Custom Match Rules editor.
 
+## CI and releases
+
+GitHub Actions (`.github/workflows/`) run on every push to `main` and every pull request:
+
+1. **Format:** `cargo fmt --all --check`.
+2. **Clippy and tests:** `cargo clippy --locked --all-targets -- -D warnings`, then `cargo test --locked`, on Linux. The Homage Maps (`content/private/`) are never there: nothing may depend on them.
+
+**Releasing:** bump `version` in `crates/frontline/Cargo.toml`, commit, then push a tag that matches it:
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The Release workflow runs the checks above on the tagged commit, builds Frontline in release mode for Linux (x86_64), Windows (x86_64) and macOS (Apple silicon and Intel), packs each into `frontline-<tag>-<target>.tar.gz` (`.zip` on Windows) and publishes them in a GitHub release with generated notes. A tag with a suffix (`v0.2.0-rc1`) is marked a pre-release; a tag that doesn't match the crate version fails before building. Run the workflow by hand (Actions > Release > Run workflow) to get the archives as run artifacts without releasing anything.
+
+Each archive holds the executable, `assets/` (maps, models, fonts: it must stay next to the executable), `data/` (optional tuning overrides; the same files are built in) and this README. The builds are unsigned: macOS asks you to allow the app in System Settings > Privacy & Security (or `xattr -d com.apple.quarantine frontline`), and Windows SmartScreen shows a warning. The toolchain is the `rust-version` in the workspace `Cargo.toml`, so it is bumped in one place.
+
 ## Layout
 
 - `crates/frontline/src/flow.rs`: screen states (main menu, in game, overlays), flow commands, Settings file
@@ -322,6 +339,7 @@ SETTINGS (title menu, or the pause menu in game) has four tabs. Edits wait for A
 - `tools/mapgen/`: Python generator for `.map` files (the arena, Crossroads) and its building kit
 - `tools/camos/`: generates the weapon camo textures (`camos.py`, Pillow only)
 - `tools/assets/`: imports prop models from raw asset packs (`import_props.py`, also their `bounds.json`)
+- `tools/ci/package.sh`: packs a release build (executable, `assets/`, `data/`, README) into the archive the release workflow publishes
 - `crates/frontline/src/shared.rs`: pose and stance types shared by netcode and gameplay
 
 Private content such as Homage Maps lives in the separate private repo `Bjeaurn/frontline-private`, cloned into the git-ignored `content/private/` (see `docs/adr/0003`):

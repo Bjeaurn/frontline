@@ -5,9 +5,9 @@
 //! there are with the Video quality.
 
 use avian3d::prelude::*;
+use bevy::camera::visibility::RenderLayers;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
-use bevy::camera::visibility::RenderLayers;
 
 use super::viewmodel::VIEWMODEL_LAYER;
 use super::{ShotFired, WeaponRng, WeaponSystems};
@@ -457,7 +457,13 @@ fn spawn_impact(
     if detail > Detail::Low {
         for _ in 0..detail.count(4) {
             let velocity = normal * (2.0 + rng.next() * 3.0) + random_unit(rng) * 2.5;
-            spawn_spark(commands, particles, at + normal * 0.02, velocity, 0.2 + rng.next() * 0.2);
+            spawn_spark(
+                commands,
+                particles,
+                at + normal * 0.02,
+                velocity,
+                0.2 + rng.next() * 0.2,
+            );
         }
     }
 }
@@ -503,8 +509,7 @@ fn spawn_impacts(
         };
         // The last metre of its flight, along the way it came.
         let heading = (landing.position - bullet.origin).normalize_or_zero();
-        if let Some(strike) =
-            surface_at_end(&spatial, landing.position - heading, landing.position)
+        if let Some(strike) = surface_at_end(&spatial, landing.position - heading, landing.position)
         {
             strikes.push(strike);
         }
