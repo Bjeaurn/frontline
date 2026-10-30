@@ -8,9 +8,7 @@ use std::hash::{BuildHasher, RandomState};
 use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
 use bevy::prelude::*;
 
-use super::remote::{
-    RemoteAssets, RemoteDeath, soldier_material, team_color, team_material,
-};
+use super::remote::{RemoteAssets, RemoteDeath, soldier_material, team_color, team_material};
 use super::soldier::{self, Gait};
 use crate::data::GameData;
 use crate::flow::AppState;

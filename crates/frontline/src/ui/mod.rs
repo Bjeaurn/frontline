@@ -75,11 +75,11 @@ impl Plugin for UiPlugin {
             bold,
             display,
         })
-            .insert_resource(icon)
-            .add_systems(
-                Update,
-                (style_buttons, place_slider_thumbs, banner::animate_banners),
-            );
+        .insert_resource(icon)
+        .add_systems(
+            Update,
+            (style_buttons, place_slider_thumbs, banner::animate_banners),
+        );
     }
 }
 

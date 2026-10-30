@@ -21,10 +21,10 @@ use crate::assets::EMBEDDED_ROOT;
 use crate::data::{GameData, GunModel, STEADY_MAGNIFICATION};
 use crate::maps::MapRegistry;
 use crate::match_hud::is_friendly;
-use crate::weapon::rig::gun_rig;
 use crate::shared::{
     Health, MatchState, PlayerPose, PlayerTeam, RemotePlayer, Stance, TELEPORT_DISTANCE, Team,
 };
+use crate::weapon::rig::gun_rig;
 
 /// Exponential decay rate (1/s) of the transform toward the pose; higher follows tighter.
 const FOLLOW_RATE: f32 = 20.0;

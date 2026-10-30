@@ -3,29 +3,27 @@
 //! where the server says they are, and what a detonation shows: a fireball and bang, a flashbang
 //! that whites out a viewer facing it and deafens, a smoke cloud that greys the view.
 
-use bevy::audio::{AudioPlayer, AudioSource, GlobalVolume, PlaybackSettings, Volume};
 use bevy::asset::AssetPath;
+use bevy::audio::{AudioPlayer, AudioSource, GlobalVolume, PlaybackSettings, Volume};
 use bevy::prelude::*;
 
-use super::{
-    Carried, Effect, Grenade, PouchSlot, depth_in_cloud, flash_alpha, smoke_density,
-};
+use super::{Carried, Effect, Grenade, PouchSlot, depth_in_cloud, flash_alpha, smoke_density};
 use crate::assets::EMBEDDED_ROOT;
+use crate::atmosphere::ActiveLook;
 use crate::data::GameData;
 use crate::flow::{AppState, Settings};
 use crate::net::protocol::{Flashed, GrenadeDetonated, ThrowGrenade};
+use crate::particles::{
+    Detail, Fade, ParticleAssets, PuffSpec, Shape, random_unit, spawn_puff, spawn_spark,
+};
 use crate::player::input::{Action, Bindings};
 use crate::player::{EyeCamera, LocalLife, MouseCaptured};
 use crate::rear_cue::RearCue;
 use crate::shared::{FromServer, LocalPlayer, PlayerPose, ToServer};
 use crate::ui::{AMBER, TEXT, UiFonts, hud_text};
-use crate::weapon::{EquipmentRows, HeldWeapon};
-use crate::atmosphere::ActiveLook;
-use crate::particles::{
-    Detail, Fade, ParticleAssets, PuffSpec, Shape, random_unit, spawn_puff, spawn_spark,
-};
 use crate::video::ActiveVideo;
 use crate::weapon::WeaponRng;
+use crate::weapon::{EquipmentRows, HeldWeapon};
 
 /// A thrown Grenade leaves the hand a little above the aim, so the throw lobs.
 const LOB_PITCH: f32 = 0.14;
@@ -565,7 +563,11 @@ fn animate_bursts(
     }
 }
 
-fn animate_clouds(time: Res<Time>, mut clouds: Query<(Entity, &mut Cloud)>, mut commands: Commands) {
+fn animate_clouds(
+    time: Res<Time>,
+    mut clouds: Query<(Entity, &mut Cloud)>,
+    mut commands: Commands,
+) {
     for (entity, mut cloud) in &mut clouds {
         cloud.age += time.delta_secs();
         if cloud.age >= cloud.secs {

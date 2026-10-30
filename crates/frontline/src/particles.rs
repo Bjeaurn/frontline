@@ -283,7 +283,12 @@ fn flame_texture() -> Image {
         let half_width = 0.18 + 0.82 * along.powf(0.7);
         let across = 1.0 - (p.x.abs() / half_width).min(1.0).powf(1.6);
         let alpha = across * along.powf(1.4);
-        [1.0, 0.85 - 0.25 * (1.0 - along), 0.55 - 0.35 * (1.0 - along), alpha]
+        [
+            1.0,
+            0.85 - 0.25 * (1.0 - along),
+            0.55 - 0.35 * (1.0 - along),
+            alpha,
+        ]
     })
 }
 
@@ -405,7 +410,8 @@ fn update_puffs(
         puff.velocity.y -= spec.gravity * dt;
         transform.translation += puff.velocity * dt;
         let grown = (puff.age / spec.grow_secs.max(f32::EPSILON)).min(1.0);
-        let size = spec.start_size + (spec.end_size - spec.start_size) * (1.0 - (1.0 - grown).powi(2));
+        let size =
+            spec.start_size + (spec.end_size - spec.start_size) * (1.0 - (1.0 - grown).powi(2));
         transform.scale = Vec3::splat(size);
         transform.rotation = facing * Quat::from_rotation_z(spec.angle + spec.spin * puff.age);
         if let Some(mut material) = materials.get_mut(&puff.material) {
@@ -427,7 +433,13 @@ pub fn random_unit(rng: &mut WeaponRng) -> Vec3 {
 }
 
 /// Spawns a glowing spark streak.
-pub fn spawn_spark(commands: &mut Commands, assets: &ParticleAssets, at: Vec3, velocity: Vec3, life: f32) {
+pub fn spawn_spark(
+    commands: &mut Commands,
+    assets: &ParticleAssets,
+    at: Vec3,
+    velocity: Vec3,
+    life: f32,
+) {
     commands.spawn((
         Name::new("Spark"),
         Spark {
@@ -464,7 +476,11 @@ fn update_sparks(
             transform.rotation = Quat::from_rotation_arc(Vec3::Z, *direction);
         }
         let left = 1.0 - spark.age / spark.life;
-        transform.scale = Vec3::new(0.008 * left, 0.008 * left, (speed * 0.012).clamp(0.03, 0.12) * left);
+        transform.scale = Vec3::new(
+            0.008 * left,
+            0.008 * left,
+            (speed * 0.012).clamp(0.03, 0.12) * left,
+        );
     }
 }
 
@@ -491,7 +507,9 @@ pub fn spawn_bullet_hole(
             Mesh3d(assets.quad.clone()),
             MeshMaterial3d(assets.hole_material.clone()),
             Transform::from_translation(at + normal * 0.004)
-                .with_rotation(Quat::from_rotation_arc(Vec3::Z, normal) * Quat::from_rotation_z(roll * TAU))
+                .with_rotation(
+                    Quat::from_rotation_arc(Vec3::Z, normal) * Quat::from_rotation_z(roll * TAU),
+                )
                 .with_scale(Vec3::splat(size)),
             NotShadowCaster,
             DespawnOnExit(AppState::InGame),
