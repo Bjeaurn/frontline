@@ -22,7 +22,7 @@ const HEADING_SIZE: f32 = 56.0;
 const CARD_WIDTH: f32 = 360.0;
 const CARD_HEIGHT: f32 = 440.0;
 const EMBLEM_SIZE: f32 = 150.0;
-const FACTION_NAME_SIZE: f32 = 32.0;
+const FACTION_NAME_SIZE: f32 = 25.0;
 const HEADCOUNT_SIZE: f32 = 20.0;
 const ROSTER_SIZE: f32 = 18.0;
 const TAG_SIZE: f32 = 15.0;
@@ -136,6 +136,7 @@ pub(super) fn spawn_team_select(
             GlobalZIndex(20),
             DespawnOnExit(Overlay::TeamSelect),
         ))
+        .insert(BackgroundColor(ui::BACKDROP_SOLID))
         .with_children(|root| {
             root.spawn(ui::title(&fonts, "Choose your side", HEADING_SIZE));
             root.spawn(Node {

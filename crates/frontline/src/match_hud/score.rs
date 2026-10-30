@@ -2,6 +2,7 @@
 //! Faction's short name and emblem, coloured friendly/enemy.
 
 use bevy::prelude::*;
+use bevy::text::LetterSpacing;
 
 use super::{ENEMY_COLOR, FRIENDLY_COLOR, MatchQuery, clock, own_side};
 use crate::data::GameData;
@@ -53,6 +54,11 @@ pub(super) fn spawn_score(mut commands: Commands, fonts: Res<UiFonts>, data: Res
         } else {
             SCORE_WIDTH
         };
+        let edge = if matches!(part, ScorePart::Clock) {
+            ui::AMBER
+        } else {
+            color
+        };
         (
             part,
             Node {
@@ -61,14 +67,16 @@ pub(super) fn spawn_score(mut commands: Commands, fonts: Res<UiFonts>, data: Res
                 max_width: px(width),
                 flex_shrink: 0.0,
                 padding: UiRect::axes(px(8.0), px(0.0)),
+                border: UiRect::bottom(px(3.0)),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 ..default()
             },
             BackgroundColor(BOX_BG),
+            BorderColor::all(edge),
             Text::default(),
             TextFont {
-                font: fonts.bold.clone().into(),
+                font: fonts.display.clone().into(),
                 font_size: FontSize::Px(FONT_SIZE),
                 ..default()
             },
@@ -102,6 +110,7 @@ pub(super) fn spawn_score(mut commands: Commands, fonts: Res<UiFonts>, data: Res
             BackgroundColor(BOX_BG),
             TextLayout::justify(Justify::Center),
             ui::label(&fonts, "", SHORT_NAME_SIZE, color),
+            LetterSpacing::Px(1.5),
         )
     };
     commands.spawn((

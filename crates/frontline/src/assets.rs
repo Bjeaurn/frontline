@@ -96,6 +96,13 @@ const EMBEDDED: &[(&str, &[u8])] = embed![
     "textures/brick/color.jpg",
     "textures/brick/normal.jpg",
     "textures/brick/roughness.jpg",
+    "models/weapons/ak47.glb",
+    "models/weapons/awp.glb",
+    "models/weapons/mac10.glb",
+    "models/weapons/pew.glb",
+    "models/weapons/nade_low.glb",
+    "models/weapons/flashbang_low.glb",
+    "models/weapons/smoke_low.glb",
 ];
 
 /// Registers [`EMBEDDED`] with the asset server. Add it before plugins that load those paths.

@@ -11,7 +11,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use bevy::text::{EditableText, TextCursorStyle};
+use bevy::text::{EditableText, LetterSpacing, TextCursorStyle};
 use bevy::ui::Pressed;
 use bevy::ui_widgets::{
     Button, Slider, SliderRange, SliderThumb, SliderValue, TextInput, observe, slider_self_update,
@@ -21,25 +21,34 @@ mod banner;
 
 pub use banner::{BannerSpec, spawn_result_banner};
 
-pub const BACKDROP: Color = Color::srgba(0.02, 0.03, 0.02, 0.72);
-pub const PANEL: Color = Color::srgba(0.07, 0.08, 0.06, 0.88);
-pub const PANEL_BORDER: Color = Color::srgba(0.55, 0.52, 0.38, 0.5);
-pub const TEXT: Color = Color::srgb(0.90, 0.88, 0.80);
-pub const TEXT_DIM: Color = Color::srgb(0.60, 0.58, 0.52);
+pub const BACKDROP: Color = Color::srgba(0.015, 0.02, 0.015, 0.84);
+pub const PANEL: Color = Color::srgba(0.045, 0.05, 0.04, 0.9);
+pub const PANEL_BORDER: Color = Color::srgba(0.50, 0.48, 0.34, 0.45);
+pub const TEXT: Color = Color::srgb(0.92, 0.90, 0.82);
+pub const TEXT_DIM: Color = Color::srgb(0.62, 0.60, 0.53);
 /// Olive/khaki accent for highlights and selection.
 pub const ACCENT: Color = Color::srgb(0.78, 0.74, 0.45);
-const BUTTON: Color = Color::srgba(0.16, 0.17, 0.13, 0.92);
-const BUTTON_HOVER: Color = Color::srgba(0.30, 0.31, 0.20, 0.95);
-const BUTTON_PRESS: Color = Color::srgba(0.45, 0.44, 0.26, 1.0);
-const FIELD: Color = Color::srgba(0.03, 0.04, 0.03, 0.95);
+/// Hot amber for what the player must notice (fire mode, hovered button, the thin rules).
+pub const AMBER: Color = Color::srgb(0.96, 0.68, 0.18);
+/// Near-opaque backdrop of the full-screen game menus (Loadout, Create a Class), which hide the
+/// HUD behind them.
+pub const BACKDROP_SOLID: Color = Color::srgba(0.015, 0.02, 0.015, 0.95);
+const BUTTON: Color = Color::srgba(0.03, 0.035, 0.028, 0.80);
+const BUTTON_EDGE: Color = Color::srgba(0.36, 0.35, 0.24, 0.9);
+const BUTTON_HOVER: Color = Color::srgba(0.24, 0.21, 0.09, 0.92);
+const BUTTON_PRESS: Color = Color::srgba(0.46, 0.36, 0.10, 1.0);
+const FIELD: Color = Color::srgba(0.02, 0.025, 0.02, 0.95);
 const SLIDER_TRACK: Color = Color::srgba(0.30, 0.30, 0.24, 0.9);
 const SLIDER_THUMB_WIDTH: f32 = 12.0;
 
-/// The bundled Rajdhani faces (SIL OFL 1.1, see `assets/fonts/OFL.txt`).
+/// The bundled faces (SIL OFL 1.1, see `assets/fonts/CREDITS.md`): Rajdhani for text and Saira
+/// Stencil One for titles and big numbers.
 #[derive(Resource, Clone)]
 pub struct UiFonts {
     pub regular: Handle<Font>,
     pub bold: Handle<Font>,
+    /// The stencil face: headings, the logo, big HUD numbers.
+    pub display: Handle<Font>,
 }
 
 pub struct UiPlugin;
@@ -50,6 +59,9 @@ impl Plugin for UiPlugin {
         let regular = fonts.add(Font::from_bytes(
             include_bytes!("../../assets/fonts/Rajdhani-SemiBold.ttf").to_vec(),
         ));
+        let display = fonts.add(Font::from_bytes(
+            include_bytes!("../../assets/fonts/SairaStencilOne-Regular.ttf").to_vec(),
+        ));
         let bold = fonts.add(Font::from_bytes(
             include_bytes!("../../assets/fonts/Rajdhani-Bold.ttf").to_vec(),
         ));
@@ -58,7 +70,11 @@ impl Plugin for UiPlugin {
                 .resource_mut::<Assets<Image>>()
                 .add(arrow_image()),
         );
-        app.insert_resource(UiFonts { regular, bold })
+        app.insert_resource(UiFonts {
+            regular,
+            bold,
+            display,
+        })
             .insert_resource(icon)
             .add_systems(
                 Update,
@@ -71,16 +87,52 @@ impl Plugin for UiPlugin {
 #[derive(Component)]
 pub struct MenuButton;
 
-/// Large uppercase heading.
+/// Large uppercase heading in the stencil face.
 pub fn title(fonts: &UiFonts, text: &str, size: f32) -> impl Bundle {
     (
         Text::new(text.to_uppercase()),
         TextFont {
-            font: fonts.bold.clone().into(),
+            font: fonts.display.clone().into(),
             font_size: FontSize::Px(size),
             ..default()
         },
+        LetterSpacing::Px(size * 0.03),
         TextColor(TEXT),
+        TextShadow {
+            offset: Vec2::splat((size * 0.05).max(1.0)),
+            color: Color::srgba(0.0, 0.0, 0.0, 0.7),
+        },
+    )
+}
+
+/// A thin full-width rule line (1 px): the sharp divider of panels, headers and lists.
+pub fn rule(color: Color) -> impl Bundle {
+    (
+        Node {
+            width: percent(100.0),
+            height: px(1.0),
+            flex_shrink: 0.0,
+            ..default()
+        },
+        BackgroundColor(color),
+    )
+}
+
+/// HUD text: the readable face with the dark drop shadow CoD's HUD uses, so it holds up on any
+/// map.
+pub fn hud_text(font: &Handle<Font>, text: &str, size: f32, color: Color) -> impl Bundle {
+    (
+        Text::new(text),
+        TextFont {
+            font: font.clone().into(),
+            font_size: FontSize::Px(size),
+            ..default()
+        },
+        TextColor(color),
+        TextShadow {
+            offset: Vec2::splat(1.5),
+            color: Color::srgba(0.0, 0.0, 0.0, 0.85),
+        },
     )
 }
 
@@ -112,7 +164,7 @@ pub fn button(fonts: &UiFonts, text: &str) -> impl Bundle {
             ..default()
         },
         BackgroundColor(BUTTON),
-        BorderColor::all(Color::NONE),
+        BorderColor::all(BUTTON_EDGE),
         children![(
             Text::new(text.to_uppercase()),
             TextFont {
@@ -120,6 +172,7 @@ pub fn button(fonts: &UiFonts, text: &str) -> impl Bundle {
                 font_size: FontSize::Px(26.0),
                 ..default()
             },
+            LetterSpacing::Px(1.2),
             TextColor(TEXT),
         )],
     )
@@ -140,7 +193,7 @@ pub fn compact_button(fonts: &UiFonts, text: &str, min_width: f32, size: f32) ->
             ..default()
         },
         BackgroundColor(BUTTON),
-        BorderColor::all(Color::NONE),
+        BorderColor::all(BUTTON_EDGE),
         children![(
             Text::new(text.to_uppercase()),
             TextFont {
@@ -148,6 +201,7 @@ pub fn compact_button(fonts: &UiFonts, text: &str, min_width: f32, size: f32) ->
                 font_size: FontSize::Px(size),
                 ..default()
             },
+            LetterSpacing::Px(0.8),
             TextColor(TEXT),
         )],
     )
@@ -225,18 +279,24 @@ fn arrow_image() -> Image {
     )
 }
 
-/// A bordered dark panel laid out as a column.
+/// A bordered dark panel laid out as a column, with a heavy amber rule along its top edge.
 pub fn panel() -> impl Bundle {
     (
         Node {
             flex_direction: FlexDirection::Column,
             padding: UiRect::all(px(24.0)),
             row_gap: px(10.0),
-            border: UiRect::all(px(1.0)),
+            border: UiRect {
+                top: px(3.0),
+                ..UiRect::all(px(1.0))
+            },
             ..default()
         },
         BackgroundColor(PANEL),
-        BorderColor::all(PANEL_BORDER),
+        BorderColor {
+            top: AMBER,
+            ..BorderColor::all(PANEL_BORDER)
+        },
     )
 }
 
@@ -271,11 +331,11 @@ fn style_buttons(
 ) {
     for (hovered, pressed, mut background, mut border) in &mut buttons {
         let (fill, edge) = if pressed {
-            (BUTTON_PRESS, ACCENT)
+            (BUTTON_PRESS, AMBER)
         } else if hovered.0 {
-            (BUTTON_HOVER, ACCENT)
+            (BUTTON_HOVER, AMBER)
         } else {
-            (BUTTON, Color::NONE)
+            (BUTTON, BUTTON_EDGE)
         };
         background.set_if_neq(BackgroundColor(fill));
         border.set_if_neq(BorderColor::all(edge));

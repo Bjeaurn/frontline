@@ -41,37 +41,37 @@ pub(super) struct Ctx<'a> {
 impl Look {
     fn tile() -> Look {
         Look {
-            idle: Color::srgba(0.10, 0.11, 0.08, 0.94),
-            idle_border: Color::srgba(0.55, 0.52, 0.38, 0.35),
-            lit: Color::srgba(0.24, 0.25, 0.15, 0.97),
-            lit_border: ui::ACCENT,
+            idle: Color::srgba(0.04, 0.045, 0.035, 0.92),
+            idle_border: Color::srgba(0.40, 0.38, 0.27, 0.6),
+            lit: Color::srgba(0.20, 0.17, 0.07, 0.96),
+            lit_border: ui::AMBER,
         }
     }
 
     fn row() -> Look {
         Look {
-            idle: Color::srgba(0.08, 0.09, 0.07, 0.8),
+            idle: Color::srgba(0.03, 0.035, 0.028, 0.8),
             idle_border: Color::NONE,
-            lit: Color::srgba(0.26, 0.27, 0.16, 0.97),
-            lit_border: ui::ACCENT,
+            lit: Color::srgba(0.24, 0.20, 0.08, 0.96),
+            lit_border: ui::AMBER,
         }
     }
 
     fn button() -> Look {
         Look {
-            idle: Color::srgba(0.16, 0.17, 0.13, 0.92),
-            idle_border: Color::NONE,
-            lit: Color::srgba(0.30, 0.31, 0.20, 0.95),
-            lit_border: ui::ACCENT,
+            idle: Color::srgba(0.03, 0.035, 0.028, 0.80),
+            idle_border: Color::srgba(0.36, 0.35, 0.24, 0.9),
+            lit: Color::srgba(0.24, 0.21, 0.09, 0.92),
+            lit_border: ui::AMBER,
         }
     }
 
     fn field() -> Look {
         Look {
-            idle: Color::srgba(0.03, 0.04, 0.03, 0.95),
-            idle_border: Color::srgba(0.55, 0.52, 0.38, 0.5),
-            lit: Color::srgba(0.03, 0.04, 0.03, 0.95),
-            lit_border: ui::ACCENT,
+            idle: Color::srgba(0.02, 0.025, 0.02, 0.95),
+            idle_border: Color::srgba(0.50, 0.48, 0.34, 0.5),
+            lit: Color::srgba(0.02, 0.025, 0.02, 0.95),
+            lit_border: ui::AMBER,
         }
     }
 }

@@ -319,7 +319,11 @@ fn open_in_game(commands: Commands, profile: Res<Profile>, data: Res<GameData>) 
 fn open(mut commands: Commands, origin: Origin, profile: &Profile, data: &GameData) {
     commands.insert_resource(Editor::new(origin, profile, data));
     let root = commands
-        .spawn((Name::new("ClassEditor"), ui::backdrop()))
+        .spawn((Name::new("ClassEditor"), ui::backdrop(), GlobalZIndex(10)))
+        .insert(BackgroundColor(match origin {
+            Origin::Game => ui::BACKDROP_SOLID,
+            Origin::Menu => ui::BACKDROP,
+        }))
         .insert(Node {
             position_type: PositionType::Absolute,
             width: percent(100.0),

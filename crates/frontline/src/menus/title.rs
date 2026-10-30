@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 
 use crate::flow::{AppState, FlowCommand, MenuScreen};
-use crate::ui::{ACCENT, TEXT_DIM, UiFonts, button, label, title};
+use crate::ui::{ACCENT, AMBER, TEXT_DIM, UiFonts, button, label, title};
 
 const ORBIT_RADIUS: f32 = 46.0;
 const ORBIT_HEIGHT: f32 = 34.0;
@@ -60,18 +60,27 @@ pub(super) fn spawn_title(mut commands: Commands, fonts: Res<UiFonts>) {
             BackgroundGradient::from(LinearGradient::new(
                 LinearGradient::TO_RIGHT,
                 vec![
-                    ColorStop::percent(Color::srgba(0.02, 0.03, 0.02, 0.92), 0.0),
-                    ColorStop::percent(Color::srgba(0.02, 0.03, 0.02, 0.55), 45.0),
-                    ColorStop::percent(Color::srgba(0.02, 0.03, 0.02, 0.0), 100.0),
+                    ColorStop::percent(Color::srgba(0.01, 0.015, 0.01, 0.94), 0.0),
+                    ColorStop::percent(Color::srgba(0.01, 0.015, 0.01, 0.66), 42.0),
+                    ColorStop::percent(Color::srgba(0.01, 0.015, 0.01, 0.05), 100.0),
                 ],
             )),
         ))
         .with_children(|root| {
-            root.spawn(title(&fonts, "Frontline", 112.0));
+            root.spawn(title(&fonts, "Frontline", 104.0));
             root.spawn((
-                label(&fonts, "LAN WARFARE", 24.0, ACCENT),
                 Node {
-                    margin: UiRect::bottom(px(36.0)),
+                    width: px(520.0),
+                    height: px(4.0),
+                    margin: UiRect::vertical(px(6.0)),
+                    ..default()
+                },
+                BackgroundColor(AMBER),
+            ));
+            root.spawn((
+                label(&fonts, "L A N   W A R F A R E", 22.0, ACCENT),
+                Node {
+                    margin: UiRect::bottom(px(34.0)),
                     ..default()
                 },
             ));
@@ -101,18 +110,31 @@ pub(super) fn spawn_title(mut commands: Commands, fonts: Res<UiFonts>) {
                 },
             );
             root.spawn((
-                label(
-                    &fonts,
-                    concat!("v", env!("CARGO_PKG_VERSION")),
-                    16.0,
-                    TEXT_DIM,
-                ),
                 Node {
                     position_type: PositionType::Absolute,
                     left: px(96.0),
-                    bottom: px(24.0),
+                    bottom: px(22.0),
+                    column_gap: px(14.0),
+                    align_items: AlignItems::Center,
                     ..default()
                 },
+                children![
+                    label(
+                        &fonts,
+                        concat!("FRONTLINE  v", env!("CARGO_PKG_VERSION")),
+                        15.0,
+                        TEXT_DIM
+                    ),
+                    (
+                        Node {
+                            width: px(1.0),
+                            height: px(14.0),
+                            ..default()
+                        },
+                        BackgroundColor(TEXT_DIM),
+                    ),
+                    label(&fonts, "LAN MULTIPLAYER", 15.0, TEXT_DIM),
+                ],
             ));
         });
 }

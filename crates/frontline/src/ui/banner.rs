@@ -3,6 +3,7 @@
 //! `spawn_result_banner` is all a screen needs; `animate_banners` (added by `UiPlugin`) runs it.
 
 use bevy::prelude::*;
+use bevy::text::LetterSpacing;
 
 use super::UiFonts;
 
@@ -63,14 +64,15 @@ pub fn spawn_result_banner(commands: &mut Commands, fonts: &UiFonts, spec: &Bann
                 Text::new(text),
                 TextFont {
                     font: (if bold {
-                        fonts.bold.clone()
+                        fonts.display.clone()
                     } else {
-                        fonts.regular.clone()
+                        fonts.bold.clone()
                     })
                     .into(),
                     font_size: FontSize::Px(size),
                     ..default()
                 },
+                LetterSpacing::Px(if bold { size * 0.04 } else { 3.0 }),
                 TextColor(color.with_alpha(0.0)),
             ))
             .id()

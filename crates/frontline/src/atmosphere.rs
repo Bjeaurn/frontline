@@ -2,23 +2,30 @@
 //! every world-rendering `Camera3d` (gameplay eye, main menu orbit) when it spawns. Bloom, SSAO,
 //! anti-aliasing and the sun's shadows follow Settings > Video (`video::Quality`) and apply
 //! live. Per Map: a look preset from `data/looks.ron` (grade, fog, sun, ambient, sky), applied
-//! when the Map is ready; the Video brightness setting offsets its exposure. The viewmodel
-//! camera only shares the tone curve and grade (see `weapon::viewmodel`). Client/Host only.
+//! when the Map is ready; the Video brightness setting offsets its exposure. Every world camera
+//! also gets the look's procedural sky (`sky`: gradient, sun, clouds as a `Skybox`), the sky's
+//! colours as hemispherical ambient light (cool from above, warm from the ground) and a
+//! vignette. The viewmodel camera only shares the tone curve and grade (see `weapon::viewmodel`).
+//! Client/Host only.
 //!
 //! SSAO needs `Msaa::Off`, so world cameras anti-alias in post: FXAA (cheapest) or SMAA, where
 //! TAA would also need motion vectors and ghosts on fast flicks.
+
+pub(crate) mod sky;
 
 use std::collections::HashMap;
 
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::anti_alias::smaa::Smaa;
+use bevy::camera::Exposure;
 use bevy::core_pipeline::prepass::{DepthPrepass, NormalPrepass};
 use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::light::DirectionalLightShadowMap;
+use bevy::light::{DirectionalLightShadowMap, EnvironmentMapLight, Skybox};
 use bevy::pbr::{
     DistanceFog, FogFalloff, ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel,
 };
 use bevy::post_process::bloom::Bloom;
+use bevy::post_process::effect_stack::Vignette;
 use bevy::prelude::*;
 use bevy::render::view::{ColorGrading, ColorGradingGlobal, ColorGradingSection};
 use serde::Deserialize;
@@ -29,6 +36,13 @@ use crate::weapon::ViewmodelCamera;
 
 const LOOKS_FILE: &str = "looks.ron";
 const BUILTIN_LOOKS: &str = include_str!("../../../data/looks.ron");
+
+/// Share of a look's ambient light that arrives from the sky and ground (the hemispherical
+/// environment light); the rest is flat fill so shadows never go black.
+const ENVIRONMENT_SHARE: f32 = 0.75;
+/// Vignette shape: a wide, soft falloff that only darkens the corners noticeably.
+const VIGNETTE_RADIUS: f32 = 1.0;
+const VIGNETTE_SMOOTHNESS: f32 = 1.6;
 
 /// The look before a Map is ready, and for Maps that name none (or an unknown one).
 const DEFAULT_LOOK: &str = "overcast_urban";
@@ -54,7 +68,17 @@ pub struct LookPreset {
     pub sun_direction: Rgb,
     pub ambient_color: Rgb,
     pub ambient_brightness: f32,
-    pub sky_color: Rgb,
+    /// Sky colour straight up (it meets the fog colour at the horizon) and cloud cover (0 clear,
+    /// 1 overcast).
+    pub sky_zenith: Rgb,
+    #[serde(default)]
+    pub sky_clouds: f32,
+    /// Colour of the light bounced up from the ground; `sky_zenith` and `ambient_color` light
+    /// from above and the sides.
+    pub ambient_ground: Rgb,
+    /// Strength (0..1) of the dark screen edges.
+    #[serde(default)]
+    pub vignette: f32,
     /// Scale (0 by day, 1 at night) of the Map's practical lights: lamp posts and the like.
     #[serde(default)]
     pub practical_lights: f32,
@@ -103,6 +127,44 @@ impl LookPreset {
         let direction = Vec3::from(self.sun_direction);
         (light, Transform::default().looking_to(direction, Vec3::Y))
     }
+
+    fn sky(&self) -> sky::SkyParams {
+        let linear = |(r, g, b): Rgb| {
+            let color = Color::srgb(r, g, b).to_linear();
+            Vec3::new(color.red, color.green, color.blue)
+        };
+        sky::SkyParams {
+            zenith: linear(self.sky_zenith),
+            horizon: linear(self.fog_color),
+            ground: linear(self.fog_color) * 0.6,
+            to_sun: -Vec3::from(self.sun_direction).normalize(),
+            sun_color: linear(self.sun_color),
+            clouds: self.sky_clouds,
+        }
+    }
+
+    fn vignette(&self) -> Vignette {
+        Vignette {
+            intensity: self.vignette,
+            radius: VIGNETTE_RADIUS,
+            smoothness: VIGNETTE_SMOOTHNESS,
+            ..default()
+        }
+    }
+
+    /// The sky and the light it casts: a hemispherical ambient (sky colour above, ambient colour
+    /// around, ground bounce below).
+    fn environment(&self, images: &mut Assets<Image>) -> ActiveSky {
+        let skybox = images.add(sky::cubemap(&self.sky()));
+        let light = EnvironmentMapLight::hemispherical_gradient(
+            images,
+            srgb(self.sky_zenith),
+            srgb(self.ambient_color),
+            srgb(self.ambient_ground),
+        )
+        .with_intensity(self.ambient_brightness * ENVIRONMENT_SHARE);
+        ActiveSky { skybox, light }
+    }
 }
 
 /// The Map's sun, the one light whose shadows Settings > Video switches.
@@ -132,7 +194,41 @@ struct LookOverride(Option<String>);
 
 /// The look in effect; cameras spawned later pick it up.
 #[derive(Resource, Debug)]
-struct ActiveLook(LookPreset);
+pub struct ActiveLook(LookPreset);
+
+impl ActiveLook {
+    /// The colour of kicked-up dust under this look: the haze tinted by the bounced ground light.
+    pub fn dust(&self) -> LinearRgba {
+        let look = &self.0;
+        let mix = |a: f32, b: f32| a * 0.6 + b * 0.4;
+        srgb((
+            mix(look.fog_color.0, look.ambient_ground.0),
+            mix(look.fog_color.1, look.ambient_ground.1),
+            mix(look.fog_color.2, look.ambient_ground.2),
+        ))
+        .to_linear()
+    }
+}
+
+/// The look's sky: the skybox cubemap and the hemispherical ambient it gives; cameras spawned
+/// later pick it up.
+#[derive(Resource)]
+struct ActiveSky {
+    skybox: Handle<Image>,
+    light: EnvironmentMapLight,
+}
+
+impl ActiveSky {
+    fn skybox(&self) -> Skybox {
+        Skybox {
+            image: Some(self.skybox.clone()),
+            // The skybox is scaled by the camera's exposure like a light; undo that so its texels
+            // read as display colour, in the units fog uses.
+            brightness: 1.0 / Exposure::default().exposure(),
+            ..default()
+        }
+    }
+}
 
 pub struct AtmospherePlugin {
     /// Look preset name from `--look`; checked against [`Looks`] by the caller.
@@ -145,9 +241,11 @@ impl Plugin for AtmospherePlugin {
         let Some(default_look) = looks.get(DEFAULT_LOOK).cloned() else {
             panic!("{LOOKS_FILE} must define the \"{DEFAULT_LOOK}\" look");
         };
+        let sky = default_look.environment(&mut app.world_mut().resource_mut::<Assets<Image>>());
         app.insert_resource(Looks(looks))
             .insert_resource(LookOverride(self.look_override.clone()))
             .insert_resource(ActiveLook(default_look))
+            .insert_resource(sky)
             .add_observer(add_atmosphere)
             .add_observer(apply_map_look)
             .add_systems(
@@ -209,6 +307,7 @@ fn add_atmosphere(
     add: On<Add<Camera3d>>,
     viewmodels: Query<(), With<ViewmodelCamera>>,
     look: Res<ActiveLook>,
+    sky: Res<ActiveSky>,
     video: Res<ActiveVideo>,
     mut commands: Commands,
 ) {
@@ -218,7 +317,15 @@ fn add_atmosphere(
         camera.insert(grading);
         return;
     }
-    camera.insert((TONEMAPPING, grading, Msaa::Off, look.0.fog()));
+    camera.insert((
+        TONEMAPPING,
+        grading,
+        Msaa::Off,
+        look.0.fog(),
+        look.0.vignette(),
+        sky.skybox(),
+        sky.light.clone(),
+    ));
     set_quality(&mut camera, &video.0.quality);
 }
 
@@ -259,7 +366,7 @@ fn apply_video(
 }
 
 /// Applies the ready Map's look: sky, ambient, a sun that goes with the Map, and every camera's
-/// grade and fog.
+/// grade, fog, sky and vignette.
 fn apply_map_look(
     add: On<Add<MapReady>>,
     maps: Query<&MapReady>,
@@ -267,7 +374,8 @@ fn apply_map_look(
     look_override: Res<LookOverride>,
     video: Res<ActiveVideo>,
     mut active: ResMut<ActiveLook>,
-    mut cameras: Query<(&mut ColorGrading, Option<&mut DistanceFog>), With<Camera3d>>,
+    mut images: ResMut<Assets<Image>>,
+    cameras: Query<(Entity, Has<ViewmodelCamera>), With<Camera3d>>,
     mut commands: Commands,
 ) {
     let Ok(map) = maps.get(add.entity) else {
@@ -290,20 +398,24 @@ fn apply_map_look(
     };
     info!("Look \"{name}\" for Map \"{}\"", map.name);
     active.0 = look.clone();
-    commands.insert_resource(ClearColor(srgb(look.sky_color)));
+    commands.insert_resource(ClearColor(srgb(look.fog_color)));
     commands.insert_resource(GlobalAmbientLight {
         color: srgb(look.ambient_color),
-        brightness: look.ambient_brightness,
+        brightness: look.ambient_brightness * (1.0 - ENVIRONMENT_SHARE),
         ..default()
     });
     let (sun, transform) = look.sun(video.0.quality.shadows.enabled());
     commands.spawn((Name::new("Sun"), Sun, sun, transform, ChildOf(add.entity)));
-    for (mut grading, fog) in &mut cameras {
-        *grading = look.color_grading(video.0.exposure_offset());
-        if let Some(mut fog) = fog {
-            *fog = look.fog();
+    let sky = look.environment(&mut images);
+    let grading = look.color_grading(video.0.exposure_offset());
+    for (entity, viewmodel) in &cameras {
+        let mut camera = commands.entity(entity);
+        camera.insert(grading.clone());
+        if !viewmodel {
+            camera.insert((look.fog(), look.vignette(), sky.skybox(), sky.light.clone()));
         }
     }
+    commands.insert_resource(sky);
 }
 
 /// Name bevy_trenchbroom gives a `light_point` whose `targetname` is `practical`.
@@ -362,6 +474,33 @@ mod tests {
                 "{name}: sun must shine down"
             );
         }
+    }
+
+    #[test]
+    fn looks_have_a_sane_sky_ambient_and_vignette() {
+        let looks: HashMap<String, LookPreset> = ron::from_str(BUILTIN_LOOKS).unwrap();
+        for (name, look) in &looks {
+            let unit = |c: Rgb| [c.0, c.1, c.2].iter().all(|v| (0.0..=1.0).contains(v));
+            assert!(
+                unit(look.sky_zenith) && unit(look.ambient_ground) && unit(look.fog_color),
+                "{name}: colours are sRGB 0..1"
+            );
+            assert!((0.0..=1.0).contains(&look.sky_clouds), "{name}");
+            assert!((0.0..=1.0).contains(&look.vignette), "{name}");
+            assert!(look.ambient_brightness > 0.0, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_sky_meets_the_fog_at_the_horizon_and_the_sun_is_where_the_light_comes_from() {
+        let looks: HashMap<String, LookPreset> = ron::from_str(BUILTIN_LOOKS).unwrap();
+        let look = &looks["desert_dust"];
+        let sky = look.sky();
+        let fog = Color::srgb(look.fog_color.0, look.fog_color.1, look.fog_color.2).to_linear();
+        assert!((sky.horizon - Vec3::new(fog.red, fog.green, fog.blue)).length() < 1e-5);
+        // The light travels down and away from the sun, so the sun stands up and opposite.
+        assert!(sky.to_sun.y > 0.0);
+        assert!(sky.to_sun.dot(Vec3::from(look.sun_direction).normalize()) < -0.99);
     }
 
     #[test]

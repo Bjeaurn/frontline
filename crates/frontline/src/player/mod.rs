@@ -8,6 +8,7 @@ pub mod input;
 mod life;
 mod packs;
 mod remote;
+mod soldier;
 
 use bevy::prelude::*;
 
@@ -94,8 +95,8 @@ impl Plugin for LocalControllerPlugin {
     }
 }
 
-/// Draws every `RemotePlayer` as a tinted capsule following its `PlayerPose`, hidden while
-/// dead, and leaves a body where it died. Client and Host only.
+/// Draws every `RemotePlayer` as a soldier in its Faction's gear following its `PlayerPose`,
+/// hidden while dead, and leaves a body where it died. Client and Host only.
 pub struct RemotePlayerVisualsPlugin;
 
 impl Plugin for RemotePlayerVisualsPlugin {

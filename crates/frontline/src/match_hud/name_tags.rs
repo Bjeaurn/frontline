@@ -27,6 +27,7 @@ pub(super) struct NameTag {
 pub(super) struct Tagged;
 
 pub(super) fn attach_name_tags(
+    fonts: Res<crate::ui::UiFonts>,
     players: Query<Entity, (With<RemotePlayer>, With<PlayerName>, Without<Tagged>)>,
     mut commands: Commands,
 ) {
@@ -44,8 +45,13 @@ pub(super) fn attach_name_tags(
             },
             Text::default(),
             TextFont {
+                font: fonts.bold.clone().into(),
                 font_size: FontSize::Px(FONT_SIZE),
                 ..default()
+            },
+            TextShadow {
+                offset: Vec2::splat(1.5),
+                color: Color::srgba(0.0, 0.0, 0.0, 0.85),
             },
             TextColor(FRIENDLY_COLOR),
             TextLayout::justify(Justify::Center),

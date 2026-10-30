@@ -6,6 +6,7 @@
 use std::cmp::Reverse;
 
 use bevy::prelude::*;
+use bevy::text::LetterSpacing;
 
 use super::{ENEMY_COLOR, FRIENDLY_COLOR, MatchQuery, own_side};
 use crate::assets::EMBEDDED_ROOT;
@@ -22,15 +23,20 @@ use crate::shared::{
 };
 use crate::ui::{self, UiFonts};
 
-const WIDTH: f32 = 560.0;
+const WIDTH: f32 = 640.0;
+const TITLE_SIZE: f32 = 30.0;
 const SUBTITLE_SIZE: f32 = 18.0;
-const SECTION_SIZE: f32 = 24.0;
-const SECTION_EMBLEM_SIZE: f32 = 30.0;
-const ROW_SIZE: f32 = 18.0;
-const STAT_WIDTH: f32 = 48.0;
+const SECTION_SIZE: f32 = 26.0;
+const SECTION_EMBLEM_SIZE: f32 = 32.0;
+const ROW_SIZE: f32 = 19.0;
+const HEADER_SIZE: f32 = 15.0;
+const STAT_WIDTH: f32 = 72.0;
 const INSIGNIA_SIZE: f32 = 24.0;
 const LEVEL_WIDTH: f32 = 30.0;
-const SELF_BG: Color = Color::srgba(1.0, 1.0, 1.0, 0.12);
+/// The local player's row: an amber wash with an amber edge.
+const SELF_BG: Color = Color::srgba(0.96, 0.68, 0.18, 0.2);
+/// Every second row, so a long list is easy to follow across.
+const STRIPE_BG: Color = Color::srgba(1.0, 1.0, 1.0, 0.045);
 const XP_BAR_HEIGHT: f32 = 10.0;
 const XP_BAR_BACK: Color = Color::srgba(0.0, 0.0, 0.0, 0.55);
 
@@ -156,13 +162,19 @@ pub(super) fn spawn_scoreboard(mut commands: Commands) {
         children![(
             ScoreboardPanel,
             BackgroundColor(ui::PANEL),
-            BorderColor::all(ui::PANEL_BORDER),
+            BorderColor {
+                top: ui::AMBER,
+                ..BorderColor::all(ui::PANEL_BORDER)
+            },
             Node {
                 width: px(WIDTH),
                 flex_direction: FlexDirection::Column,
-                padding: UiRect::all(px(18.0)),
-                row_gap: px(4.0),
-                border: UiRect::all(px(1.0)),
+                padding: UiRect::all(px(20.0)),
+                row_gap: px(3.0),
+                border: UiRect {
+                    top: px(3.0),
+                    ..UiRect::all(px(1.0))
+                },
                 ..default()
             },
         )],
@@ -180,15 +192,23 @@ fn columns(
     cells: [String; 3],
     color: Color,
     background: Color,
+    edge: Color,
 ) {
     let [name, kills, deaths] = cells;
+    let size = if level.is_some() {
+        ROW_SIZE
+    } else {
+        HEADER_SIZE
+    };
     parent
         .spawn((
             Node {
-                padding: UiRect::axes(px(6.0), px(1.0)),
+                padding: UiRect::axes(px(6.0), px(2.0)),
+                border: UiRect::left(px(3.0)),
                 ..default()
             },
             BackgroundColor(background),
+            BorderColor::all(edge),
         ))
         .with_children(|row| {
             row.spawn(Node {
@@ -225,7 +245,8 @@ fn columns(
                     flex_grow: 1.0,
                     ..default()
                 },
-                ui::label(fonts, &name, ROW_SIZE, color),
+                ui::label(fonts, &name, size, color),
+                LetterSpacing::Px(if level.is_some() { 0.0 } else { 2.0 }),
             ));
             for stat in [kills, deaths] {
                 row.spawn((
@@ -233,7 +254,8 @@ fn columns(
                         width: px(STAT_WIDTH),
                         ..default()
                     },
-                    ui::label(fonts, &stat, ROW_SIZE, color),
+                    ui::label(fonts, &stat, size, color),
+                    LetterSpacing::Px(if level.is_some() { 0.0 } else { 2.0 }),
                     TextLayout::justify(Justify::Right),
                 ));
             }
@@ -256,11 +278,18 @@ fn goal_text(state: &MatchState) -> String {
 fn build(panel: &mut ChildSpawnerCommands, fonts: &UiFonts, assets: &AssetServer, board: &Board) {
     panel
         .spawn(Node {
-            justify_content: JustifyContent::Center,
-            margin: UiRect::bottom(px(6.0)),
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::FlexEnd,
             ..default()
         })
-        .with_child(ui::label(fonts, &board.goal, SUBTITLE_SIZE, ui::ACCENT));
+        .with_children(|head| {
+            head.spawn(ui::title(fonts, "Scoreboard", TITLE_SIZE));
+            head.spawn((
+                ui::label(fonts, &board.goal, SUBTITLE_SIZE, ui::ACCENT),
+                LetterSpacing::Px(1.5),
+            ));
+        });
+    panel.spawn(ui::rule(ui::AMBER));
     if let Some(result) = &board.result {
         panel
             .spawn(Node {
@@ -290,11 +319,12 @@ fn build(panel: &mut ChildSpawnerCommands, fonts: &UiFonts, assets: &AssetServer
                 Node {
                     align_items: AlignItems::Center,
                     column_gap: px(10.0),
-                    margin: UiRect::top(px(10.0)),
-                    border: UiRect::bottom(px(1.0)),
-                    padding: UiRect::axes(px(6.0), px(3.0)),
+                    margin: UiRect::top(px(12.0)),
+                    border: UiRect::bottom(px(2.0)),
+                    padding: UiRect::axes(px(8.0), px(4.0)),
                     ..default()
                 },
+                BackgroundColor(section.color.with_alpha(0.14)),
                 BorderColor::all(section.color),
             ))
             .with_children(|title| {
@@ -324,11 +354,19 @@ fn build(panel: &mut ChildSpawnerCommands, fonts: &UiFonts, assets: &AssetServer
             fonts,
             assets,
             None,
-            ["Name".into(), "K".into(), "D".into()],
+            ["PLAYER".into(), "KILLS".into(), "DEATHS".into()],
             ui::TEXT_DIM,
             Color::NONE,
+            Color::NONE,
         );
-        for row in &section.rows {
+        for (index, row) in section.rows.iter().enumerate() {
+            let (background, edge) = if row.me {
+                (SELF_BG, ui::AMBER)
+            } else if index % 2 == 1 {
+                (STRIPE_BG, Color::NONE)
+            } else {
+                (Color::NONE, Color::NONE)
+            };
             columns(
                 panel,
                 fonts,
@@ -340,7 +378,8 @@ fn build(panel: &mut ChildSpawnerCommands, fonts: &UiFonts, assets: &AssetServer
                     row.deaths.to_string(),
                 ],
                 ui::TEXT,
-                if row.me { SELF_BG } else { Color::NONE },
+                background,
+                edge,
             );
         }
     }

@@ -202,6 +202,13 @@ fn class_button(
             LoadoutButton(choice),
             ChildOf(list),
         ))
+        .insert(Node {
+            min_width: px(300.0),
+            padding: UiRect::axes(px(18.0), px(2.0)),
+            border: UiRect::left(px(4.0)),
+            align_items: AlignItems::Center,
+            ..default()
+        })
         .with_child((
             ButtonWeaponName,
             ui::label(
@@ -233,12 +240,26 @@ fn spawn_screen(
             Name::new("LoadoutScreen"),
             DespawnOnExit(Overlay::Loadout),
             ui::backdrop(),
+            GlobalZIndex(10),
+        ))
+        .insert((
+            BackgroundColor(ui::BACKDROP_SOLID),
+            Node {
+                position_type: PositionType::Absolute,
+                width: percent(100.0),
+                height: percent(100.0),
+                flex_direction: FlexDirection::Column,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                row_gap: px(6.0),
+                ..default()
+            },
         ))
         .id();
-    commands.spawn((ui::title(&fonts, "Choose Loadout", 48.0), ChildOf(root)));
+    commands.spawn((ui::title(&fonts, "Choose Loadout", 40.0), ChildOf(root)));
     commands.spawn((
         LevelLine,
-        ui::label(&fonts, "", 22.0, ui::ACCENT),
+        ui::label(&fonts, "", 20.0, ui::ACCENT),
         ChildOf(root),
     ));
 
@@ -299,15 +320,16 @@ fn spawn_screen(
             ..default()
         })
         .id();
-    commands.spawn((ClassName, ui::title(&fonts, "", 34.0), ChildOf(details)));
+    commands.spawn((ClassName, ui::title(&fonts, "", 30.0), ChildOf(details)));
+    commands.spawn((ui::rule(ui::AMBER), ChildOf(details)));
     commands.spawn((
         ClassLines,
-        ui::label(&fonts, "", 20.0, ui::TEXT),
+        ui::label(&fonts, "", 18.0, ui::TEXT),
         ChildOf(details),
     ));
     commands.spawn((
         FireModeText,
-        ui::label(&fonts, "", 20.0, ui::TEXT_DIM),
+        ui::label(&fonts, "", 18.0, ui::TEXT_DIM),
         ChildOf(details),
     ));
     stats::spawn_bars(&mut commands, &fonts, details);

@@ -99,16 +99,17 @@ impl SurfaceKind {
         }
     }
 
-    /// Multiplied into the colour texture: the bright palette Maps share.
+    /// Multiplied into the colour texture: a dirty, muted palette (khaki plaster, olive-drab
+    /// metal, rusty containers) that the Map looks then grade.
     fn tint(self) -> Color {
         match self {
-            SurfaceKind::Concrete => Color::srgb(0.90, 0.90, 0.93),
-            SurfaceKind::Plaster => Color::srgb(0.97, 0.92, 0.82),
-            SurfaceKind::Metal => Color::srgb(0.62, 0.72, 0.56),
-            SurfaceKind::Corrugated => Color::srgb(0.88, 0.50, 0.32),
-            SurfaceKind::Wood => Color::srgb(0.95, 0.88, 0.78),
-            SurfaceKind::Ground => Color::srgb(0.86, 0.88, 0.94),
-            SurfaceKind::Brick => Color::srgb(0.92, 0.86, 0.84),
+            SurfaceKind::Concrete => Color::srgb(1.0, 0.99, 0.96),
+            SurfaceKind::Plaster => Color::srgb(0.90, 0.84, 0.72),
+            SurfaceKind::Metal => Color::srgb(0.50, 0.56, 0.46),
+            SurfaceKind::Corrugated => Color::srgb(0.72, 0.40, 0.28),
+            SurfaceKind::Wood => Color::srgb(1.0, 0.94, 0.86),
+            SurfaceKind::Ground => Color::srgb(0.96, 0.93, 0.88),
+            SurfaceKind::Brick => Color::srgb(0.84, 0.72, 0.66),
         }
     }
 
@@ -154,7 +155,7 @@ impl SurfaceMaterials {
             metallic_roughness_texture: Some(textures.roughness.clone()),
             perceptual_roughness: 1.0,
             metallic: 0.0,
-            reflectance: 0.4,
+            reflectance: 0.3,
             ..default()
         }
     }

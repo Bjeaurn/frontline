@@ -1,11 +1,14 @@
-//! Local-player HUD: damage vignette and direction indicators, team-coloured kill feed and the
-//! death screen. The Match Rules' `hud` block switches the indicators and kill feed off and
-//! can delay the feed.
+//! Local-player HUD: damage vignette with blood edges and direction indicators, the
+//! team-coloured kill feed and the death screen. The Match Rules' `hud` block switches the
+//! indicators and kill feed off and can delay the feed.
 
 use std::collections::VecDeque;
 use std::f32::consts::PI;
 
+use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::text::LetterSpacing;
 
 use super::life::{LocalLife, can_request_respawn, respawn_hold};
 use crate::data::{ActiveRules, GameData};
@@ -16,13 +19,26 @@ use crate::net::protocol::{Damaged, DeathCause, KillFeed};
 use crate::shared::{
     FromServer, Health, LocalPlayer, LocalPlayerReplica, PlayerName, PlayerPose, PlayerTeam,
 };
-use crate::ui::UiFonts;
+use crate::ui::{self, AMBER, UiFonts};
 
 const DAMAGE_RED: Color = Color::srgb(0.75, 0.0, 0.0);
+/// The dark blood tint of the screen-edge vignette.
+const BLOOD: Color = Color::srgb(0.32, 0.0, 0.0);
 /// Vignette opacity at zero health; scales linearly with missing health.
-const VIGNETTE_MAX_ALPHA: f32 = 0.8;
+const VIGNETTE_MAX_ALPHA: f32 = 0.6;
 /// Where the vignette starts, as a percentage of the centre-to-corner distance.
-const VIGNETTE_INNER_PERCENT: f32 = 40.0;
+const VIGNETTE_INNER_PERCENT: f32 = 45.0;
+/// Side of the generated blood-edge texture, in pixels.
+const BLOOD_PX: u32 = 256;
+/// Blood-edge opacity from missing health (at zero health) and added by a fresh hit.
+const BLOOD_HEALTH_ALPHA: f32 = 0.95;
+const BLOOD_HIT_ALPHA: f32 = 0.5;
+/// A hit's flash dies away at this rate (1/s); each point of damage adds `1 / FLASH_DAMAGE`.
+const FLASH_DECAY_PER_SEC: f32 = 2.2;
+const FLASH_DAMAGE: f32 = 60.0;
+/// Below this share of health the blood edges throb like a heartbeat, this many times a second.
+const HEARTBEAT_BELOW: f32 = 0.4;
+const HEARTBEAT_HZ: f32 = 1.4;
 
 /// Radius of the circle the damage direction bars sit on, in logical pixels.
 const INDICATOR_RADIUS: f32 = 140.0;
@@ -32,15 +48,22 @@ const INDICATOR_SECS: f32 = 1.0;
 const FEED_LINES: usize = 5;
 const FEED_VISIBLE_SECS: f64 = 5.0;
 const FEED_FADE_SECS: f64 = 0.5;
-const FEED_FONT_SIZE: f32 = 17.0;
+const FEED_FONT_SIZE: f32 = 18.0;
 /// Weapon and unknown names in the kill feed.
-const FEED_COLOR: Color = Color::srgb(0.95, 0.95, 0.95);
+const FEED_COLOR: Color = Color::srgb(0.80, 0.78, 0.70);
+const FEED_PLATE: Color = Color::srgba(0.0, 0.0, 0.0, 0.45);
 
-const DEATH_TITLE_SIZE: f32 = 30.0;
-const DEATH_SUBTITLE_SIZE: f32 = 18.0;
+const DEATH_KICKER_SIZE: f32 = 22.0;
+const DEATH_TITLE_SIZE: f32 = 64.0;
+const DEATH_DETAIL_SIZE: f32 = 20.0;
+const DEATH_SUBTITLE_SIZE: f32 = 22.0;
 
 #[derive(Component)]
 pub(super) struct DamageVignette;
+
+/// The generated blood splatter along the screen edges, tinted by `update_damage_vignette`.
+#[derive(Component)]
+pub(super) struct BloodEdges;
 
 /// Root that damage direction indicators are spawned under.
 #[derive(Component)]
@@ -75,11 +98,18 @@ pub(super) fn reset_kill_feed(mut pending: ResMut<PendingKillFeed>) {
 #[derive(Component)]
 pub(super) struct DeathScreen;
 
-#[derive(Component)]
-pub(super) struct DeathTitle;
-
-#[derive(Component)]
-pub(super) struct DeathCountdown;
+/// The text lines of the death screen.
+#[derive(Component, PartialEq)]
+pub(super) enum DeathLine {
+    /// "KILLED BY".
+    Kicker,
+    /// The killer's name, or what happened.
+    Title,
+    /// The weapon that did it.
+    Detail,
+    /// The respawn countdown or prompt.
+    Countdown,
+}
 
 fn full_screen() -> Node {
     Node {
@@ -95,19 +125,118 @@ fn vignette(alpha: f32) -> BackgroundGradient {
         UiPosition::CENTER,
         RadialGradientShape::FarthestCorner,
         vec![
-            ColorStop::percent(DAMAGE_RED.with_alpha(0.0), VIGNETTE_INNER_PERCENT),
-            ColorStop::percent(DAMAGE_RED.with_alpha(alpha), 100.0),
+            ColorStop::percent(BLOOD.with_alpha(0.0), VIGNETTE_INNER_PERCENT),
+            ColorStop::percent(BLOOD.with_alpha(alpha), 100.0),
         ],
     ))
 }
 
-pub(super) fn spawn_hud(mut commands: Commands) {
+/// Cheap integer hash to `0..1`, for the blood noise.
+fn hash01(x: i32, y: i32) -> f32 {
+    let mut h = (x as u32).wrapping_mul(374_761_393) ^ (y as u32).wrapping_mul(668_265_263);
+    h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
+    ((h ^ (h >> 16)) & 0xffff) as f32 / 65535.0
+}
+
+/// Smooth value noise at `(x, y)`.
+fn value_noise(x: f32, y: f32) -> f32 {
+    let (ix, iy) = (x.floor(), y.floor());
+    let (fx, fy) = (x - ix, y - iy);
+    let (sx, sy) = (fx * fx * (3.0 - 2.0 * fx), fy * fy * (3.0 - 2.0 * fy));
+    let (ix, iy) = (ix as i32, iy as i32);
+    let top = hash01(ix, iy).lerp(hash01(ix + 1, iy), sx);
+    let bottom = hash01(ix, iy + 1).lerp(hash01(ix + 1, iy + 1), sx);
+    top.lerp(bottom, sy)
+}
+
+/// Three octaves of value noise, `0..1`.
+fn fbm(x: f32, y: f32) -> f32 {
+    (value_noise(x, y) * 0.5 + value_noise(x * 2.1, y * 2.1) * 0.3 + value_noise(x * 4.3, y * 4.3) * 0.2)
+        .clamp(0.0, 1.0)
+}
+
+/// A dark red, irregular splatter hugging the screen edges, with a few droplets reaching in;
+/// tinted and faded through its `ImageNode` as health drops.
+fn blood_edges() -> Image {
+    let half = BLOOD_PX as f32 / 2.0;
+    let data = (0..BLOOD_PX * BLOOD_PX)
+        .flat_map(|i| {
+            let u = ((i % BLOOD_PX) as f32 + 0.5 - half) / half;
+            let v = ((i / BLOOD_PX) as f32 + 0.5 - half) / half;
+            let r = (u * u + v * v).sqrt() / std::f32::consts::SQRT_2;
+            let blotch = fbm(u * 2.6 + 7.0, v * 2.6 + 3.0);
+            let edge = ((r - 0.5 + (blotch - 0.5) * 0.6) / 0.45).clamp(0.0, 1.0);
+            let mut alpha = edge * edge * (3.0 - 2.0 * edge);
+            let drops = fbm(u * 9.0 + 1.0, v * 9.0 + 11.0);
+            if r > 0.5 && drops > 0.68 {
+                alpha = alpha.max(((drops - 0.68) / 0.08).min(1.0) * 0.8 * ((r - 0.5) * 3.0).min(1.0));
+            }
+            let shade = 1.0 - 0.45 * alpha;
+            [
+                (0.62 * shade * 255.0) as u8,
+                (0.02 * 255.0) as u8,
+                (0.03 * 255.0) as u8,
+                (alpha * 255.0) as u8,
+            ]
+        })
+        .collect();
+    Image::new(
+        Extent3d {
+            width: BLOOD_PX,
+            height: BLOOD_PX,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+}
+
+/// A black fade at the top or bottom edge of the death screen (letterbox).
+fn death_bar(to_bottom: bool) -> impl Bundle {
+    let (from, to) = if to_bottom {
+        (0.9, 0.0)
+    } else {
+        (0.0, 0.9)
+    };
+    (
+        Node {
+            width: percent(100.0),
+            height: percent(18.0),
+            ..default()
+        },
+        BackgroundGradient::from(LinearGradient::new(
+            LinearGradient::TO_BOTTOM,
+            vec![
+                ColorStop::percent(Color::srgba(0.0, 0.0, 0.0, from), 0.0),
+                ColorStop::percent(Color::srgba(0.0, 0.0, 0.0, to), 100.0),
+            ],
+        )),
+    )
+}
+
+pub(super) fn spawn_hud(
+    mut commands: Commands,
+    fonts: Res<UiFonts>,
+    mut images: ResMut<Assets<Image>>,
+) {
     commands.spawn((
         Name::new("Damage vignette"),
         DespawnOnExit(AppState::InGame),
         DamageVignette,
         full_screen(),
         vignette(0.0),
+        Visibility::Hidden,
+    ));
+    commands.spawn((
+        Name::new("Blood edges"),
+        DespawnOnExit(AppState::InGame),
+        BloodEdges,
+        full_screen(),
+        ImageNode::new(images.add(blood_edges()))
+            .with_mode(NodeImageMode::Stretch)
+            .with_color(Color::srgba(1.0, 1.0, 1.0, 0.0)),
         Visibility::Hidden,
     ));
     commands.spawn((
@@ -122,10 +251,10 @@ pub(super) fn spawn_hud(mut commands: Commands) {
         KillFeedList,
         Node {
             position_type: PositionType::Absolute,
-            right: px(14.0),
-            top: px(10.0),
+            left: px(16.0),
+            top: px(16.0),
             flex_direction: FlexDirection::Column,
-            align_items: AlignItems::FlexEnd,
+            align_items: AlignItems::FlexStart,
             row_gap: px(3.0),
             ..default()
         },
@@ -136,59 +265,112 @@ pub(super) fn spawn_hud(mut commands: Commands) {
         DeathScreen,
         Node {
             flex_direction: FlexDirection::Column,
-            justify_content: JustifyContent::Center,
+            justify_content: JustifyContent::SpaceBetween,
             align_items: AlignItems::Center,
-            row_gap: px(8.0),
             ..full_screen()
         },
-        BackgroundColor(Color::srgba(0.15, 0.0, 0.0, 0.35)),
+        BackgroundColor(Color::srgba(0.12, 0.0, 0.0, 0.38)),
         Visibility::Hidden,
         children![
+            death_bar(false),
             (
-                DeathTitle,
-                Text::default(),
-                TextFont {
-                    font_size: FontSize::Px(DEATH_TITLE_SIZE),
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    row_gap: px(4.0),
                     ..default()
                 },
-                TextColor(Color::WHITE),
+                children![
+                    (
+                        DeathLine::Kicker,
+                        ui::hud_text(&fonts.bold, "", DEATH_KICKER_SIZE, AMBER),
+                        LetterSpacing::Px(6.0),
+                    ),
+                    (
+                        DeathLine::Title,
+                        ui::hud_text(&fonts.display, "", DEATH_TITLE_SIZE, Color::WHITE),
+                        LetterSpacing::Px(2.0),
+                    ),
+                    (
+                        Node {
+                            width: px(280.0),
+                            height: px(3.0),
+                            margin: UiRect::vertical(px(8.0)),
+                            ..default()
+                        },
+                        BackgroundColor(AMBER),
+                    ),
+                    (
+                        DeathLine::Detail,
+                        ui::hud_text(&fonts.bold, "", DEATH_DETAIL_SIZE, ui::TEXT),
+                        LetterSpacing::Px(2.0),
+                    ),
+                    (
+                        DeathLine::Countdown,
+                        ui::hud_text(
+                            &fonts.bold,
+                            "",
+                            DEATH_SUBTITLE_SIZE,
+                            Color::srgba(1.0, 1.0, 1.0, 0.85)
+                        ),
+                        LetterSpacing::Px(2.0),
+                        Node {
+                            margin: UiRect::top(px(18.0)),
+                            ..default()
+                        },
+                    ),
+                ],
             ),
-            (
-                DeathCountdown,
-                Text::default(),
-                TextFont {
-                    font_size: FontSize::Px(DEATH_SUBTITLE_SIZE),
-                    ..default()
-                },
-                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),
-            ),
+            death_bar(true),
         ],
     ));
 }
 
-/// Red screen edges that deepen with missing health; none while still choosing a Team.
+/// Dark-red screen edges and blood splatter that deepen with missing health, flash on every
+/// hit and throb at low health; none while still choosing a Team.
 pub(super) fn update_damage_vignette(
+    time: Res<Time>,
     rules: ActiveRules,
-    replica: Query<
-        (&Health, &PlayerTeam),
-        (
-            With<LocalPlayerReplica>,
-            Or<(Changed<Health>, Changed<PlayerTeam>)>,
-        ),
-    >,
+    replica: Query<(&Health, &PlayerTeam), With<LocalPlayerReplica>>,
+    mut damaged: MessageReader<FromServer<Damaged>>,
+    mut flash: Local<f32>,
+    mut applied: Local<f32>,
     mut vignette_node: Single<(&mut BackgroundGradient, &mut Visibility), With<DamageVignette>>,
+    mut blood: Single<
+        (&mut ImageNode, &mut Visibility),
+        (With<BloodEdges>, Without<DamageVignette>),
+    >,
 ) {
-    let Ok((health, team)) = replica.single() else {
-        return;
-    };
-    let missing = if team.0.is_some() {
-        (1.0 - health.0 / rules.get().max_health).clamp(0.0, 1.0)
-    } else {
-        0.0
+    let hit_flash: f32 = damaged.read().map(|FromServer(hit)| hit.amount).sum();
+    *flash = (*flash + hit_flash / FLASH_DAMAGE).min(1.0);
+    *flash = (*flash - FLASH_DECAY_PER_SEC * time.delta_secs()).max(0.0);
+    let missing = match replica.single() {
+        Ok((health, team)) if team.0.is_some() => {
+            (1.0 - health.0 / rules.get().max_health).clamp(0.0, 1.0)
+        }
+        _ => {
+            *flash = 0.0;
+            0.0
+        }
     };
     let (gradient, visibility) = &mut *vignette_node;
-    **gradient = vignette(missing * VIGNETTE_MAX_ALPHA);
+    if (missing - *applied).abs() > 0.002 {
+        *applied = missing;
+        **gradient = vignette(missing * VIGNETTE_MAX_ALPHA);
+    }
     visibility.set_if_neq(if missing > 0.0 {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    });
+
+    let low = ((missing - (1.0 - HEARTBEAT_BELOW)) / HEARTBEAT_BELOW).clamp(0.0, 1.0);
+    let beat = (time.elapsed_secs() * HEARTBEAT_HZ * std::f32::consts::TAU).sin() * 0.5 + 0.5;
+    let alpha = (missing * BLOOD_HEALTH_ALPHA + *flash * BLOOD_HIT_ALPHA + beat.powi(3) * 0.2 * low)
+        .clamp(0.0, 1.0);
+    let (image, visibility) = &mut *blood;
+    image.color = Color::srgba(1.0, 1.0, 1.0, alpha);
+    visibility.set_if_neq(if alpha > 0.01 {
         Visibility::Inherited
     } else {
         Visibility::Hidden
@@ -333,10 +515,11 @@ pub(super) fn add_kill_feed_lines(
             .map_or(FEED_COLOR, |(_, team)| relation_color(life.team(), team.0))
     };
     let font = TextFont {
-        font: fonts.regular.clone().into(),
+        font: fonts.bold.clone().into(),
         font_size: FontSize::Px(FEED_FONT_SIZE),
         ..default()
     };
+    let is_me = |name: &str| me.single().is_ok_and(|me| me.0 == name);
     while let Some((_, line)) = pending.0.pop_front_if(|(at, _)| *at <= now) {
         debug!("Kill feed shows: {} died ({:?})", line.victim, line.cause);
         if existing.len() >= FEED_LINES {
@@ -351,6 +534,23 @@ pub(super) fn add_kill_feed_lines(
                 FeedColor(color),
             )
         };
+        // Every line sits on a dark plate with a coloured edge: amber when the local player
+        // got the kill, else the killer's (or the victim's) side colour.
+        let plate = |edge: Color| {
+            (
+                Node {
+                    padding: UiRect::axes(px(10.0), px(3.0)),
+                    border: UiRect::left(px(3.0)),
+                    ..default()
+                },
+                BackgroundColor(FEED_PLATE),
+                BorderColor::all(edge),
+                TextShadow {
+                    offset: Vec2::splat(1.5),
+                    color: Color::srgba(0.0, 0.0, 0.0, 0.85),
+                },
+            )
+        };
         let entity = match &line.cause {
             DeathCause::Shot { .. } | DeathCause::Explosive { .. } => {
                 let (killer, weapon, headshot) = match &line.cause {
@@ -361,7 +561,7 @@ pub(super) fn add_kill_feed_lines(
                     } => (
                         killer,
                         data.weapon(*weapon).name.clone(),
-                        if *headshot { "  (headshot)" } else { "" },
+                        if *headshot { "   HEADSHOT" } else { "" },
                     ),
                     DeathCause::Explosive { killer, kind } => {
                         (killer, data.grenade(*kind).name.clone(), "")
@@ -369,6 +569,7 @@ pub(super) fn add_kill_feed_lines(
                     _ => unreachable!("matched above"),
                 };
                 let killer_color = name_color(killer);
+                let edge = if is_me(killer) { AMBER } else { killer_color };
                 commands
                     .spawn((
                         KillFeedLine { born: now },
@@ -376,19 +577,20 @@ pub(super) fn add_kill_feed_lines(
                         font.clone(),
                         TextColor(killer_color),
                         FeedColor(killer_color),
+                        plate(edge),
                         ChildOf(list),
                         children![
-                            span(format!("  [{weapon}]  "), FEED_COLOR),
+                            span(format!("   {}   ", weapon.to_uppercase()), FEED_COLOR),
                             span(line.victim.clone(), victim),
-                            span(headshot.to_owned(), FEED_COLOR),
+                            span(headshot.to_owned(), AMBER),
                         ],
                     ))
                     .id()
             }
             DeathCause::Fall | DeathCause::Respawn => {
                 let what = match line.cause {
-                    DeathCause::Fall => " fell to their death",
-                    _ => " respawned",
+                    DeathCause::Fall => "   fell to their death",
+                    _ => "   respawned",
                 };
                 commands
                     .spawn((
@@ -397,6 +599,7 @@ pub(super) fn add_kill_feed_lines(
                         font.clone(),
                         TextColor(victim),
                         FeedColor(victim),
+                        plate(victim),
                         ChildOf(list),
                         children![span(what.to_owned(), FEED_COLOR)],
                     ))
@@ -407,11 +610,12 @@ pub(super) fn add_kill_feed_lines(
     }
 }
 
-/// Fades each kill-feed line out after `FEED_VISIBLE_SECS`.
+/// Fades each kill-feed line (text and plate) out after `FEED_VISIBLE_SECS`.
 pub(super) fn fade_kill_feed(
     time: Res<Time>,
     lines: Query<(Entity, &KillFeedLine, &Children)>,
     mut sections: Query<(&FeedColor, &mut TextColor)>,
+    mut plates: Query<(&mut BackgroundColor, &mut BorderColor), With<KillFeedLine>>,
     mut commands: Commands,
 ) {
     let now = time.elapsed_secs_f64();
@@ -426,6 +630,11 @@ pub(super) fn fade_kill_feed(
                     color.0 = base.0.with_alpha(alpha);
                 }
             }
+            if let Ok((mut background, mut border)) = plates.get_mut(entity) {
+                background.0 = FEED_PLATE.with_alpha(FEED_PLATE.alpha() * alpha);
+                let edge = border.left.with_alpha(alpha);
+                *border = BorderColor::all(edge);
+            }
         }
     }
 }
@@ -434,11 +643,11 @@ pub(super) fn fade_kill_feed(
 pub(super) fn update_death_screen(
     time: Res<Time>,
     rules: ActiveRules,
+    data: Res<GameData>,
     life: Res<LocalLife>,
     modes: Query<&ModeView>,
     mut screen: Single<&mut Visibility, With<DeathScreen>>,
-    mut title: Single<&mut Text, (With<DeathTitle>, Without<DeathCountdown>)>,
-    mut countdown: Single<&mut Text, (With<DeathCountdown>, Without<DeathTitle>)>,
+    mut lines: Query<(&DeathLine, &mut Text)>,
 ) {
     let shown = life.is_dead() && life.team().is_some();
     screen.set_if_neq(if shown {
@@ -449,31 +658,56 @@ pub(super) fn update_death_screen(
     if !shown {
         return;
     }
-    let heading = match life.cause() {
-        Some(DeathCause::Shot { killer, .. } | DeathCause::Explosive { killer, .. }) => {
-            format!("You were killed by {killer}")
-        }
-        Some(DeathCause::Fall) => "You fell to your death".to_owned(),
-        Some(DeathCause::Respawn) => "You respawned".to_owned(),
-        None if life.switched_team() => "You switched to the other team".to_owned(),
-        None => "You were killed".to_owned(),
+    // "KILLED BY" over the killer's name, then the weapon; other deaths just say what happened.
+    let (kicker, heading, detail) = match life.cause() {
+        Some(DeathCause::Shot {
+            killer,
+            weapon,
+            headshot,
+        }) => (
+            "KILLED BY",
+            killer.clone(),
+            format!(
+                "{}{}",
+                data.weapon(*weapon).name.to_uppercase(),
+                if *headshot { "   HEADSHOT" } else { "" }
+            ),
+        ),
+        Some(DeathCause::Explosive { killer, kind }) => (
+            "KILLED BY",
+            killer.clone(),
+            data.grenade(*kind).name.to_uppercase(),
+        ),
+        Some(DeathCause::Fall) => ("", "YOU FELL TO YOUR DEATH".to_owned(), String::new()),
+        Some(DeathCause::Respawn) => ("", "YOU RESPAWNED".to_owned(), String::new()),
+        None if life.switched_team() => (
+            "",
+            "YOU SWITCHED TO THE OTHER TEAM".to_owned(),
+            String::new(),
+        ),
+        None => ("", "YOU WERE KILLED".to_owned(), String::new()),
     };
     let now = time.elapsed_secs_f64();
     let rules = rules.get();
     let left = f64::from(rules.respawn_delay_secs) - life.secs_dead(now);
     let status = if let Some(hold) = respawn_hold(modes.single().ok(), life.team()) {
-        hold.to_owned()
+        hold.to_uppercase()
     } else if left <= 0.0 {
-        "Respawning...".to_owned()
+        "RESPAWNING...".to_owned()
     } else if can_request_respawn(&life, modes.single().ok(), rules, now) {
-        "Press SPACE or click to respawn".to_owned()
+        "PRESS SPACE OR CLICK TO RESPAWN".to_owned()
     } else {
-        format!("Respawning in {left:.1}")
+        format!("RESPAWNING IN {left:.1}")
     };
-    if title.0 != heading {
-        title.0 = heading;
-    }
-    if countdown.0 != status {
-        countdown.0 = status;
+    for (line, mut text) in &mut lines {
+        let wanted = match line {
+            DeathLine::Kicker => kicker,
+            DeathLine::Title => heading.as_str(),
+            DeathLine::Detail => detail.as_str(),
+            DeathLine::Countdown => status.as_str(),
+        };
+        if text.0 != wanted {
+            text.0 = wanted.to_owned();
+        }
     }
 }

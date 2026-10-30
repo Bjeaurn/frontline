@@ -1,4 +1,4 @@
-//! Bodies of dead remote players (client-side, cosmetic): a copy of the player's capsule that
+//! Bodies of dead remote players (client-side, cosmetic): a copy of the player's soldier that
 //! tips over from where it died, lies there `corpse_secs`, then sinks into the ground fading
 //! out. No colliders, no ragdoll; at most `max_corpses` at once, oldest removed first.
 
@@ -8,8 +8,10 @@ use std::hash::{BuildHasher, RandomState};
 use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
 use bevy::prelude::*;
 
-use super::BODY_RADIUS;
-use super::remote::{RemoteAssets, RemoteDeath, body_color, body_material, body_transform};
+use super::remote::{
+    RemoteAssets, RemoteDeath, soldier_material, team_color, team_material,
+};
+use super::soldier::{self, Gait};
 use crate::data::GameData;
 use crate::flow::AppState;
 use crate::shared::{GameLayer, Stance};
@@ -20,40 +22,42 @@ const FALL_SECS: f32 = 0.5;
 const FALL_SPREAD: f32 = 0.5;
 /// How long the body takes to sink away once its time is up.
 const SINK_SECS: f32 = 1.5;
-/// How deep it sinks: a lying capsule is two radii thick, so this takes it fully under.
-const SINK_DEPTH: f32 = 2.0 * BODY_RADIUS;
+/// How deep it sinks: more than a lying soldier is thick, so this takes it fully under.
+const SINK_DEPTH: f32 = 0.6;
 /// The ground is looked for this far above and below the death position (dying mid-jump).
 const GROUND_PROBE: f32 = 0.5;
 const GROUND_MAX_DROP: f32 = 20.0;
+/// Where the rifle points on a body: down, dropped from the hands.
+const DROPPED_PITCH: f32 = -0.9;
 
 /// A body on the ground (or on its way down).
 #[derive(Component, Debug)]
 pub(super) struct Corpse {
     /// Seconds since death.
     age: f32,
-    /// The body's transform at death, as drawn on the living player.
-    standing: Transform,
-    /// Feet position at death, on the ground.
-    feet: Vec3,
+    /// Feet position and yaw at death, on the ground.
+    feet: Transform,
+    /// Height above the feet that the body tips about (its back surface).
+    pivot_height: f32,
     /// Horizontal unit direction it tips toward.
     fall_direction: Vec3,
     /// How far it tips: a quarter turn upright, none when already prone.
     tip_angle: f32,
-    color: Color,
-    material: Handle<StandardMaterial>,
+    team_color: Color,
+    /// The soldier's and the team marks' materials, faded together while sinking.
+    materials: [Handle<StandardMaterial>; 2],
 }
 
 impl Corpse {
-    /// The body's transform `age` seconds after death: rotated about its lowest point (the
-    /// centre of the capsule's bottom hemisphere), so a quarter turn lays it on the ground,
-    /// then lowered while sinking.
+    /// The body's transform `age` seconds after death: rotated about its back surface, so a
+    /// quarter turn lays it on the ground, then lowered while sinking.
     fn transform(&self, corpse_secs: f32) -> Transform {
         let fall = (self.age / FALL_SECS).min(1.0);
         // Accelerates like a fall rather than a hinge at constant speed.
         let angle = self.tip_angle * fall * fall;
         let axis = Vec3::Y.cross(self.fall_direction);
-        let pivot = self.feet + Vec3::Y * BODY_RADIUS;
-        let mut body = self.standing;
+        let pivot = self.feet.translation + Vec3::Y * self.pivot_height;
+        let mut body = self.feet;
         body.rotate_around(pivot, Quat::from_axis_angle(axis, angle));
         body.translation.y -= SINK_DEPTH * self.sinking(corpse_secs);
         body
@@ -107,7 +111,6 @@ pub(super) fn spawn_corpses(
         ) {
             feet.translation.y += GROUND_PROBE - hit.distance;
         }
-        let standing = feet * body_transform(death.stance);
         // Backwards (yaw faces -Z), turned a little either way.
         let spread = (random.hash_one(lying.len()) as f64 / u64::MAX as f64) as f32;
         let turn = Quat::from_rotation_y((spread * 2.0 - 1.0) * FALL_SPREAD);
@@ -116,27 +119,35 @@ pub(super) fn spawn_corpses(
             Stance::Standing | Stance::Crouching => FRAC_PI_2,
             Stance::Prone => 0.0,
         };
-        let color = body_color(death.friendly);
-        let material = materials.add(body_material(color));
+        let team_look = team_material(team_color(death.friendly));
+        let team_color = team_look.base_color;
+        let body = materials.add(soldier_material());
+        let team = materials.add(team_look);
         let corpse = Corpse {
             age: 0.0,
-            standing,
-            feet: feet.translation,
+            feet,
+            pivot_height: soldier::back_height(death.stance),
             fall_direction,
             tip_angle,
-            color,
-            material: material.clone(),
+            team_color,
+            materials: [body.clone(), team.clone()],
         };
         let entity = commands
             .spawn((
                 Name::new("Corpse"),
                 DespawnOnExit(AppState::InGame),
-                Mesh3d(assets.body(death.stance)),
-                MeshMaterial3d(material),
                 corpse.transform(data.presentation.corpse_secs),
+                Visibility::default(),
                 corpse,
             ))
             .id();
+        assets.soldier(death.faction).spawn(
+            &mut commands,
+            entity,
+            &body,
+            &team,
+            &soldier::pose(death.stance, Gait::default(), DROPPED_PITCH),
+        );
         lying.insert(0, (entity, 0.0));
     }
 }
@@ -158,11 +169,18 @@ pub(super) fn animate_corpses(
         }
         *transform = corpse.transform(corpse_secs);
         let sinking = corpse.sinking(corpse_secs);
-        if sinking > 0.0
-            && let Some(mut material) = materials.get_mut(&corpse.material)
-        {
-            material.alpha_mode = AlphaMode::Blend;
-            material.base_color = corpse.color.with_alpha(1.0 - sinking);
+        if sinking > 0.0 {
+            let alpha = 1.0 - sinking;
+            for (handle, color) in corpse
+                .materials
+                .iter()
+                .zip([Color::WHITE, corpse.team_color])
+            {
+                if let Some(mut material) = materials.get_mut(handle) {
+                    material.alpha_mode = AlphaMode::Blend;
+                    material.base_color = color.with_alpha(alpha);
+                }
+            }
         }
     }
 }
@@ -171,31 +189,36 @@ pub(super) fn animate_corpses(
 mod tests {
     use super::*;
 
+    const PIVOT: f32 = 0.25;
+
     fn standing_corpse(age: f32) -> Corpse {
         Corpse {
             age,
-            standing: body_transform(Stance::Standing),
-            feet: Vec3::ZERO,
+            feet: Transform::IDENTITY,
+            pivot_height: PIVOT,
             fall_direction: Vec3::Z,
             tip_angle: FRAC_PI_2,
-            color: Color::WHITE,
-            material: Handle::default(),
+            team_color: Color::WHITE,
+            materials: [Handle::default(), Handle::default()],
         }
     }
 
     #[test]
-    fn tips_onto_the_ground_then_sinks() {
+    fn tips_onto_its_back_then_sinks() {
         let corpse_secs = 10.0;
         let upright = standing_corpse(0.0).transform(corpse_secs);
-        assert!((upright.translation - Vec3::Y * 0.9).length() < 1e-5);
+        assert!(upright.translation.length() < 1e-5);
 
-        // Lying: centre one radius above the ground, half the body length toward the fall.
+        // Lying: the feet one pivot height up and as far back toward the head's old side, the
+        // body's up pointing along the fall, so its back surface is on the ground.
         let lying = standing_corpse(FALL_SECS).transform(corpse_secs);
-        assert!((lying.translation.y - BODY_RADIUS).abs() < 1e-5);
-        assert!((lying.translation.z - (0.9 - BODY_RADIUS)).abs() < 1e-5);
+        assert!((lying.translation.y - PIVOT).abs() < 1e-5);
+        assert!((lying.translation.z + PIVOT).abs() < 1e-5);
         assert!((lying.rotation * Vec3::Y).dot(Vec3::Z) > 0.999);
+        let back = lying.transform_point(Vec3::new(0.0, 1.0, PIVOT));
+        assert!(back.y.abs() < 1e-5, "back surface at {}", back.y);
 
         let sunk = standing_corpse(corpse_secs + SINK_SECS).transform(corpse_secs);
-        assert!((sunk.translation.y - (BODY_RADIUS - SINK_DEPTH)).abs() < 1e-5);
+        assert!((sunk.translation.y - (PIVOT - SINK_DEPTH)).abs() < 1e-5);
     }
 }

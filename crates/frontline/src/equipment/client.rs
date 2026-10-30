@@ -4,11 +4,11 @@
 //! that whites out a viewer facing it and deafens, a smoke cloud that greys the view.
 
 use bevy::audio::{AudioPlayer, AudioSource, GlobalVolume, PlaybackSettings, Volume};
-use bevy::light::NotShadowCaster;
+use bevy::asset::AssetPath;
 use bevy::prelude::*;
 
 use super::{
-    Carried, Effect, Grenade, GrenadeKind, PouchSlot, depth_in_cloud, flash_alpha, smoke_density,
+    Carried, Effect, Grenade, PouchSlot, depth_in_cloud, flash_alpha, smoke_density,
 };
 use crate::assets::EMBEDDED_ROOT;
 use crate::data::GameData;
@@ -18,7 +18,14 @@ use crate::player::input::{Action, Bindings};
 use crate::player::{EyeCamera, LocalLife, MouseCaptured};
 use crate::rear_cue::RearCue;
 use crate::shared::{FromServer, LocalPlayer, PlayerPose, ToServer};
-use crate::weapon::HeldWeapon;
+use crate::ui::{AMBER, TEXT, UiFonts, hud_text};
+use crate::weapon::{EquipmentRows, HeldWeapon};
+use crate::atmosphere::ActiveLook;
+use crate::particles::{
+    Detail, Fade, ParticleAssets, PuffSpec, Shape, random_unit, spawn_puff, spawn_spark,
+};
+use crate::video::ActiveVideo;
+use crate::weapon::WeaponRng;
 
 /// A thrown Grenade leaves the hand a little above the aim, so the throw lobs.
 const LOB_PITCH: f32 = 0.14;
@@ -58,41 +65,13 @@ impl Plugin for EquipmentClientPlugin {
 
 #[derive(Resource)]
 struct GrenadeAssets {
-    sphere: Handle<Mesh>,
-    bodies: [Handle<StandardMaterial>; 4],
     boom: Handle<AudioSource>,
     bang: Handle<AudioSource>,
     ring: Handle<AudioSource>,
 }
 
-fn kind_index(kind: GrenadeKind) -> usize {
-    GrenadeKind::ALL
-        .iter()
-        .position(|k| *k == kind)
-        .unwrap_or(0)
-}
-
-fn load_assets(
-    mut commands: Commands,
-    assets: Res<AssetServer>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let mut body = |color: Color| {
-        materials.add(StandardMaterial {
-            base_color: color,
-            perceptual_roughness: 0.6,
-            ..default()
-        })
-    };
+fn load_assets(mut commands: Commands, assets: Res<AssetServer>) {
     commands.insert_resource(GrenadeAssets {
-        sphere: meshes.add(Sphere::new(1.0).mesh().ico(3).unwrap()),
-        bodies: [
-            body(Color::srgb(0.25, 0.32, 0.15)),
-            body(Color::srgb(0.85, 0.85, 0.8)),
-            body(Color::srgb(0.5, 0.55, 0.58)),
-            body(Color::srgb(0.7, 0.55, 0.15)),
-        ],
         boom: assets.load(format!("{EMBEDDED_ROOT}{BURST_SOUND}")),
         bang: assets.load(format!("{EMBEDDED_ROOT}{BANG_SOUND}")),
         ring: assets.load(format!("{EMBEDDED_ROOT}{RING_SOUND}")),
@@ -150,26 +129,27 @@ fn throw(
     }
 }
 
-/// Dresses a Grenade the server made (or replicated to this client).
+/// Dresses a Grenade the server made (or replicated to this client) with its model.
 fn show_grenade(
     add: On<Add<Grenade>>,
     grenades: Query<&Grenade>,
-    assets: Res<GrenadeAssets>,
+    asset_server: Res<AssetServer>,
     mut commands: Commands,
 ) {
     let Ok(grenade) = grenades.get(add.entity) else {
         return;
     };
-    let size = if grenade.kind == GrenadeKind::Launcher {
-        0.08
-    } else {
-        0.07
-    };
+    let (file, scale, centre) = crate::weapon::rig::grenade_model(grenade.kind);
+    let scene =
+        asset_server.load(AssetPath::from(format!("{EMBEDDED_ROOT}{file}")).with_label("Scene0"));
     commands.entity(add.entity).insert((
-        Mesh3d(assets.sphere.clone()),
-        MeshMaterial3d(assets.bodies[kind_index(grenade.kind)].clone()),
-        Transform::from_translation(grenade.position).with_scale(Vec3::splat(size)),
+        Transform::from_translation(grenade.position),
         Visibility::default(),
+        children![(
+            WorldAssetRoot(scene),
+            // The model's middle on the Grenade's position.
+            Transform::from_xyz(0.0, -centre * scale, 0.0).with_scale(Vec3::splat(scale)),
+        )],
     ));
 }
 
@@ -181,85 +161,113 @@ fn follow_grenades(time: Res<Time>, mut grenades: Query<(&Grenade, &mut Transfor
     }
 }
 
+/// The light a blast throws on its surroundings for its first moments.
 #[derive(Component)]
 struct Burst {
     age: f32,
-    radius: f32,
-    material: Handle<StandardMaterial>,
-    color: (f32, f32, f32),
+    intensity: f32,
 }
 
+/// The volume of a smoke cloud, which greys the view of anyone inside it (its puffs are the
+/// particles `on_detonations` spawned).
 #[derive(Component)]
 struct Cloud {
     age: f32,
     secs: f32,
     radius: f32,
-    material: Handle<StandardMaterial>,
+}
+
+/// Peak of a frag's light, lumens.
+const BLAST_LIGHT: f32 = 4_000_000.0;
+/// Linear colour of smoke puffs (about sRGB 0.66).
+const SMOKE_PUFF: LinearRgba = LinearRgba::rgb(0.40, 0.41, 0.43);
+/// Smoke billows out over this long, a bit slower than its opacity rises.
+const SMOKE_GROW_SECS: f32 = super::SMOKE_FADE_IN_SECS * 1.6;
+/// Smoke puffs push apart at this rate (fraction of speed lost per second).
+const SMOKE_DRAG: f32 = 1.6;
+
+fn random_in_ball(rng: &mut WeaponRng) -> Vec3 {
+    random_unit(rng) * rng.next().cbrt()
 }
 
 /// A detonation: fireball and bang, flash pop or smoke cloud, where it went off.
+#[allow(clippy::too_many_arguments)]
 fn on_detonations(
     mut detonations: MessageReader<FromServer<GrenadeDetonated>>,
     assets: Res<GrenadeAssets>,
+    particles: Res<ParticleAssets>,
+    look: Res<ActiveLook>,
+    video: Res<ActiveVideo>,
     data: Res<GameData>,
+    mut rng: ResMut<WeaponRng>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut cue: RearCue,
     mut commands: Commands,
 ) {
+    let detail = Detail::of(&video.0.quality);
     for FromServer(blast) in detonations.read() {
         let at = blast.position;
         match data.grenade(blast.kind).effect {
-            Effect::Blast { .. } | Effect::Flash { .. } => {
-                let flash = matches!(data.grenade(blast.kind).effect, Effect::Flash { .. });
-                let color = if flash {
-                    (1.0, 1.0, 1.0)
-                } else {
-                    (1.0, 0.7, 0.3)
-                };
-                let radius = if flash { 1.6 } else { blast.radius * 0.4 };
-                let material = materials.add(StandardMaterial {
-                    base_color: Color::srgba(color.0, color.1, color.2, 1.0),
-                    emissive: LinearRgba::rgb(30.0 * color.0, 18.0 * color.1, 6.0 * color.2),
-                    unlit: true,
-                    alpha_mode: AlphaMode::Add,
-                    ..default()
-                });
+            Effect::Blast { .. } => {
+                let radius = blast.radius * 0.4;
+                spawn_fireball(
+                    &mut commands,
+                    &mut materials,
+                    &particles,
+                    &mut rng,
+                    detail,
+                    look.dust(),
+                    at,
+                    radius,
+                );
                 commands.spawn((
                     Name::new("Grenade burst"),
                     DespawnOnExit(AppState::InGame),
                     Burst {
                         age: 0.0,
-                        radius,
-                        material: material.clone(),
-                        color,
+                        intensity: BLAST_LIGHT,
                     },
-                    Mesh3d(assets.sphere.clone()),
-                    MeshMaterial3d(material),
-                    Transform::from_translation(at).with_scale(Vec3::splat(0.3)),
-                    NotShadowCaster,
+                    Transform::from_translation(at + Vec3::Y * 0.5),
                     PointLight {
-                        intensity: 4_000_000.0,
+                        intensity: BLAST_LIGHT,
                         range: radius * 4.0,
-                        color: Color::srgb(color.0, color.1, color.2),
+                        color: Color::srgb(1.0, 0.7, 0.3),
                         ..default()
                     },
                 ));
-                if flash {
-                    cue.play(&mut commands, &assets.bang, 2.0, 1.9, at);
-                } else {
-                    cue.play(&mut commands, &assets.boom, 3.0, 0.45, at);
-                    cue.play(&mut commands, &assets.bang, 1.8, 0.5, at);
-                }
+                cue.play(&mut commands, &assets.boom, 3.0, 0.45, at);
+                cue.play(&mut commands, &assets.bang, 1.8, 0.5, at);
+            }
+            Effect::Flash { .. } => {
+                spawn_flash_pop(&mut commands, &mut materials, &particles, &mut rng, at);
+                commands.spawn((
+                    Name::new("Grenade burst"),
+                    DespawnOnExit(AppState::InGame),
+                    Burst {
+                        age: 0.0,
+                        intensity: BLAST_LIGHT,
+                    },
+                    Transform::from_translation(at + Vec3::Y * 0.3),
+                    PointLight {
+                        intensity: BLAST_LIGHT,
+                        range: 6.4,
+                        color: Color::WHITE,
+                        ..default()
+                    },
+                ));
+                cue.play(&mut commands, &assets.bang, 2.0, 1.9, at);
             }
             Effect::Smoke { .. } => {
-                let material = materials.add(StandardMaterial {
-                    base_color: Color::srgba(0.66, 0.67, 0.69, 0.0),
-                    unlit: true,
-                    alpha_mode: AlphaMode::Blend,
-                    cull_mode: None,
-                    double_sided: true,
-                    ..default()
-                });
+                spawn_smoke_puffs(
+                    &mut commands,
+                    &mut materials,
+                    &particles,
+                    &mut rng,
+                    detail,
+                    at,
+                    blast.radius,
+                    blast.secs,
+                );
                 commands.spawn((
                     Name::new("Smoke cloud"),
                     DespawnOnExit(AppState::InGame),
@@ -267,12 +275,8 @@ fn on_detonations(
                         age: 0.0,
                         secs: blast.secs,
                         radius: blast.radius,
-                        material: material.clone(),
                     },
-                    Mesh3d(assets.sphere.clone()),
-                    MeshMaterial3d(material),
-                    Transform::from_translation(at).with_scale(Vec3::splat(0.1)),
-                    NotShadowCaster,
+                    Transform::from_translation(at),
                 ));
                 cue.play(&mut commands, &assets.boom, 0.7, 0.9, at);
             }
@@ -280,49 +284,292 @@ fn on_detonations(
     }
 }
 
+/// A frag's explosion: a white-hot flash, an orange fireball, a shock ring, a dust ring along the
+/// ground, rising black smoke and sparks.
+#[allow(clippy::too_many_arguments)]
+fn spawn_fireball(
+    commands: &mut Commands,
+    materials: &mut Assets<StandardMaterial>,
+    particles: &ParticleAssets,
+    rng: &mut WeaponRng,
+    detail: Detail,
+    dust: LinearRgba,
+    at: Vec3,
+    radius: f32,
+) {
+    let mut puff = |commands: &mut Commands, spec: PuffSpec| {
+        spawn_puff(commands, materials, particles, spec);
+    };
+    puff(
+        commands,
+        PuffSpec {
+            at: at + Vec3::Y * 0.4,
+            start_size: radius * 0.8,
+            end_size: radius * 2.2,
+            grow_secs: 0.14,
+            life: 0.14,
+            shape: Shape::Star,
+            color: LinearRgba::rgb(9.0, 6.5, 3.0),
+            alpha: 1.0,
+            additive: true,
+            drag: 0.0,
+            fade: Fade::Out { in_secs: 0.01 },
+            ..default()
+        },
+    );
+    puff(
+        commands,
+        PuffSpec {
+            at: at + Vec3::Y * 0.4,
+            start_size: 0.4,
+            end_size: radius * 2.2,
+            grow_secs: 0.28,
+            life: 0.28,
+            shape: Shape::Ring,
+            color: LinearRgba::rgb(1.4, 1.2, 1.0),
+            alpha: 0.3,
+            additive: true,
+            drag: 0.0,
+            fade: Fade::Out { in_secs: 0.02 },
+            ..default()
+        },
+    );
+    // The fire itself: orange blended puffs (additive ones wash out to white), a hotter core
+    // inside them.
+    for _ in 0..detail.count(5) {
+        let offset = random_in_ball(rng) * radius * 0.3;
+        puff(
+            commands,
+            PuffSpec {
+                at: at + Vec3::Y * 0.5 + offset,
+                velocity: (offset.normalize_or_zero() + Vec3::Y * 0.7) * 2.5,
+                drag: 3.5,
+                start_size: radius * 0.45,
+                end_size: radius * (1.0 + rng.next() * 0.7),
+                grow_secs: 0.3,
+                life: 0.4 + rng.next() * 0.2,
+                color: LinearRgba::rgb(1.0, 0.33, 0.04),
+                alpha: 0.9,
+                spin: rng.signed(),
+                angle: rng.next() * std::f32::consts::TAU,
+                ..default()
+            },
+        );
+    }
+    for _ in 0..detail.count(3) {
+        let offset = random_in_ball(rng) * radius * 0.2;
+        puff(
+            commands,
+            PuffSpec {
+                at: at + Vec3::Y * 0.5 + offset,
+                velocity: Vec3::Y * 1.5,
+                drag: 3.0,
+                start_size: radius * 0.35,
+                end_size: radius * 0.8,
+                grow_secs: 0.25,
+                life: 0.3,
+                color: LinearRgba::rgb(2.6, 1.1, 0.2),
+                alpha: 0.8,
+                additive: true,
+                angle: rng.next() * std::f32::consts::TAU,
+                ..default()
+            },
+        );
+    }
+    for _ in 0..detail.count(5) {
+        let drift = random_in_ball(rng) * 1.6 + Vec3::Y * (1.6 + rng.next() * 1.8);
+        puff(
+            commands,
+            PuffSpec {
+                at: at + Vec3::Y * 0.5 + random_in_ball(rng) * radius * 0.25,
+                velocity: drift,
+                drag: 1.3,
+                gravity: -0.3,
+                start_size: radius * 0.4,
+                end_size: radius * (1.2 + rng.next() * 0.8),
+                grow_secs: 1.8,
+                life: 2.6 + rng.next() * 1.6,
+                color: LinearRgba::rgb(0.05, 0.048, 0.045),
+                alpha: 0.62,
+                fade: Fade::Out { in_secs: 0.25 },
+                spin: rng.signed() * 0.4,
+                angle: rng.next() * std::f32::consts::TAU,
+                ..default()
+            },
+        );
+    }
+    for i in 0..detail.count(6) {
+        let angle = i as f32 / detail.count(6) as f32 * std::f32::consts::TAU + rng.next();
+        let outward = Vec3::new(angle.cos(), 0.0, angle.sin());
+        puff(
+            commands,
+            PuffSpec {
+                at: at + outward * 0.3 + Vec3::Y * 0.25,
+                velocity: outward * (radius * 2.2) + Vec3::Y * 0.6,
+                drag: 2.6,
+                start_size: radius * 0.3,
+                end_size: radius * 1.1,
+                grow_secs: 0.6,
+                life: 0.9 + rng.next() * 0.4,
+                color: dust,
+                alpha: 0.5,
+                angle: rng.next() * std::f32::consts::TAU,
+                ..default()
+            },
+        );
+    }
+    if detail > Detail::Low {
+        for _ in 0..detail.count(12) {
+            let mut direction = random_unit(rng);
+            direction.y = direction.y.abs() * 0.8 + 0.2;
+            spawn_spark(
+                commands,
+                particles,
+                at + Vec3::Y * 0.3,
+                direction * (6.0 + rng.next() * 9.0),
+                0.5 + rng.next() * 0.5,
+            );
+        }
+    }
+}
+
+/// A flashbang's pop: a blinding white star, a ring and a few soft white puffs.
+fn spawn_flash_pop(
+    commands: &mut Commands,
+    materials: &mut Assets<StandardMaterial>,
+    particles: &ParticleAssets,
+    rng: &mut WeaponRng,
+    at: Vec3,
+) {
+    let mut puff = |commands: &mut Commands, spec: PuffSpec| {
+        spawn_puff(commands, materials, particles, spec);
+    };
+    puff(
+        commands,
+        PuffSpec {
+            at: at + Vec3::Y * 0.3,
+            start_size: 1.6,
+            end_size: 4.5,
+            grow_secs: 0.25,
+            life: 0.25,
+            shape: Shape::Star,
+            color: LinearRgba::rgb(14.0, 14.0, 14.0),
+            alpha: 1.0,
+            additive: true,
+            drag: 0.0,
+            fade: Fade::Out { in_secs: 0.01 },
+            ..default()
+        },
+    );
+    puff(
+        commands,
+        PuffSpec {
+            at: at + Vec3::Y * 0.3,
+            start_size: 0.4,
+            end_size: 5.5,
+            grow_secs: 0.35,
+            life: 0.35,
+            shape: Shape::Ring,
+            color: LinearRgba::rgb(2.0, 2.0, 2.0),
+            alpha: 0.6,
+            additive: true,
+            drag: 0.0,
+            fade: Fade::Out { in_secs: 0.02 },
+            ..default()
+        },
+    );
+    for _ in 0..3 {
+        puff(
+            commands,
+            PuffSpec {
+                at: at + Vec3::Y * 0.3,
+                velocity: random_unit(rng) * 1.5,
+                drag: 3.0,
+                start_size: 0.8,
+                end_size: 2.4,
+                grow_secs: 0.4,
+                life: 0.5,
+                color: LinearRgba::rgb(3.0, 3.0, 3.0),
+                alpha: 0.7,
+                additive: true,
+                angle: rng.next() * std::f32::consts::TAU,
+                ..default()
+            },
+        );
+    }
+}
+
+/// A smoke grenade's cloud: soft grey puffs that billow out to fill a ball of `radius`, hold for
+/// `secs` (as `smoke_density` says) and thin out again.
+#[allow(clippy::too_many_arguments)]
+fn spawn_smoke_puffs(
+    commands: &mut Commands,
+    materials: &mut Assets<StandardMaterial>,
+    particles: &ParticleAssets,
+    rng: &mut WeaponRng,
+    detail: Detail,
+    at: Vec3,
+    radius: f32,
+    secs: f32,
+) {
+    for _ in 0..detail.count(14) {
+        let end_size = radius * (0.85 + rng.next() * 0.35);
+        let mut target = random_in_ball(rng) * radius * 0.55;
+        // A puff is a flat quad: rest it on the ground (half its size up) so it doesn't cut a
+        // hard line through the floor.
+        target.y = end_size * (0.5 + rng.next() * 0.3);
+        let shade = 0.85 + rng.next() * 0.3;
+        spawn_puff(
+            commands,
+            materials,
+            particles,
+            PuffSpec {
+                at: at + Vec3::Y * 0.3,
+                velocity: target * SMOKE_DRAG,
+                drag: SMOKE_DRAG,
+                start_size: radius * 0.25,
+                end_size,
+                grow_secs: SMOKE_GROW_SECS,
+                life: secs,
+                color: LinearRgba::rgb(
+                    SMOKE_PUFF.red * shade,
+                    SMOKE_PUFF.green * shade,
+                    SMOKE_PUFF.blue * shade,
+                ),
+                alpha: 0.95,
+                fade: Fade::Hold {
+                    in_secs: super::SMOKE_FADE_IN_SECS,
+                    out_secs: super::SMOKE_FADE_OUT_SECS.min(secs * 0.5),
+                },
+                spin: rng.signed() * 0.12,
+                angle: rng.next() * std::f32::consts::TAU,
+                ..default()
+            },
+        );
+    }
+}
+
 fn animate_bursts(
     time: Res<Time>,
-    mut bursts: Query<(Entity, &mut Burst, &mut Transform, &mut PointLight)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut bursts: Query<(Entity, &mut Burst, &mut PointLight)>,
     mut commands: Commands,
 ) {
-    for (entity, mut burst, mut transform, mut light) in &mut bursts {
+    for (entity, mut burst, mut light) in &mut bursts {
         burst.age += time.delta_secs();
         let t = (burst.age / BURST_SECS).min(1.0);
         if t >= 1.0 {
             commands.entity(entity).despawn();
             continue;
         }
-        transform.scale = Vec3::splat(0.3 + (burst.radius - 0.3) * (1.0 - (1.0 - t).powi(3)));
-        light.intensity = 4_000_000.0 * (1.0 - t);
-        if let Some(mut material) = materials.get_mut(&burst.material) {
-            let (r, g, b) = burst.color;
-            material.base_color = Color::srgba(r, g, b, 1.0 - t);
-        }
+        light.intensity = burst.intensity * (1.0 - t);
     }
 }
 
-fn animate_clouds(
-    time: Res<Time>,
-    mut clouds: Query<(Entity, &mut Cloud, &mut Transform)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut commands: Commands,
-) {
-    for (entity, mut cloud, mut transform) in &mut clouds {
+fn animate_clouds(time: Res<Time>, mut clouds: Query<(Entity, &mut Cloud)>, mut commands: Commands) {
+    for (entity, mut cloud) in &mut clouds {
         cloud.age += time.delta_secs();
         if cloud.age >= cloud.secs {
             commands.entity(entity).despawn();
-            continue;
-        }
-        let billow = (cloud.age / super::SMOKE_FADE_IN_SECS).clamp(0.0, 1.0);
-        transform.scale = Vec3::splat(cloud.radius * (0.25 + 0.75 * billow.sqrt()));
-        if let Some(mut material) = materials.get_mut(&cloud.material) {
-            material.base_color = Color::srgba(
-                0.66,
-                0.67,
-                0.69,
-                0.97 * smoke_density(cloud.age, cloud.secs),
-            );
         }
     }
 }
@@ -369,9 +616,6 @@ struct FlashOverlay;
 #[derive(Component)]
 struct SmokeOverlay;
 
-#[derive(Component)]
-struct EquipmentHud;
-
 fn spawn_overlays(mut commands: Commands) {
     let full = Node {
         position_type: PositionType::Absolute,
@@ -395,23 +639,7 @@ fn spawn_overlays(mut commands: Commands) {
         GlobalZIndex(17),
         BackgroundColor(Color::srgba(0.66, 0.67, 0.69, 0.0)),
     ));
-    commands.spawn((
-        Name::new("Equipment"),
-        DespawnOnExit(AppState::InGame),
-        EquipmentHud,
-        Text::default(),
-        TextFont {
-            font_size: FontSize::Px(16.0),
-            ..default()
-        },
-        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.9)),
-        Node {
-            position_type: PositionType::Absolute,
-            right: px(24.0),
-            bottom: px(84.0),
-            ..default()
-        },
-    ));
+    // The equipment HUD lives in the ammo cluster (`weapon::EquipmentRows`, rebuilt by `update_hud`).
 }
 
 /// Runs the flash down, whites the screen out and ducks the sound while it lasts, and greys the
@@ -462,36 +690,70 @@ fn update_screen_effects(
     smoke.0 = Color::srgba(0.66, 0.67, 0.69, 0.97 * grey);
 }
 
-/// "[G] FRAG GRENADE x1   [Q] FLASHBANG x2   [V] 40MM GRENADE x3".
+/// The carried equipment as rows above the ammo: a key plate, the name and the count, e.g.
+/// `[G] FRAG GRENADE  x1`.
 fn update_hud(
     data: Res<GameData>,
     bindings: Res<Bindings>,
+    fonts: Res<UiFonts>,
     player: Query<&Carried, With<LocalPlayer>>,
-    mut hud: Single<&mut Text, With<EquipmentHud>>,
+    rows: Single<(Entity, Option<&Children>), With<EquipmentRows>>,
+    mut shown: Local<Vec<(String, String, u32)>>,
+    mut commands: Commands,
 ) {
     let Ok(carried) = player.single() else {
         return;
     };
     let entry = |action: Action, pouch: Option<super::Pouch>| {
         pouch.map(|pouch| {
-            format!(
-                "[{}] {} x{}",
+            (
                 bindings.describe(action).to_uppercase(),
                 data.grenade(pouch.kind).name.to_uppercase(),
-                pouch.left
+                pouch.left,
             )
         })
     };
-    let shown = [
+    let now: Vec<(String, String, u32)> = [
         entry(Action::Lethal, carried.lethal),
         entry(Action::Tactical, carried.tactical),
         entry(Action::Launcher, carried.launcher),
     ]
     .into_iter()
     .flatten()
-    .collect::<Vec<_>>()
-    .join("   ");
-    if hud.0 != shown {
-        hud.0 = shown;
+    .collect();
+    // `shown` outlives a game; a fresh (childless) column must be filled again.
+    if *shown == now && rows.1.is_some() == !now.is_empty() {
+        return;
     }
+    let (root, children) = *rows;
+    for child in children.into_iter().flatten() {
+        commands.entity(*child).despawn();
+    }
+    for (key, name, left) in &now {
+        commands.spawn((
+            ChildOf(root),
+            Node {
+                align_items: AlignItems::Center,
+                column_gap: px(8.0),
+                ..default()
+            },
+            children![
+                (
+                    Node {
+                        min_width: px(22.0),
+                        padding: UiRect::axes(px(5.0), px(0.0)),
+                        justify_content: JustifyContent::Center,
+                        border: UiRect::all(px(1.0)),
+                        ..default()
+                    },
+                    BorderColor::all(AMBER),
+                    BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.4)),
+                    children![hud_text(&fonts.bold, key, 14.0, AMBER)],
+                ),
+                hud_text(&fonts.bold, name, 17.0, TEXT),
+                hud_text(&fonts.display, &format!("{left}"), 20.0, Color::WHITE),
+            ],
+        ));
+    }
+    *shown = now;
 }

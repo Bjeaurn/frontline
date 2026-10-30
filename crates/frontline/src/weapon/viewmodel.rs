@@ -1,31 +1,38 @@
-//! First-person gun: a blocky model per `GunModel` on its own camera and render layer, so it
-//! is drawn over the world and never clips into walls. Rebuilt when the held Weapon changes.
-//! Moves to the sights when aiming, bobs while walking, sways with the mouse, kicks on each
-//! shot, dips during a reload, rolls while a bolt is worked, angles down and across while
-//! sprinting (raising back as the sprint-out ends), drops during a mantle, and hides while
-//! looking through a scope.
+//! First-person gun: a glTF model per `GunModel` (see `rig`) on its own camera and render
+//! layer, so it is drawn over the world and never clips into walls, with gloved, sleeved arms
+//! holding it. Rebuilt when the held Weapon changes. Moves to the sights when aiming, bobs while
+//! walking, sways with the mouse, kicks on each shot, dips during a reload while the left hand
+//! pulls the magazine and seats a new one, rolls while a bolt is worked, angles down and across
+//! while sprinting (raising back as the sprint-out ends), drops during a mantle, lowers for a
+//! Grenade throw (the right hand winds up with the Grenade) and hides while looking through a
+//! scope.
 
+use std::collections::HashMap;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
+use bevy::asset::AssetPath;
 use bevy::camera::CameraOutputMode;
 use bevy::camera::visibility::RenderLayers;
 use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::light::NotShadowCaster;
-use bevy::mesh::VertexAttributeValues;
+use bevy::mesh::{UvChannel, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::render::render_resource::BlendState;
-use std::collections::HashMap;
+use bevy::world_serialization::WorldInstanceReady;
 
 use super::effects::MuzzleFlash;
+use super::rig::{self, GunRig, HandPose};
 use super::{HeldWeapon, Kit, ShotFired, WeaponSystems, ease};
 use crate::assets::EMBEDDED_ROOT;
 use crate::atmosphere;
-use crate::data::{GameData, GunModel, SightKind, WeaponId, WeaponStats};
+use crate::data::{GameData, SightKind, WeaponId, WeaponStats};
+use crate::equipment::GrenadeKind;
 use crate::flow::AppState;
-use crate::gear::{Attachments, NO_CAMO};
+use crate::gear::{AttachmentId, Attachments, NO_CAMO};
+use crate::net::protocol::ThrowGrenade;
 use crate::player::{ControllerSystems, EyeCamera, LocalLife, Motor, MouseCaptured};
-use crate::shared::LocalPlayer;
+use crate::shared::{LocalPlayer, ToServer};
 
 /// Render layer of the viewmodel; the world stays on layer 0.
 pub(super) const VIEWMODEL_LAYER: usize = 1;
@@ -54,9 +61,10 @@ const KICK_MAX: f32 = 1.5;
 const KICK_DECAY: f32 = 16.0;
 /// Kick that remains when fully aimed.
 const ADS_KICK_SCALE: f32 = 0.5;
-/// Reload dip at its deepest: drop, tilt down and roll.
-const RELOAD_DROP: f32 = 0.12;
-const RELOAD_TILT: f32 = 0.6;
+/// Reload at its deepest: the gun comes up, tips muzzle-up and rolls so the magazine well
+/// faces the player.
+const RELOAD_RAISE: f32 = 0.03;
+const RELOAD_TILT: f32 = 0.3;
 const RELOAD_ROLL: f32 = 0.5;
 /// Bolt cycle at its peak: the gun rolls onto its side, tips up and shifts right while the
 /// handle lifts and slides back by `BOLT_TRAVEL`.
@@ -76,25 +84,33 @@ const SPRINT_IN_RATE: f32 = 12.0;
 const MANTLE_DROP: f32 = 0.2;
 const MANTLE_TILT: f32 = 0.5;
 const MANTLE_RATE: f32 = 14.0;
-/// Switching Weapons at its lowest point: drop and tilt down.
+/// Switching Weapons (or throwing) at its lowest point: drop and tilt down.
 const SWITCH_DROP: f32 = 0.28;
 const SWITCH_TILT: f32 = 0.9;
+
+/// A Grenade throw as the viewmodel plays it, in seconds: raise the hand with the Grenade,
+/// wind back, throw (the Grenade leaves the hand at `THROW_RELEASE`), lower the hand and raise
+/// the gun again.
+const THROW_SECS: f32 = 0.62;
+const THROW_RELEASE: f32 = 0.27;
+/// Right hand holding the Grenade at its three poses in camera space: ready, wound back and
+/// thrown, as (position, tilt of the palm-up hand about X).
+const THROW_READY: (Vec3, f32) = (Vec3::new(0.09, -0.11, -0.34), 0.15);
+const THROW_BACK: (Vec3, f32) = (Vec3::new(0.15, -0.09, -0.23), -0.5);
+const THROW_FORWARD: (Vec3, f32) = (Vec3::new(0.06, -0.07, -0.56), 0.6);
 
 /// How much gun one tile of a camo texture covers, in metres.
 const CAMO_TILE_METRES: f32 = 0.12;
 
 /// Light for the viewmodel layer; world lights only reach the world layer.
 const VIEWMODEL_LIGHT_LUX: f32 = 9_000.0;
-const MUZZLE_LIGHT_LUMENS: f32 = 400_000.0;
-const MUZZLE_LIGHT_RANGE: f32 = 8.0;
-/// Muzzle flash ellipsoid size, stretched along the barrel.
-const FLASH_SIZE: Vec3 = Vec3::new(0.07, 0.07, 0.16);
 
 pub(super) struct ViewmodelPlugin;
 
 impl Plugin for ViewmodelPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(attach_viewmodel)
+            .add_observer(scene_ready)
             .add_systems(Startup, create_gun_materials)
             .add_systems(OnEnter(AppState::InGame), spawn_viewmodel_light)
             .add_systems(
@@ -113,12 +129,30 @@ impl Plugin for ViewmodelPlugin {
 #[derive(Component)]
 pub struct ViewmodelCamera;
 
+/// The entities of the arms, built once with the camera.
+#[derive(Clone, Copy, Debug)]
+struct ArmEntities {
+    /// Parent of the hands, sleeves and the held Grenade; hidden with the gun.
+    root: Entity,
+    right_hand: Entity,
+    left_hand: Entity,
+    right_arm: Entity,
+    left_arm: Entity,
+    /// The Grenade in the right hand, and one scene per kind under it.
+    holder: Entity,
+    grenades: [(GrenadeKind, Entity); 3],
+}
+
 /// The gun root under the viewmodel camera, with its procedural animation state.
-#[derive(Component, Debug, Default)]
+#[derive(Component, Debug)]
 pub(super) struct ViewmodelGun {
     /// The Weapon, Attachments and camo (an id from `data/progression.ron`, `none` for bare
     /// metal) whose model is currently built under it.
     weapon: Option<(WeaponId, Attachments, String)>,
+    /// Rig of the model built, and where the left hand rests on it.
+    rig: Option<GunRig>,
+    left_rest: Option<HandPose>,
+    arms: ArmEntities,
     bob_phase: f32,
     bob_amount: f32,
     sway: Vec2,
@@ -127,11 +161,31 @@ pub(super) struct ViewmodelGun {
     sprint: f32,
     /// Mantle pose blend, 0 ready to 1 fully lowered.
     mantle: f32,
+    /// A Grenade throw under way: its kind and seconds in.
+    throw: Option<(GrenadeKind, f32)>,
 }
 
 /// A mesh of the current gun model; replaced when the model changes.
 #[derive(Component)]
 struct GunPart;
+
+/// A glTF scene on the viewmodel layer: every mesh of it is moved there when it is ready; a
+/// gun's gets `camo`, its magazine node is found and the nodes in `ads_hidden` go when aimed.
+#[derive(Component)]
+struct ViewScene {
+    camo: String,
+    bare: &'static [&'static str],
+    magazine: Option<&'static str>,
+    ads_hidden: &'static [&'static str],
+}
+
+/// Part of a gun model that is hidden while aimed (a wire stock round the eye).
+#[derive(Component)]
+struct AdsHidden;
+
+/// The magazine node of the gun model, at rest at `.0` in its parent's space.
+#[derive(Component)]
+struct Magazine(Vec3);
 
 /// The bolt handle of a bolt-action model, at rest at `.0` in gun space.
 #[derive(Component)]
@@ -153,20 +207,6 @@ fn spawn_viewmodel_light(mut commands: Commands) {
         Transform::default().looking_to(Vec3::new(-0.4, -1.0, -0.6), Vec3::Y),
         viewmodel_layer(),
     ));
-}
-
-/// One gun body in gun space (-Z is forward, origin at the receiver). Muzzle and sight point
-/// come from the Weapon's data; the sight is built around its sight point.
-struct GunShape {
-    /// Box parts: size, centre and finish.
-    boxes: &'static [(Vec3, Vec3, Furniture)],
-    barrel_radius: f32,
-    /// Where the barrel leaves the gun body; it runs forward to the muzzle.
-    barrel_start: f32,
-    /// Top of the receiver, where sight mounts stand.
-    body_top: f32,
-    /// Bolt handle box (size, centre), if the model has one to work.
-    bolt: Option<(Vec3, Vec3)>,
 }
 
 /// Red dot window (width, height), frame bar thickness and housing depth.
@@ -194,197 +234,9 @@ const PRISM_BELL: (f32, f32) = (0.004, 0.012);
 const PRISM_CHEVRON: (f32, f32) = (0.0075, 0.0009);
 /// Silencer girth relative to the barrel.
 const SUPPRESSOR_RADIUS_SCALE: f32 = 1.9;
-/// Rear aperture ring radii (hole, outside), front post width and height.
-const APERTURE: (f32, f32) = (0.005, 0.0075);
-const FRONT_POST: Vec2 = Vec2::new(0.0025, 0.042);
-/// Scope cylinders as (radius, from, to), z measured from the eyepiece end.
-const SCOPE_TUBES: [(f32, f32, f32); 3] = [
-    // Eyepiece, main tube, objective bell.
-    (0.026, -0.06, 0.0),
-    (0.02, -0.32, -0.06),
-    (0.03, -0.43, -0.32),
-];
-/// Scope rings, z measured from the eyepiece end.
-const SCOPE_RINGS: [f32; 2] = [-0.27, -0.11];
-
-const RIFLE: GunShape = GunShape {
-    boxes: &[
-        // Receiver.
-        (
-            Vec3::new(0.055, 0.075, 0.30),
-            Vec3::new(0.0, 0.0, 0.0),
-            Furniture::Metal,
-        ),
-        // Top rail.
-        (
-            Vec3::new(0.022, 0.008, 0.26),
-            Vec3::new(0.0, 0.0415, -0.02),
-            Furniture::Metal,
-        ),
-        // Handguard.
-        (
-            Vec3::new(0.06, 0.06, 0.20),
-            Vec3::new(0.0, 0.0, -0.24),
-            Furniture::Polymer,
-        ),
-        // Magazine.
-        (
-            Vec3::new(0.032, 0.14, 0.065),
-            Vec3::new(0.0, -0.10, -0.07),
-            Furniture::Metal,
-        ),
-        // Pistol grip.
-        (
-            Vec3::new(0.035, 0.10, 0.045),
-            Vec3::new(0.0, -0.08, 0.09),
-            Furniture::Polymer,
-        ),
-        // Stock.
-        (
-            Vec3::new(0.045, 0.075, 0.20),
-            Vec3::new(0.0, -0.015, 0.25),
-            Furniture::Polymer,
-        ),
-    ],
-    barrel_radius: 0.012,
-    barrel_start: -0.30,
-    body_top: 0.0455,
-    bolt: None,
-};
-
-/// Short and stubby: compact receiver, curved-looking magazine, thin collapsed stock.
-const SMG: GunShape = GunShape {
-    boxes: &[
-        // Receiver.
-        (
-            Vec3::new(0.05, 0.07, 0.24),
-            Vec3::new(0.0, 0.0, 0.0),
-            Furniture::Metal,
-        ),
-        // Handguard.
-        (
-            Vec3::new(0.058, 0.058, 0.11),
-            Vec3::new(0.0, -0.005, -0.175),
-            Furniture::Polymer,
-        ),
-        // Magazine, raked forward.
-        (
-            Vec3::new(0.028, 0.15, 0.04),
-            Vec3::new(0.0, -0.10, -0.085),
-            Furniture::Metal,
-        ),
-        // Pistol grip.
-        (
-            Vec3::new(0.035, 0.10, 0.045),
-            Vec3::new(0.0, -0.08, 0.075),
-            Furniture::Polymer,
-        ),
-        // Collapsed stock struts and butt plate.
-        (
-            Vec3::new(0.03, 0.045, 0.12),
-            Vec3::new(0.0, -0.005, 0.18),
-            Furniture::Metal,
-        ),
-        (
-            Vec3::new(0.045, 0.085, 0.02),
-            Vec3::new(0.0, -0.02, 0.245),
-            Furniture::Polymer,
-        ),
-    ],
-    barrel_radius: 0.011,
-    barrel_start: -0.23,
-    body_top: 0.035,
-    bolt: None,
-};
-
-/// Long stock and barrel under a scope tube, with a bolt handle on the right.
-const SNIPER: GunShape = GunShape {
-    boxes: &[
-        // Receiver.
-        (
-            Vec3::new(0.05, 0.065, 0.30),
-            Vec3::new(0.0, 0.0, 0.0),
-            Furniture::Metal,
-        ),
-        // Forend.
-        (
-            Vec3::new(0.06, 0.065, 0.42),
-            Vec3::new(0.0, -0.015, -0.33),
-            Furniture::Polymer,
-        ),
-        // Magazine floorplate.
-        (
-            Vec3::new(0.035, 0.03, 0.08),
-            Vec3::new(0.0, -0.045, -0.03),
-            Furniture::Metal,
-        ),
-        // Wrist.
-        (
-            Vec3::new(0.04, 0.09, 0.06),
-            Vec3::new(0.0, -0.06, 0.12),
-            Furniture::Polymer,
-        ),
-        // Buttstock.
-        (
-            Vec3::new(0.05, 0.10, 0.28),
-            Vec3::new(0.0, -0.035, 0.29),
-            Furniture::Polymer,
-        ),
-    ],
-    barrel_radius: 0.011,
-    barrel_start: -0.50,
-    body_top: 0.0325,
-    bolt: Some((Vec3::new(0.07, 0.014, 0.014), Vec3::new(0.045, 0.012, 0.10))),
-};
-
-/// Compact: a slide over a short grip frame with a trigger guard and a thin magazine base.
-const PISTOL: GunShape = GunShape {
-    boxes: &[
-        // Slide.
-        (
-            Vec3::new(0.03, 0.036, 0.20),
-            Vec3::new(0.0, 0.0, -0.025),
-            Furniture::Metal,
-        ),
-        // Frame under the slide, running forward as the dust cover.
-        (
-            Vec3::new(0.028, 0.022, 0.16),
-            Vec3::new(0.0, -0.029, -0.045),
-            Furniture::Polymer,
-        ),
-        // Grip.
-        (
-            Vec3::new(0.032, 0.105, 0.05),
-            Vec3::new(0.0, -0.088, 0.055),
-            Furniture::Polymer,
-        ),
-        // Trigger guard.
-        (
-            Vec3::new(0.014, 0.008, 0.05),
-            Vec3::new(0.0, -0.046, -0.01),
-            Furniture::Metal,
-        ),
-        // Magazine base.
-        (
-            Vec3::new(0.034, 0.012, 0.055),
-            Vec3::new(0.0, -0.146, 0.055),
-            Furniture::Metal,
-        ),
-    ],
-    barrel_radius: 0.008,
-    barrel_start: -0.125,
-    body_top: 0.018,
-    bolt: None,
-};
-
-fn shape(model: GunModel) -> &'static GunShape {
-    match model {
-        GunModel::Rifle => &RIFLE,
-        GunModel::Smg => &SMG,
-        GunModel::Sniper => &SNIPER,
-        GunModel::Pistol => &PISTOL,
-    }
-}
+/// Foregrip: radius and length. Grenade Launcher: tube radius and length.
+const FOREGRIP: (f32, f32) = (0.014, 0.075);
+const LAUNCHER: (f32, f32) = (0.022, 0.2);
 
 /// Gun origin relative to the camera when fully aimed: the sight point on the screen centre,
 /// `sight_eye_relief` ahead, with the gun square to the view so the sight axis is the aim line.
@@ -402,15 +254,19 @@ enum Furniture {
     Glass,
     /// Unlit red reticle.
     Reticle,
+    Glove,
+    Sleeve,
 }
 
 impl Furniture {
-    const ALL: [Furniture; 5] = [
+    const ALL: [Furniture; 7] = [
         Furniture::Metal,
         Furniture::Polymer,
         Furniture::Sight,
         Furniture::Glass,
         Furniture::Reticle,
+        Furniture::Glove,
+        Furniture::Sleeve,
     ];
 
     fn material(self) -> StandardMaterial {
@@ -418,6 +274,8 @@ impl Furniture {
             Furniture::Metal => (Color::srgb(0.16, 0.16, 0.17), 0.45),
             Furniture::Polymer => (Color::srgb(0.22, 0.20, 0.17), 0.8),
             Furniture::Sight => (Color::srgb(0.04, 0.04, 0.04), 0.6),
+            Furniture::Glove => (Color::srgb(0.045, 0.045, 0.05), 0.8),
+            Furniture::Sleeve => (Color::srgb(0.2, 0.22, 0.14), 0.95),
             Furniture::Glass => {
                 return StandardMaterial {
                     base_color: Color::srgba(0.55, 0.75, 0.85, 0.10),
@@ -444,9 +302,9 @@ impl Furniture {
     }
 }
 
-/// Materials shared by every gun model, indexed by `Furniture`.
+/// Materials shared by every procedural part, indexed by `Furniture`.
 #[derive(Resource)]
-struct GunMaterials([Handle<StandardMaterial>; 5]);
+struct GunMaterials([Handle<StandardMaterial>; 7]);
 
 fn create_gun_materials(
     mut commands: Commands,
@@ -489,43 +347,39 @@ fn create_gun_materials(
 #[derive(Resource)]
 struct CamoMaterials(HashMap<String, Handle<StandardMaterial>>);
 
-/// A box mesh whose texture coordinates run along the gun's own axes (one tile per
-/// `CAMO_TILE_METRES`), so a camo pattern is the same size on every part and carries on across
-/// the joins between them. `centre` is where the box sits in gun space.
-fn camo_box(size: Vec3, centre: Vec3) -> Mesh {
-    let mut mesh = Mesh::from(Cuboid::from_size(size));
-    let uvs: Option<Vec<[f32; 2]>> = match (
+/// Texture coordinates for a camo pattern, running along the gun's own axes (one tile per
+/// `CAMO_TILE_METRES`) so the pattern is the same size on every part and carries on across the
+/// joins between them. `to_gun` takes the mesh's vertices into gun space.
+fn camo_uvs(mesh: &Mesh, to_gun: &Transform) -> Option<Vec<[f32; 2]>> {
+    let (
+        Some(VertexAttributeValues::Float32x3(positions)),
+        Some(VertexAttributeValues::Float32x3(normals)),
+    ) = (
         mesh.attribute(Mesh::ATTRIBUTE_POSITION),
         mesh.attribute(Mesh::ATTRIBUTE_NORMAL),
-    ) {
-        (
-            Some(VertexAttributeValues::Float32x3(positions)),
-            Some(VertexAttributeValues::Float32x3(normals)),
-        ) => Some(
-            positions
-                .iter()
-                .zip(normals)
-                .map(|(position, normal)| {
-                    let p = Vec3::from(*position) + centre;
-                    let n = Vec3::from(*normal).abs();
-                    // Project along the axis the face looks down.
-                    let flat = if n.x > n.y && n.x > n.z {
-                        Vec2::new(p.z, p.y)
-                    } else if n.y > n.z {
-                        Vec2::new(p.x, p.z)
-                    } else {
-                        Vec2::new(p.x, p.y)
-                    };
-                    (flat / CAMO_TILE_METRES).to_array()
-                })
-                .collect(),
-        ),
-        _ => None,
+    )
+    else {
+        return None;
     };
-    if let Some(uvs) = uvs {
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    }
-    mesh
+    Some(
+        positions
+            .iter()
+            .zip(normals)
+            .map(|(position, normal)| {
+                let p = to_gun.transform_point(Vec3::from(*position));
+                let n = (to_gun.rotation * Vec3::from(*normal)).abs();
+                // Project along the axis the face looks down.
+                let flat = if n.x > n.y && n.x > n.z {
+                    Vec2::new(p.z, p.y)
+                } else if n.y > n.z {
+                    Vec2::new(p.x, p.z)
+                } else {
+                    Vec2::new(p.x, p.y)
+                };
+                (flat / CAMO_TILE_METRES).to_array()
+            })
+            .collect(),
+    )
 }
 
 /// A rectangular optic around `sight`: four frame bars of thickness `frame` and length `depth`
@@ -569,9 +423,9 @@ fn optic_parts(
     ]
 }
 
-/// Meshes of the Weapon's sight (`stats.sight`) built around its sight point, as
-/// (mesh, finish, transform).
-fn sight_parts(shape: &GunShape, stats: &WeaponStats) -> Vec<(Mesh, Furniture, Transform)> {
+/// Meshes of the fitted Optic (`stats.sight`) built around its sight point, as
+/// (mesh, finish, transform). The iron sights and the Sniper's scope are part of the models.
+fn sight_parts(rig: &GunRig, stats: &WeaponStats) -> Vec<(Mesh, Furniture, Transform)> {
     let sight = Vec3::from(stats.sight_point);
     let block = |size: Vec3, centre: Vec3| {
         (
@@ -582,13 +436,12 @@ fn sight_parts(shape: &GunShape, stats: &WeaponStats) -> Vec<(Mesh, Furniture, T
     };
     // A mount block standing on the receiver up to `top`, centred at `z`.
     let mount = |top: f32, z: f32, width: f32, depth: f32| {
-        let height = (top - shape.body_top).max(0.0);
+        let height = (top - rig.body_top).max(0.0);
         block(
             Vec3::new(width, height, depth),
-            Vec3::new(sight.x, shape.body_top + height / 2.0, z),
+            Vec3::new(sight.x, rig.body_top + height / 2.0, z),
         )
     };
-    let along_axis = Quat::from_rotation_x(FRAC_PI_2);
     match stats.sight {
         SightKind::RedDot => {
             let (window, t) = (RED_DOT_WINDOW, RED_DOT_FRAME);
@@ -675,48 +528,18 @@ fn sight_parts(shape: &GunShape, stats: &WeaponStats) -> Vec<(Mesh, Furniture, T
             ));
             parts
         }
-        SightKind::Irons => {
-            let (hole, outside) = APERTURE;
-            let post = Vec3::new(FRONT_POST.x, FRONT_POST.y, 0.003);
-            vec![
-                (
-                    Mesh::from(Torus::new(hole, outside)),
-                    Furniture::Sight,
-                    Transform::from_translation(sight).with_rotation(along_axis),
-                ),
-                mount(sight.y - outside + 0.001, sight.z, 0.006, 0.008),
-                block(
-                    post,
-                    Vec3::new(sight.x, sight.y - post.y / 2.0, stats.iron_front_z),
-                ),
-            ]
-        }
-        SightKind::Scope => SCOPE_TUBES
-            .iter()
-            .map(|&(radius, from, to)| {
-                (
-                    Mesh::from(Cylinder::new(radius, to - from)),
-                    Furniture::Sight,
-                    Transform::from_xyz(sight.x, sight.y, sight.z + (from + to) / 2.0)
-                        .with_rotation(along_axis),
-                )
-            })
-            .chain(
-                SCOPE_RINGS
-                    .iter()
-                    .map(|&z| mount(sight.y - 0.019, sight.z + z, 0.02, 0.02)),
-            )
-            .collect(),
+        SightKind::Irons | SightKind::Scope => Vec::new(),
     }
 }
 
-/// Builds the viewmodel camera, the (empty) gun root and its muzzle flash under the local
-/// player's eye camera; `build_gun` adds the model.
+/// Builds the viewmodel camera, the (empty) gun root, its muzzle flash and the arms under the
+/// local player's eye camera; `build_gun` adds the model.
 fn attach_viewmodel(
     add: On<Add<EyeCamera>>,
     mut commands: Commands,
+    assets: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut standard: ResMut<Assets<StandardMaterial>>,
 ) {
     let camera = commands
         .spawn((
@@ -744,10 +567,24 @@ fn attach_viewmodel(
             ChildOf(add.entity),
         ))
         .id();
+
+    let arms = spawn_arms(&mut commands, camera, &assets, &mut standard, &mut meshes);
     let gun = commands
         .spawn((
             Name::new("ViewmodelGun"),
-            ViewmodelGun::default(),
+            ViewmodelGun {
+                weapon: None,
+                rig: None,
+                left_rest: None,
+                arms,
+                bob_phase: 0.0,
+                bob_amount: 0.0,
+                sway: Vec2::ZERO,
+                kick: 0.0,
+                sprint: 0.0,
+                mantle: 0.0,
+                throw: None,
+            },
             Transform::from_translation(HIP_OFFSET),
             Visibility::default(),
             ChildOf(camera),
@@ -758,41 +595,224 @@ fn attach_viewmodel(
         MuzzleFlash::default(),
         Transform::default(),
         Visibility::Hidden,
+        // Its look (star, flame, light) is dressed by `effects::dress_muzzle_flash`.
         ChildOf(gun),
-        children![
-            (
-                Mesh3d(meshes.add(Sphere::new(0.5))),
-                MeshMaterial3d(materials.add(StandardMaterial {
-                    base_color: Color::srgb(1.0, 0.8, 0.45),
-                    emissive: LinearRgba::rgb(14.0, 8.0, 2.5),
-                    alpha_mode: AlphaMode::Add,
-                    ..default()
-                })),
-                Transform::from_xyz(0.0, 0.0, -FLASH_SIZE.z / 2.0).with_scale(FLASH_SIZE),
+    ));
+}
+
+/// Gloves, sleeves and the Grenade scenes, under one root that follows the gun's visibility.
+/// Their transforms are set every frame by `animate_viewmodel`.
+fn spawn_arms(
+    commands: &mut Commands,
+    camera: Entity,
+    assets: &AssetServer,
+    materials: &mut Assets<StandardMaterial>,
+    meshes: &mut Assets<Mesh>,
+) -> ArmEntities {
+    let root = commands
+        .spawn((
+            Name::new("ViewmodelArms"),
+            Transform::IDENTITY,
+            Visibility::default(),
+            ChildOf(camera),
+        ))
+        .id();
+    let glove = materials.add(Furniture::Glove.material());
+    let sleeve = materials.add(Furniture::Sleeve.material());
+    let sleeve_mesh = meshes.add(rig::sleeve_mesh());
+    let mut hand = |name: &'static str, curl: f32| {
+        commands
+            .spawn((
+                Name::new(name),
+                Mesh3d(meshes.add(rig::hand_mesh(curl))),
+                MeshMaterial3d(glove.clone()),
+                Transform::default(),
                 viewmodel_layer(),
                 NotShadowCaster,
-            ),
-            (
-                PointLight {
-                    color: Color::srgb(1.0, 0.75, 0.4),
-                    intensity: MUZZLE_LIGHT_LUMENS,
-                    range: MUZZLE_LIGHT_RANGE,
-                    shadow_maps_enabled: false,
-                    ..default()
+                ChildOf(root),
+            ))
+            .id()
+    };
+    let right_hand = hand("RightHand", 0.9);
+    let left_hand = hand("LeftHand", 0.75);
+    let mut arm = |name: &'static str| {
+        commands
+            .spawn((
+                Name::new(name),
+                Mesh3d(sleeve_mesh.clone()),
+                MeshMaterial3d(sleeve.clone()),
+                Transform::default(),
+                viewmodel_layer(),
+                NotShadowCaster,
+                ChildOf(root),
+            ))
+            .id()
+    };
+    let right_arm = arm("RightArm");
+    let left_arm = arm("LeftArm");
+    let holder = commands
+        .spawn((
+            Name::new("HeldGrenade"),
+            Transform::default(),
+            Visibility::Hidden,
+            ChildOf(root),
+        ))
+        .id();
+    let grenades = [
+        GrenadeKind::Frag,
+        GrenadeKind::Flashbang,
+        GrenadeKind::Smoke,
+    ]
+    .map(|kind| {
+        let (file, scale, centre) = rig::grenade_model(kind);
+        let scene =
+            assets.load(AssetPath::from(format!("{EMBEDDED_ROOT}{file}")).with_label("Scene0"));
+        let entity = commands
+            .spawn((
+                Name::new(format!("Held {kind:?}")),
+                ViewScene {
+                    camo: NO_CAMO.to_owned(),
+                    bare: &[],
+                    magazine: None,
+                    ads_hidden: &[],
                 },
-                // Lights the world around the player as well as the gun.
-                RenderLayers::from_layers(&[0, VIEWMODEL_LAYER]),
-            ),
-        ],
-    ));
+                WorldAssetRoot(scene),
+                // The holder is the palm-up hand's frame, upside down; the model's centre goes
+                // to its origin.
+                Transform::from_xyz(0.0, centre * scale, 0.0)
+                    .with_rotation(Quat::from_rotation_z(PI))
+                    .with_scale(Vec3::splat(scale)),
+                Visibility::Hidden,
+                ChildOf(holder),
+            ))
+            .id();
+        (kind, entity)
+    });
+    ArmEntities {
+        root,
+        right_hand,
+        left_hand,
+        right_arm,
+        left_arm,
+        holder,
+        grenades,
+    }
+}
+
+/// A glTF scene of the viewmodel is ready: puts all its meshes on the viewmodel layer, finds a
+/// gun's magazine and skins the gun with its camo.
+#[allow(clippy::too_many_arguments)]
+fn scene_ready(
+    ready: On<WorldInstanceReady>,
+    scenes: Query<&ViewScene>,
+    camos: Res<CamoMaterials>,
+    descendants: Query<&Children>,
+    names: Query<&Name>,
+    parents: Query<&ChildOf>,
+    transforms: Query<&Transform>,
+    models: Query<(&Mesh3d, &MeshMaterial3d<StandardMaterial>)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut standard: ResMut<Assets<StandardMaterial>>,
+    mut commands: Commands,
+) {
+    let root = ready.entity;
+    let Ok(scene) = scenes.get(root) else {
+        return;
+    };
+    let root_transform = transforms.get(root).copied().unwrap_or_default();
+    let camo = camos
+        .0
+        .get(&scene.camo)
+        .and_then(|handle| standard.get(handle))
+        .map(|camo| {
+            (
+                camo.base_color_texture.clone(),
+                camo.metallic,
+                camo.perceptual_roughness,
+            )
+        });
+    let mut skinned: HashMap<AssetId<StandardMaterial>, Handle<StandardMaterial>> = HashMap::new();
+    for entity in descendants.iter_descendants(root) {
+        if let Ok(name) = names.get(entity)
+            && scene.ads_hidden.contains(&name.as_str())
+        {
+            commands.entity(entity).insert(AdsHidden);
+        }
+        if let (Some(wanted), Ok(name)) = (scene.magazine, names.get(entity))
+            && name.as_str() == wanted
+            && let Ok(transform) = transforms.get(entity)
+        {
+            commands
+                .entity(entity)
+                .insert(Magazine(transform.translation));
+        }
+        let Ok((mesh, material)) = models.get(entity) else {
+            continue;
+        };
+        commands
+            .entity(entity)
+            .insert((viewmodel_layer(), NotShadowCaster));
+        let Some((texture, metallic, roughness)) = &camo else {
+            continue;
+        };
+        let node = parents.get(entity).map(ChildOf::parent).ok();
+        let bare = node
+            .and_then(|node| names.get(node).ok())
+            .is_some_and(|name| scene.bare.contains(&name.as_str()));
+        if bare {
+            continue;
+        }
+        // The mesh's own transform up to the scene root, then the root's, takes it into gun
+        // space.
+        let mut to_gun = transforms.get(entity).copied().unwrap_or_default();
+        let mut up = entity;
+        while let Ok(parent) = parents.get(up).map(ChildOf::parent) {
+            if parent == root {
+                break;
+            }
+            to_gun = transforms
+                .get(parent)
+                .copied()
+                .unwrap_or_default()
+                .mul_transform(to_gun);
+            up = parent;
+        }
+        to_gun = root_transform.mul_transform(to_gun);
+        let Some(source) = meshes.get(&mesh.0) else {
+            continue;
+        };
+        let Some(uvs) = camo_uvs(source, &to_gun) else {
+            continue;
+        };
+        let mut skinned_mesh = source.clone();
+        skinned_mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, uvs);
+        let skin = skinned
+            .entry(material.0.id())
+            .or_insert_with(|| {
+                let mut skin = standard.get(&material.0).cloned().unwrap_or_default();
+                skin.base_color = Color::WHITE;
+                skin.base_color_texture = texture.clone();
+                // The model's own normal map keeps its UVs; only the colour is the camo's.
+                skin.base_color_channel = UvChannel::Uv1;
+                skin.metallic = *metallic;
+                skin.perceptual_roughness = *roughness;
+                standard.add(skin)
+            })
+            .clone();
+        commands
+            .entity(entity)
+            .insert((Mesh3d(meshes.add(skinned_mesh)), MeshMaterial3d(skin)));
+    }
 }
 
 /// Swaps the gun model when the held Weapon (or what is fitted to it) changes, moving the flash
 /// to its muzzle.
+#[allow(clippy::too_many_arguments)]
 fn build_gun(
     mut commands: Commands,
     materials: Res<GunMaterials>,
     camos: Res<CamoMaterials>,
+    assets: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     player: Query<(&HeldWeapon, &Kit), With<LocalPlayer>>,
     mut gun: Query<(Entity, &mut ViewmodelGun, &Children)>,
@@ -820,20 +840,16 @@ fn build_gun(
     }
 
     let stats = &*weapon.stats;
-    let shape = shape(stats.model);
+    let rig = rig::gun_rig(stats.model);
     let muzzle = Vec3::from(stats.muzzle_offset);
     // Where the barrel itself ends: a Silencer carries on from there to the muzzle.
     let barrel_end = muzzle.z + stats.muzzle_length;
-    // `skin` replaces the finish's own material (camo).
-    let mut part = |mesh: Mesh,
-                    furniture: Furniture,
-                    transform: Transform,
-                    skin: Option<&Handle<StandardMaterial>>| {
+    let mut part = |mesh: Mesh, furniture: Furniture, transform: Transform| {
         commands
             .spawn((
                 GunPart,
                 Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(skin.unwrap_or(&materials.0[furniture as usize]).clone()),
+                MeshMaterial3d(materials.0[furniture as usize].clone()),
                 transform,
                 viewmodel_layer(),
                 NotShadowCaster,
@@ -841,52 +857,97 @@ fn build_gun(
             ))
             .id()
     };
-    // Camo covers the gun's body parts; the barrel, sights and bolt stay bare.
-    let camo_material = camos.0.get(&camo);
-    for &(size, centre, furniture) in shape.boxes {
-        part(
-            if camo_material.is_some() {
-                camo_box(size, centre)
-            } else {
-                Cuboid::from_size(size).into()
-            },
-            furniture,
-            Transform::from_translation(centre),
-            camo_material,
-        );
-    }
-    part(
-        Cylinder::new(shape.barrel_radius, shape.barrel_start - barrel_end).into(),
-        Furniture::Metal,
-        Transform::from_xyz(muzzle.x, muzzle.y, (shape.barrel_start + barrel_end) / 2.0)
-            .with_rotation(Quat::from_rotation_x(FRAC_PI_2)),
-        None,
-    );
     if stats.muzzle_length > 0.0 {
         part(
             Cylinder::new(
-                shape.barrel_radius * SUPPRESSOR_RADIUS_SCALE,
+                rig.barrel_radius * SUPPRESSOR_RADIUS_SCALE,
                 stats.muzzle_length,
             )
             .into(),
             Furniture::Sight,
             Transform::from_xyz(muzzle.x, muzzle.y, (barrel_end + muzzle.z) / 2.0)
                 .with_rotation(Quat::from_rotation_x(FRAC_PI_2)),
-            None,
         );
     }
-    for (mesh, furniture, transform) in sight_parts(shape, stats) {
-        part(mesh, furniture, transform, None);
+    for (mesh, furniture, transform) in sight_parts(&rig, stats) {
+        part(mesh, furniture, transform);
     }
-    if let Some((size, centre)) = shape.bolt {
-        let handle = part(
-            Cuboid::from_size(size).into(),
-            Furniture::Metal,
-            Transform::from_translation(centre),
-            None,
-        );
-        commands.entity(handle).insert(BoltHandle(centre));
+    // The bolt handle: a rod out of the receiver's side with a knob on its end.
+    let bolt: Vec<(Entity, Vec3)> = rig
+        .bolt
+        .map(|root| {
+            let rod = root + Vec3::new(0.027, 0.0, 0.0);
+            let knob = root + Vec3::new(0.058, -0.006, 0.0);
+            vec![
+                (
+                    part(
+                        Cylinder::new(0.0045, 0.054).into(),
+                        Furniture::Metal,
+                        Transform::from_translation(rod)
+                            .with_rotation(Quat::from_rotation_z(FRAC_PI_2)),
+                    ),
+                    rod,
+                ),
+                (
+                    part(
+                        Sphere::new(0.0105).into(),
+                        Furniture::Metal,
+                        Transform::from_translation(knob),
+                    ),
+                    knob,
+                ),
+            ]
+        })
+        .unwrap_or_default();
+    // An Underbarrel Attachment hangs under the handguard and the left hand holds it.
+    let mut left_rest = rig.left;
+    if let Some(at) = rig.underbarrel {
+        match weapon.attachments.underbarrel {
+            Some(AttachmentId::Foregrip) => {
+                part(
+                    Cylinder::new(FOREGRIP.0, FOREGRIP.1).into(),
+                    Furniture::Polymer,
+                    Transform::from_translation(at - Vec3::Y * FOREGRIP.1 / 2.0),
+                );
+                left_rest = rig.left_grip;
+            }
+            Some(AttachmentId::GrenadeLauncher) => {
+                part(
+                    Cylinder::new(LAUNCHER.0, LAUNCHER.1).into(),
+                    Furniture::Metal,
+                    Transform::from_translation(at - Vec3::Y * 0.035)
+                        .with_rotation(Quat::from_rotation_x(FRAC_PI_2)),
+                );
+                part(
+                    Cuboid::new(0.03, 0.035, 0.05).into(),
+                    Furniture::Polymer,
+                    Transform::from_translation(at + Vec3::new(0.0, 0.0, 0.0)),
+                );
+                left_rest = rig.left_grip;
+            }
+            _ => {}
+        }
     }
+    for (handle, rest) in bolt {
+        commands.entity(handle).insert(BoltHandle(rest));
+    }
+    let scene =
+        assets.load(AssetPath::from(format!("{EMBEDDED_ROOT}{}", rig.file)).with_label("Scene0"));
+    commands.spawn((
+        GunPart,
+        ViewScene {
+            camo,
+            bare: rig.bare,
+            magazine: rig.magazine,
+            ads_hidden: rig.ads_hidden,
+        },
+        WorldAssetRoot(scene),
+        rig.model_transform(),
+        Visibility::default(),
+        ChildOf(gun),
+    ));
+    anim.rig = Some(rig);
+    anim.left_rest = Some(left_rest);
     for mut transform in &mut flash {
         transform.translation = muzzle;
     }
@@ -910,6 +971,37 @@ fn match_eye_fov(
     }
 }
 
+fn smooth(from: f32, to: f32, x: f32) -> f32 {
+    let t = ((x - from) / (to - from)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+/// A transform between `a` and `b`.
+fn blend(a: Transform, b: Transform, weight: f32) -> Transform {
+    Transform {
+        translation: a.translation.lerp(b.translation, weight),
+        rotation: a.rotation.slerp(b.rotation, weight),
+        scale: a.scale.lerp(b.scale, weight),
+    }
+}
+
+/// The right hand's pose in camera space during a throw `t` seconds in: how far it has left the
+/// gun (0 to 1), the pose, whether the Grenade is still in it and how far the gun is lowered.
+fn throw_pose(t: f32) -> (f32, Transform, bool, f32) {
+    let pose = |(position, tilt): (Vec3, f32)| Transform {
+        translation: position,
+        // Palm up, fingers forward; the tilt flicks the fingertips up (+) or down (-).
+        rotation: Quat::from_rotation_x(tilt) * Quat::from_rotation_z(PI),
+        scale: Vec3::ONE,
+    };
+    let (ready, back, forward) = (pose(THROW_READY), pose(THROW_BACK), pose(THROW_FORWARD));
+    let wound = blend(ready, back, smooth(0.12, 0.2, t));
+    let transform = blend(wound, forward, smooth(0.2, 0.28, t));
+    let weight = smooth(0.0, 0.12, t) * (1.0 - smooth(0.3, THROW_SECS, t));
+    let lowered = smooth(0.0, 0.12, t) * (1.0 - smooth(0.38, THROW_SECS, t));
+    (weight, transform, t < THROW_RELEASE, lowered)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn animate_viewmodel(
     time: Res<Time>,
@@ -917,23 +1009,51 @@ fn animate_viewmodel(
     captured: Res<MouseCaptured>,
     motion: Res<AccumulatedMouseMotion>,
     mut fired: MessageReader<ShotFired>,
+    mut throws: MessageReader<ToServer<ThrowGrenade>>,
     player: Query<(&HeldWeapon, &Motor), With<LocalPlayer>>,
-    mut gun: Query<(&mut ViewmodelGun, &mut Transform, &mut Visibility), Without<BoltHandle>>,
-    mut bolt_handle: Query<(&BoltHandle, &mut Transform), Without<ViewmodelGun>>,
+    mut gun: Query<(Entity, &mut ViewmodelGun, &mut Visibility)>,
+    bolt_handle: Query<(Entity, &BoltHandle)>,
+    ads_hidden: Query<Entity, With<AdsHidden>>,
+    magazines: Query<(Entity, &Magazine)>,
+    mut transforms: Query<&mut Transform>,
+    mut visibilities: Query<&mut Visibility, Without<ViewmodelGun>>,
 ) {
     let shots = fired.read().count();
+    let thrown = throws
+        .read()
+        .map(|throw| throw.0.kind)
+        .find(|kind| *kind != GrenadeKind::Launcher);
     let Ok((weapon, motor)) = player.single() else {
         return;
     };
-    let Ok((mut anim, mut transform, mut visibility)) = gun.single_mut() else {
+    let Ok((gun_entity, mut anim, mut visibility)) = gun.single_mut() else {
         return;
     };
     let stats = &*weapon.stats;
-    visibility.set_if_neq(if life.is_dead() || weapon.scoped(stats) {
+    let hidden = life.is_dead() || weapon.scoped(stats);
+    visibility.set_if_neq(if hidden {
         Visibility::Hidden
     } else {
         Visibility::Inherited
     });
+    // Hide what would surround the eye while aimed.
+    for entity in &ads_hidden {
+        if let Ok(mut part_visibility) = visibilities.get_mut(entity) {
+            part_visibility.set_if_neq(if weapon.ads_eased() > 0.5 {
+                Visibility::Hidden
+            } else {
+                Visibility::Inherited
+            });
+        }
+    }
+    let arms = anim.arms;
+    if let Ok(mut arms_visibility) = visibilities.get_mut(arms.root) {
+        arms_visibility.set_if_neq(if hidden {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        });
+    }
     let dt = time.delta_secs();
     let ads = weapon.ads_eased();
     let motion_scale = 1.0_f32.lerp(ADS_MOTION_SCALE * stats.sway_scale, ads);
@@ -962,12 +1082,31 @@ fn animate_viewmodel(
     anim.kick = ((anim.kick + shots as f32).min(KICK_MAX)) * (-KICK_DECAY * dt).exp();
     let kick = anim.kick * 1.0_f32.lerp(ADS_KICK_SCALE, ads);
 
-    let dip = weapon
-        .reload_progress()
-        .map_or(0.0, |progress| (progress * PI).sin());
+    let reload = weapon.reload_progress();
+    let dip = reload.map_or(0.0, |progress| (progress * PI).sin());
+    // The left hand reaches for the magazine, pulls it and seats a new one, then goes back
+    // to the handguard: how far it is on the magazine and how far the magazine is out.
+    let (hand_on_mag, mag_out) = reload.map_or((0.0, 0.0), |p| {
+        (
+            smooth(0.0, 0.18, p) - smooth(0.78, 0.95, p),
+            smooth(0.18, 0.4, p) - smooth(0.55, 0.78, p),
+        )
+    });
     let bolt = weapon.bolt_phase().map_or(0.0, |phase| (phase * PI).sin());
-    for (handle, mut handle_transform) in &mut bolt_handle {
-        handle_transform.translation = handle.0 + Vec3::new(0.0, BOLT_LIFT, BOLT_TRAVEL) * bolt;
+    for (entity, handle) in &bolt_handle {
+        if let Ok(mut handle_transform) = transforms.get_mut(entity) {
+            handle_transform.translation = handle.0 + Vec3::new(0.0, BOLT_LIFT, BOLT_TRAVEL) * bolt;
+        }
+    }
+    if let Some(rig) = &anim.rig {
+        let model = rig.model_transform();
+        // The pull is in gun space; the node moves in model space.
+        let local = (model.rotation.inverse() * rig.mag_travel * mag_out) / model.scale;
+        for (entity, magazine) in &magazines {
+            if let Ok(mut magazine_transform) = transforms.get_mut(entity) {
+                magazine_transform.translation = magazine.0 + local;
+            }
+        }
     }
 
     if weapon.sprinting {
@@ -980,26 +1119,129 @@ fn animate_viewmodel(
     anim.mantle.smooth_nudge(&mantle_target, MANTLE_RATE, dt);
     let mantle = ease(anim.mantle);
 
-    let switching = weapon.switch_lowering();
+    // The throw under way (or a new one).
+    if let Some(kind) = thrown {
+        anim.throw = Some((kind, 0.0));
+    }
+    anim.throw = anim
+        .throw
+        .map(|(kind, t)| (kind, t + dt))
+        .filter(|(_, t)| *t < THROW_SECS);
+    let (throw_weight, throw_transform, throw_holding, throw_lowered) = match anim.throw {
+        Some((_, t)) => throw_pose(t),
+        None => (0.0, Transform::IDENTITY, false, 0.0),
+    };
+
+    let switching = weapon.switch_lowering().max(throw_lowered);
     let ads_offset = ads_offset(stats);
     let wobble = (bob + anim.sway) * motion_scale;
-    transform.translation = HIP_OFFSET.lerp(ads_offset, ads)
-        + SPRINT_OFFSET * sprint
-        + BOLT_SHIFT * bolt
-        + Vec3::new(
-            wobble.x,
-            wobble.y - RELOAD_DROP * dip - MANTLE_DROP * mantle - SWITCH_DROP * switching,
-            KICK_BACK * kick,
-        );
-    transform.rotation = Quat::from_euler(
-        EulerRot::YXZ,
-        anim.sway.x * SWAY_TILT * motion_scale + SPRINT_YAW * sprint,
-        KICK_PITCH * kick - RELOAD_TILT * dip
-            + anim.sway.y * SWAY_TILT * motion_scale
-            + SPRINT_PITCH * sprint
-            - MANTLE_TILT * mantle
-            + BOLT_TILT * bolt
-            - SWITCH_TILT * switching,
-        RELOAD_ROLL * dip + SPRINT_ROLL * sprint + BOLT_ROLL * bolt,
-    );
+    let gun_transform = Transform {
+        translation: HIP_OFFSET.lerp(ads_offset, ads)
+            + SPRINT_OFFSET * sprint
+            + BOLT_SHIFT * bolt
+            + Vec3::new(
+                wobble.x,
+                wobble.y + RELOAD_RAISE * dip - MANTLE_DROP * mantle - SWITCH_DROP * switching,
+                KICK_BACK * kick,
+            ),
+        rotation: Quat::from_euler(
+            EulerRot::YXZ,
+            anim.sway.x * SWAY_TILT * motion_scale + SPRINT_YAW * sprint,
+            KICK_PITCH * kick
+                + RELOAD_TILT * dip
+                + anim.sway.y * SWAY_TILT * motion_scale
+                + SPRINT_PITCH * sprint
+                - MANTLE_TILT * mantle
+                + BOLT_TILT * bolt
+                - SWITCH_TILT * switching,
+            RELOAD_ROLL * dip + SPRINT_ROLL * sprint + BOLT_ROLL * bolt,
+        ),
+        scale: Vec3::ONE,
+    };
+    if let Ok(mut transform) = transforms.get_mut(gun_entity) {
+        *transform = gun_transform;
+    }
+
+    // The arms, held to the gun (or, for the right hand, to the Grenade) in camera space.
+    let (Some(rig), Some(left_rest)) = (&anim.rig, anim.left_rest) else {
+        return;
+    };
+    let right_on_gun = gun_transform.mul_transform(rig.right.transform());
+    let right = blend(right_on_gun, throw_transform, throw_weight);
+    let mut left_mag = rig.left_mag;
+    left_mag.position += rig.mag_travel * mag_out;
+    let left = gun_transform.mul_transform(blend(
+        left_rest.transform(),
+        left_mag.transform(),
+        hand_on_mag,
+    ));
+    for (hand_entity, arm_entity, hand, elbow) in [
+        (arms.right_hand, arms.right_arm, right, rig::RIGHT_ELBOW),
+        (arms.left_hand, arms.left_arm, left, rig::LEFT_ELBOW),
+    ] {
+        if let Ok(mut transform) = transforms.get_mut(hand_entity) {
+            *transform = hand;
+        }
+        let wrist = rig::wrist(&hand);
+        let along = elbow - wrist;
+        let length = along.length().max(0.01);
+        if let Ok(mut transform) = transforms.get_mut(arm_entity) {
+            let direction = along / length;
+            // A little inside the cuff so there is no gap.
+            *transform = Transform {
+                translation: wrist - direction * 0.02 + along / 2.0,
+                rotation: Quat::from_rotation_arc(Vec3::Y, direction),
+                scale: Vec3::new(1.0, length, 1.0),
+            };
+        }
+    }
+    // The held Grenade sits in the palm of the throwing hand.
+    if let Ok(mut transform) = transforms.get_mut(arms.holder) {
+        *transform = right.mul_transform(Transform::from_xyz(0.0, -0.045, -0.035));
+    }
+    let holding = anim.throw.map(|(kind, _)| kind).filter(|_| throw_holding);
+    if let Ok(mut holder_visibility) = visibilities.get_mut(arms.holder) {
+        holder_visibility.set_if_neq(if holding.is_some() {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
+    }
+    for (kind, entity) in arms.grenades {
+        if let Ok(mut grenade_visibility) = visibilities.get_mut(entity) {
+            grenade_visibility.set_if_neq(if holding == Some(kind) {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_throw_starts_and_ends_with_the_gun_up_and_the_hand_on_it() {
+        for t in [0.0, THROW_SECS] {
+            let (weight, _, _, lowered) = throw_pose(t);
+            assert_eq!((weight, lowered), (0.0, 0.0), "at {t} s");
+        }
+    }
+
+    #[test]
+    fn the_grenade_leaves_the_hand_while_it_is_still_thrown_out() {
+        // Held while the hand rises and winds up, gone before it comes back to the gun.
+        assert!(throw_pose(0.1).2);
+        assert!(!throw_pose(THROW_RELEASE + 0.01).2);
+        assert_eq!(throw_pose(THROW_RELEASE + 0.01).0, 1.0);
+    }
+
+    #[test]
+    fn the_gun_is_lowered_for_the_whole_wind_up() {
+        for t in [0.15, 0.2, 0.25, 0.3] {
+            assert_eq!(throw_pose(t).3, 1.0, "at {t} s");
+        }
+    }
 }

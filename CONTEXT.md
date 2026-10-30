@@ -99,7 +99,7 @@ One of the two sides in a team **Game Mode**; each player sees their own as frie
 _Avoid_: Side, squad
 
 **Faction**:
-The identity a **Team** plays as on a **Map**, set by the Map's theater: name, emblem and colours (e.g. Task Force Ranger, Harmattan Legion).
+The identity a **Team** plays as on a **Map**, set by the Map's theater: name, emblem, colours and the soldier look (uniform, headgear) other players see (e.g. Task Force Ranger, Harmattan Legion).
 _Avoid_: Team (for the identity), army, clan
 
 **Scoreboard**:

@@ -8,7 +8,7 @@ use crate::data::GameModeId;
 use crate::flow::{FlowCommand, Overlay};
 use crate::net::protocol::ForceRespawn;
 use crate::shared::{MatchState, ToServer};
-use crate::ui::{UiFonts, backdrop, button, panel, title};
+use crate::ui::{AMBER, UiFonts, backdrop, button, panel, rule, title};
 
 pub(super) fn spawn_pause(mut commands: Commands, fonts: Res<UiFonts>, state: Query<&MatchState>) {
     let can_respawn = state
@@ -23,13 +23,8 @@ pub(super) fn spawn_pause(mut commands: Commands, fonts: Res<UiFonts>, state: Qu
         ))
         .with_children(|root| {
             root.spawn(panel()).with_children(|panel| {
-                panel.spawn((
-                    title(&fonts, "Paused", 44.0),
-                    Node {
-                        margin: UiRect::bottom(px(8.0)),
-                        ..default()
-                    },
-                ));
+                panel.spawn(title(&fonts, "Paused", 44.0));
+                panel.spawn(rule(AMBER));
                 for (caption, target) in [
                     ("Resume", Overlay::None),
                     ("Change Team", Overlay::TeamSelect),

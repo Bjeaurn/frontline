@@ -6,9 +6,11 @@ mod audio;
 mod bolt;
 mod effects;
 mod hud;
+pub mod rig;
 mod trigger;
 mod viewmodel;
 
+pub use hud::EquipmentRows;
 pub use viewmodel::ViewmodelCamera;
 
 use std::collections::HashMap;

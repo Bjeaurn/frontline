@@ -1,7 +1,7 @@
 // Look presets: the per-Map mood layered on the fixed camera setup (tone curve, bloom, SSAO) in
 // crates/frontline/src/atmosphere.rs. A Map picks one by name (data/maps.ron `look`, or the
-// map's worldspawn `look`). Surfaces keep their saturated palette; the presets pull the overall
-// image darker and grittier.
+// map's worldspawn `look`). The target is the gritty CoD4 grade: hard sun, cool shadows, muted
+// colour, dust haze and dark screen corners.
 //
 // - exposure: stops (EV) added to the camera; negative is darker.
 // - temperature / tint: white balance shifts (warm + / cool -, magenta + / green -), about -1..1.
@@ -12,78 +12,96 @@
 //   desert_dust 170). Looks no Map uses are scaled like overcast_urban (x1.09).
 // - fog_sun_color: colour of sunlight glowing through the fog towards the sun; alpha is strength.
 // - sun_illuminance: lux. sun_direction: the way the light travels (y down is negative).
-// - ambient_brightness: cd/m^2 of flat fill light. sky_color: the background.
+// - ambient_color / ambient_ground / ambient_brightness: the fill light, as a hemisphere: sky_zenith
+//   lights from above, ambient_color from the sides, ambient_ground bounces up from below
+//   (cd/m^2 for the brightness).
+// - sky_zenith: the colour of the sky straight up; it fades to fog_color at the horizon so the sky
+//   meets the fogged distance. sky_clouds: cloud cover, 0 (clear) to 1 (overcast). The sun and its
+//   glow sit where the light comes from.
+// - vignette: how dark the screen corners get, 0..1.
 // - practical_lights: scale of the Map's lamps (light entities with targetname "practical"); 0 when
 //   omitted, so only night looks switch them on.
 // Colours are sRGB 0..1.
 {
-    // Grey, overcast city: flat soft light, lifted ambient, heavy contrast, muted colour.
+    // Grey, overcast city: flat soft light, cool grey sky, desaturated and heavy contrast.
     "overcast_urban": (
-        exposure: -0.3,
-        temperature: -0.03,
+        exposure: 0.05,
+        temperature: -0.02,
         tint: 0.0,
-        saturation: 0.86,
-        contrast: 1.16,
+        saturation: 0.8,
+        contrast: 1.2,
         fog_color: (0.50, 0.53, 0.56),
         fog_visibility: 185.0,
-        fog_sun_color: (0.80, 0.82, 0.85, 0.15),
-        sun_color: (0.86, 0.89, 0.94),
-        sun_illuminance: 5500.0,
-        sun_direction: (-0.25, -1.0, -0.35),
-        ambient_color: (0.72, 0.76, 0.82),
-        ambient_brightness: 230.0,
-        sky_color: (0.54, 0.57, 0.61),
+        fog_sun_color: (0.85, 0.84, 0.80, 0.18),
+        sun_color: (0.94, 0.92, 0.86),
+        sun_illuminance: 9500.0,
+        sun_direction: (-0.35, -0.85, -0.4),
+        ambient_color: (0.72, 0.78, 0.88),
+        ambient_ground: (0.42, 0.40, 0.37),
+        ambient_brightness: 260.0,
+        sky_zenith: (0.40, 0.45, 0.52),
+        sky_clouds: 0.95,
+        vignette: 0.5,
     ),
-    // Sun-bleached desert: harsh high sun, sepia dust haze, deep shadows.
+    // Sun-bleached desert town: harsh high sun, sepia dust haze, deep blue-ish shadows.
     "desert_dust": (
-        exposure: -0.3,
-        temperature: 0.04,
+        exposure: -0.2,
+        temperature: 0.03,
         tint: 0.01,
-        saturation: 0.92,
-        contrast: 1.15,
-        fog_color: (0.70, 0.62, 0.50),
-        fog_visibility: 170.0,
+        saturation: 0.72,
+        contrast: 1.18,
+        fog_color: (0.74, 0.66, 0.54),
+        fog_visibility: 230.0,
         fog_sun_color: (1.0, 0.84, 0.60, 0.40),
-        sun_color: (1.0, 0.90, 0.74),
-        sun_illuminance: 18000.0,
-        sun_direction: (-0.4, -1.0, -0.6),
-        ambient_color: (0.84, 0.77, 0.66),
-        ambient_brightness: 110.0,
-        sky_color: (0.72, 0.67, 0.58),
+        sun_color: (1.0, 0.88, 0.68),
+        sun_illuminance: 15000.0,
+        sun_direction: (0.5, -0.72, -0.5),
+        ambient_color: (0.60, 0.68, 0.84),
+        ambient_ground: (0.62, 0.48, 0.34),
+        ambient_brightness: 700.0,
+        sky_zenith: (0.30, 0.56, 0.70),
+        sky_clouds: 0.18,
+        vignette: 0.5,
     ),
     // Cold winter dawn: low orange sun raking across, blue shadows and haze.
     "dawn_cold": (
-        exposure: -0.3,
-        temperature: -0.05,
+        exposure: -0.25,
+        temperature: -0.03,
         tint: 0.01,
-        saturation: 0.85,
-        contrast: 1.12,
-        fog_color: (0.46, 0.51, 0.60),
+        saturation: 0.8,
+        contrast: 1.16,
+        fog_color: (0.52, 0.55, 0.64),
         fog_visibility: 240.0,
-        fog_sun_color: (1.0, 0.72, 0.50, 0.40),
-        sun_color: (1.0, 0.76, 0.56),
-        sun_illuminance: 9000.0,
+        fog_sun_color: (1.0, 0.72, 0.50, 0.45),
+        sun_color: (1.0, 0.72, 0.50),
+        sun_illuminance: 11000.0,
         sun_direction: (-0.85, -0.28, -0.45),
-        ambient_color: (0.62, 0.68, 0.86),
-        ambient_brightness: 160.0,
-        sky_color: (0.42, 0.47, 0.56),
+        ambient_color: (0.52, 0.60, 0.86),
+        ambient_ground: (0.38, 0.32, 0.30),
+        ambient_brightness: 150.0,
+        sky_zenith: (0.26, 0.36, 0.62),
+        sky_clouds: 0.45,
+        vignette: 0.5,
     ),
-    // Humid jungle, daytime: bright filtered sun, lush saturated greens, soft green-white haze.
+    // Humid jungle, daytime: bright filtered sun, lush greens, soft green-white haze.
     "jungle_humid": (
         exposure: -0.1,
         temperature: 0.0,
-        tint: -0.06,
-        saturation: 0.9,
-        contrast: 1.06,
+        tint: -0.05,
+        saturation: 0.85,
+        contrast: 1.1,
         fog_color: (0.56, 0.67, 0.56),
         fog_visibility: 165.0,
         fog_sun_color: (0.90, 1.0, 0.72, 0.28),
-        sun_color: (0.84, 1.0, 0.70),
-        sun_illuminance: 9500.0,
+        sun_color: (0.92, 1.0, 0.76),
+        sun_illuminance: 11000.0,
         sun_direction: (-0.3, -1.0, -0.25),
-        ambient_color: (0.52, 0.72, 0.52),
-        ambient_brightness: 280.0,
-        sky_color: (0.58, 0.72, 0.70),
+        ambient_color: (0.52, 0.72, 0.56),
+        ambient_ground: (0.28, 0.34, 0.18),
+        ambient_brightness: 250.0,
+        sky_zenith: (0.40, 0.60, 0.72),
+        sky_clouds: 0.55,
+        vignette: 0.5,
     ),
     // Moonlit night: a clear blue cast throughout (cold moon, blue fog and sky), lifted enough that
     // players read against the ground at ~30 m, with the Map's warm practical lights on.
@@ -92,7 +110,7 @@
         temperature: -0.1,
         tint: 0.03,
         saturation: 0.7,
-        contrast: 1.1,
+        contrast: 1.12,
         fog_color: (0.07, 0.11, 0.22),
         fog_visibility: 175.0,
         fog_sun_color: (0.40, 0.55, 1.0, 0.25),
@@ -100,8 +118,11 @@
         sun_illuminance: 2800.0,
         sun_direction: (-0.55, -0.7, -0.45),
         ambient_color: (0.42, 0.52, 0.80),
+        ambient_ground: (0.14, 0.16, 0.26),
         ambient_brightness: 190.0,
-        sky_color: (0.05, 0.08, 0.17),
+        sky_zenith: (0.02, 0.04, 0.12),
+        sky_clouds: 0.3,
+        vignette: 0.55,
         practical_lights: 1.0,
     ),
 }

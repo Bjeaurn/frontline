@@ -20,6 +20,7 @@ mod materials;
 mod menus;
 mod modes;
 mod net;
+mod particles;
 mod player;
 mod profile;
 mod progression;
@@ -147,6 +148,7 @@ fn main() -> AppExit {
             progression::ProgressionPlugin,
         ));
         app.add_plugins(equipment::client::EquipmentClientPlugin);
+        app.add_plugins(particles::ParticlesPlugin);
     }
     app.add_plugins((combat::CombatServerPlugin, net::NetPlugin));
     app.run()

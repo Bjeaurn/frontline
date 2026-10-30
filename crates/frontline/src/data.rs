@@ -255,12 +255,11 @@ pub struct WeaponStats {
     pub scope: bool,
     /// Which Weapons a Loadout can put in which slot.
     pub class: WeaponClass,
-    /// The Weapon's own sight, used when no Optic is fitted (for the Sniper that is its
-    /// built-in scope, so these mirror `sight_point`): like `sight_point` and
-    /// `sight_eye_relief` (which describe where an Optic sits), plus the front post's z.
+    /// The Weapon's own sight (the model's iron sights, or for the Sniper its built-in scope),
+    /// used when no Optic is fitted: like `sight_point` and `sight_eye_relief` (which describe
+    /// where an Optic sits). For the Sniper these mirror `sight_point`.
     pub iron_point: (f32, f32, f32),
     pub iron_eye_relief: f32,
-    pub iron_front_z: f32,
     /// Magnification and sway scale of that own sight (see `magnification`, `sway_scale`).
     pub iron_magnification: f32,
     pub iron_sway_scale: f32,
@@ -448,7 +447,6 @@ impl WeaponStats {
             class: WeaponClass::Primary,
             iron_point: (0.0, 0.06, 0.05),
             iron_eye_relief: 0.1,
-            iron_front_z: -0.3,
             iron_magnification: 1.0,
             iron_sway_scale: 1.0,
             sway_deg: 0.5,
@@ -696,6 +694,56 @@ pub struct SearchAndDestroyTuning {
     pub beep_ramp_secs: f32,
 }
 
+/// What a soldier wears on the head.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+pub enum Headgear {
+    /// A combat helmet dome.
+    #[default]
+    Helmet,
+    Beret,
+    /// A wide-brimmed bush hat.
+    Boonie,
+    /// A peaked field cap.
+    Cap,
+    Beanie,
+    /// A head wrap with a scarf at the neck.
+    Shemagh,
+    /// A fur cap with ear flaps.
+    Ushanka,
+}
+
+/// How a Faction's soldiers look on other players' screens (colours are sRGB 0..1). Team colour
+/// is added on top (armbands and patches), so the Teams stay readable whatever they wear.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(default)]
+pub struct SoldierLook {
+    /// Fatigues: jacket, trousers and sleeves.
+    pub uniform: (f32, f32, f32),
+    /// Vest, pouches and pack.
+    pub vest: (f32, f32, f32),
+    pub headgear: Headgear,
+    pub headgear_color: (f32, f32, f32),
+    pub skin: (f32, f32, f32),
+    /// A balaclava over the lower face.
+    pub mask: bool,
+    /// Dark goggles across the eyes.
+    pub goggles: bool,
+}
+
+impl Default for SoldierLook {
+    fn default() -> Self {
+        Self {
+            uniform: (0.30, 0.34, 0.24),
+            vest: (0.20, 0.22, 0.17),
+            headgear: Headgear::Helmet,
+            headgear_color: (0.26, 0.30, 0.22),
+            skin: (0.72, 0.55, 0.43),
+            mask: false,
+            goggles: false,
+        }
+    }
+}
+
 /// The identity a Team plays as: name, emblem and accent colour. Purely presentational.
 #[derive(Clone, Debug, Deserialize)]
 pub struct Faction {
@@ -708,6 +756,9 @@ pub struct Faction {
     pub icon: String,
     /// Accent colour (linear-ish sRGB 0..1) used on the Faction's card and banners.
     pub color: (f32, f32, f32),
+    /// The soldiers' clothes and headgear on other players' screens.
+    #[serde(default)]
+    pub look: SoldierLook,
 }
 
 /// Layout of `loadouts.ron`.

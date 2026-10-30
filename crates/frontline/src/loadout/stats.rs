@@ -3,6 +3,7 @@
 
 use bevy::ecs::query::QueryFilter;
 use bevy::prelude::*;
+use bevy::text::LetterSpacing;
 
 use crate::data::{FireMode, GameData, WeaponStats};
 use crate::ui::{self, UiFonts};
@@ -118,15 +119,16 @@ fn spawn_bars_with(
             Node {
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
-                column_gap: px(16.0),
+                column_gap: px(14.0),
                 ..default()
             },
             ChildOf(parent),
             children![
                 (
-                    ui::label(fonts, &stat.label().to_uppercase(), 20.0, ui::TEXT),
+                    ui::label(fonts, &stat.label().to_uppercase(), 17.0, ui::TEXT_DIM),
+                    LetterSpacing::Px(1.2),
                     Node {
-                        width: px(110.0),
+                        width: px(100.0),
                         ..default()
                     },
                 ),
@@ -134,9 +136,11 @@ fn spawn_bars_with(
                     Node {
                         width: px(BAR_WIDTH),
                         height: px(BAR_HEIGHT),
+                        border: UiRect::all(px(1.0)),
                         ..default()
                     },
                     BackgroundColor(BAR_TRACK),
+                    BorderColor::all(ui::PANEL_BORDER),
                     children![(
                         StatFill(stat),
                         Node {
@@ -144,7 +148,7 @@ fn spawn_bars_with(
                             width: percent(fill),
                             ..default()
                         },
-                        BackgroundColor(ui::ACCENT),
+                        BackgroundColor(ui::AMBER),
                     )],
                 ),
             ],
