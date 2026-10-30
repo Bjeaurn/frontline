@@ -10,6 +10,7 @@ mod cli;
 mod cod4;
 mod combat;
 mod data;
+mod equipment;
 mod flow;
 mod gear;
 mod loadout;
@@ -145,6 +146,7 @@ fn main() -> AppExit {
             profile::ProfilePlugin,
             progression::ProgressionPlugin,
         ));
+        app.add_plugins(equipment::client::EquipmentClientPlugin);
     }
     app.add_plugins((combat::CombatServerPlugin, net::NetPlugin));
     app.run()

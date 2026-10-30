@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::data::{GameData, WeaponId};
+use crate::data::{FireMode, GameData, WeaponId};
 use crate::flow::{Settings, load_config, save_config};
 use crate::gear::{AttachmentId, Attachments, Loadout, PERK_SLOTS, PerkId, Perks};
 use crate::net::protocol::XpAward;
@@ -103,6 +103,10 @@ pub struct Profile {
     /// Levels.
     #[serde(default)]
     pub weapons: HashMap<WeaponId, WeaponRecord>,
+    /// The fire mode last used on each Weapon (X cycles it); a Weapon not here starts in its
+    /// first listed mode.
+    #[serde(default)]
+    pub fire_modes: HashMap<WeaponId, FireMode>,
 }
 
 /// A Weapon reaching a new Weapon Level, and what that unlocked on it.
@@ -135,6 +139,7 @@ impl Profile {
             chosen: LoadoutChoice::Default(default_choice),
             xp: 0,
             weapons: HashMap::new(),
+            fire_modes: HashMap::new(),
         }
         .validated(data)
     }
@@ -395,10 +400,24 @@ mod tests {
                 xp: 4,
             },
         );
+        profile
+            .fire_modes
+            .insert(WeaponId::AssaultRifle, FireMode::Burst(3));
         let text = ron::ser::to_string_pretty(&profile, ron::ser::PrettyConfig::default()).unwrap();
         let back: Profile = ron::from_str(&text).unwrap();
         assert_eq!(back, profile);
         assert_eq!(back.loadout(&data).name, "Silent");
+    }
+
+    #[test]
+    fn a_profile_from_before_fire_modes_loads_with_none_remembered() {
+        let data = GameData::load();
+        let profile = Profile::fresh(&data, 0);
+        let text = ron::ser::to_string_pretty(&profile, ron::ser::PrettyConfig::default()).unwrap();
+        let without = text.replace("fire_modes: {},", "");
+        assert_ne!(without, text, "the field was written");
+        let back: Profile = ron::from_str(&without).unwrap();
+        assert!(back.fire_modes.is_empty());
     }
 
     /// A profile.ron as the build before Pick 10 wrote it.

@@ -6,10 +6,12 @@ mod audio;
 mod bolt;
 mod effects;
 mod hud;
+mod trigger;
 mod viewmodel;
 
 pub use viewmodel::ViewmodelCamera;
 
+use std::collections::HashMap;
 use std::f32::consts::TAU;
 use std::hash::{BuildHasher, RandomState};
 use std::sync::Arc;
@@ -20,8 +22,11 @@ use bevy::prelude::*;
 
 use aim::Breath;
 use bolt::{Bolt, BoltEvent};
+use trigger::{Feed, Outcome, Trigger};
 
 use crate::data::{FireMode, GameData, WeaponId, WeaponStats};
+use crate::equipment::Carried;
+use crate::flow::Settings;
 use crate::gear::{Attachments, Loadout, PerkEffects, Perks};
 use crate::loadout::SpawnClock;
 use crate::net::protocol::{AmmoRefill, Damaged, FireShot, Respawn};
@@ -46,6 +51,8 @@ impl Plugin for WeaponClientPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(WeaponRng::seeded())
             .add_message::<ShotFired>()
+            .add_message::<DryFire>()
+            .add_message::<ModeSwitched>()
             .add_observer(equip_local_player)
             .add_plugins((
                 viewmodel::ViewmodelPlugin,
@@ -65,6 +72,7 @@ impl Plugin for WeaponClientPlugin {
                     sway,
                     flinch,
                     reload,
+                    cycle_fire_mode,
                     fire,
                     recover_recoil,
                 )
@@ -93,12 +101,13 @@ pub struct HeldWeapon {
     reload_left: Option<f32>,
     /// Full length of the reload in progress (tactical or empty).
     reload_total: f32,
-    /// Seconds until the next round may fire; non-positive when ready.
-    cooldown: f32,
+    /// What the trigger carries between frames: the cooldown, the burst under way and whether
+    /// this pull is spent.
+    firing: Trigger,
     /// Trigger held, counting only presses made while the cursor was already grabbed.
     trigger: bool,
-    /// A `Semi` Weapon already fired (or clicked empty) on this trigger pull.
-    pull_spent: bool,
+    /// The fire mode X has selected (one of `stats.fire_modes`).
+    mode: FireMode,
     /// The bolt of a bolt-action Weapon.
     bolt: Bolt,
     /// The aim button is held (and nothing, like a reload, takes the sights down).
@@ -170,15 +179,17 @@ pub struct Stowed {
     attachments: Attachments,
     stats: Arc<WeaponStats>,
     rounds: u32,
+    mode: FireMode,
 }
 
 impl Stowed {
-    fn new(id: WeaponId, stats: Arc<WeaponStats>) -> Self {
+    fn new(id: WeaponId, stats: Arc<WeaponStats>, mode: FireMode) -> Self {
         Self {
             id,
             slot: Slot::Secondary,
             attachments: Attachments::default(),
             rounds: stats.magazine,
+            mode,
             stats,
         }
     }
@@ -208,12 +219,12 @@ impl HeldWeapon {
             id,
             attachments,
             rounds: stats.magazine,
+            mode: stats.default_fire_mode(),
             stats,
             reload_left: None,
             reload_total: 0.0,
-            cooldown: 0.0,
+            firing: Trigger::default(),
             trigger: false,
-            pull_spent: false,
             bolt: Bolt::Closed,
             aiming: false,
             breath: Breath::default(),
@@ -266,6 +277,16 @@ impl HeldWeapon {
         }
     }
 
+    /// Whether a Grenade can be thrown now: not while switching Weapons or mantling.
+    pub fn can_throw(&self) -> bool {
+        self.switch.is_none() && !self.mantling
+    }
+
+    /// The Primary is in hand (the underslung launcher is on it).
+    pub fn is_primary(&self) -> bool {
+        self.slot == Slot::Primary
+    }
+
     /// Whether the weapon is up: not lowered for a sprint, mantle or dive, nor still raising.
     fn ready(&self) -> bool {
         !self.sprinting && !self.mantling && self.sprint_out <= 0.0 && self.switch.is_none()
@@ -285,59 +306,64 @@ impl HeldWeapon {
         std::mem::swap(&mut self.attachments, &mut stowed.attachments);
         std::mem::swap(&mut self.stats, &mut stowed.stats);
         std::mem::swap(&mut self.rounds, &mut stowed.rounds);
+        std::mem::swap(&mut self.mode, &mut stowed.mode);
         self.reload_left = None;
-        self.cooldown = 0.0;
-        self.pull_spent = false;
+        self.firing = Trigger::default();
         self.bolt = Bolt::Closed;
         self.ads = 0.0;
         info!("Switched to {}", self.stats.name);
     }
 
-    /// Runs the trigger for a frame of `dt` seconds and returns how many rounds leave the
-    /// barrel. `Auto` fires as many as the fire rate owes since the last shot, so a long frame
-    /// fires several; `Semi` fires one per pull once the cooldown allows. Pulling on an empty
-    /// magazine starts a reload.
-    fn rounds_to_fire(&mut self, stats: &WeaponStats, dt: f32) -> u32 {
-        self.cooldown -= dt;
-        if !self.trigger {
-            self.pull_spent = false;
+    /// Runs the trigger for a frame of `dt` seconds (`trigger::step`): takes the rounds that
+    /// leave the barrel out of the magazine, opens the bolt of a bolt-action and, on an empty
+    /// pull with Auto reload on, starts the reload. The outcome says how many rounds fired and
+    /// whether the pull was a dry click.
+    fn pull_trigger(&mut self, stats: &WeaponStats, dt: f32, auto_reload: bool) -> Outcome {
+        let feed = Feed {
+            held: self.trigger,
+            can_fire: self.ready()
+                && self.reload_left.is_none()
+                && (!stats.bolt_action() || self.bolt.can_fire()),
+            rounds: self.rounds,
+            mode: self.mode,
+            shot_secs: stats.seconds_per_shot(self.ads_eased()),
+            burst_shot_secs: stats.seconds_per_burst_shot(),
+            burst_delay_secs: stats.burst_delay_secs,
+            semi_secs: stats.semi_interval_secs,
+            auto_reload,
+        };
+        let outcome = trigger::step(&mut self.firing, &feed, dt);
+        self.rounds -= outcome.fired;
+        if outcome.fired > 0 && self.mode == FireMode::Bolt && self.rounds > 0 {
+            self.bolt.fire();
         }
-        let mut fired = 0;
-        if self.trigger
-            && self.ready()
-            && self.reload_left.is_none()
-            && (!stats.bolt_action || self.bolt.can_fire())
-        {
-            while self.cooldown <= 0.0 && !self.pull_spent {
-                if self.rounds == 0 {
-                    self.start_reload(stats);
-                    self.pull_spent = stats.fire_mode == FireMode::Semi;
-                    break;
-                }
-                self.rounds -= 1;
-                if !stats.bolt_action {
-                    self.cooldown += stats.seconds_per_shot(self.ads_eased());
-                }
-                fired += 1;
-                if stats.fire_mode == FireMode::Semi {
-                    self.pull_spent = true;
-                    if stats.bolt_action && self.rounds > 0 {
-                        self.bolt.fire();
-                    }
-                }
-            }
+        if outcome.reload {
+            self.start_reload(stats);
         }
-        self.cooldown = self.cooldown.max(0.0);
-        fired
+        outcome
+    }
+
+    /// X: the next fire mode of the Weapon. Returns the new mode if it changed.
+    fn switch_fire_mode(&mut self, stats: &WeaponStats) -> Option<FireMode> {
+        let next = stats.next_fire_mode(self.mode);
+        if next == self.mode {
+            return None;
+        }
+        self.mode = next;
+        // A burst under way ends with the switch; the pull that is held counts as spent.
+        self.firing.burst_left = 0;
+        self.firing.pull_spent = self.trigger;
+        Some(next)
     }
 
     /// Works the bolt of a bolt-action Weapon for `dt` seconds, before the trigger runs: a
     /// click while aimed racks it (and is used up), letting go of the sights racks it by itself.
     fn step_bolt(&mut self, stats: &WeaponStats, dt: f32) -> BoltEvent {
-        if !stats.bolt_action {
+        if !stats.bolt_action() {
             return BoltEvent::Idle;
         }
-        let click = self.trigger && !self.pull_spent && self.ready() && self.reload_left.is_none();
+        let click =
+            self.trigger && !self.firing.pull_spent && self.ready() && self.reload_left.is_none();
         let event = self.bolt.step(
             dt,
             self.aiming,
@@ -346,7 +372,7 @@ impl HeldWeapon {
             stats.rack_secs_unscoped,
         );
         if event == (BoltEvent::RackStarted { scoped: true }) {
-            self.pull_spent = true;
+            self.firing.pull_spent = true;
         }
         event
     }
@@ -407,6 +433,14 @@ struct ShotFired {
     pitch: f32,
 }
 
+/// The trigger was pulled on an empty magazine: the click.
+#[derive(Message, Clone, Copy, Debug)]
+struct DryFire;
+
+/// X switched the fire mode: the click.
+#[derive(Message, Clone, Copy, Debug)]
+struct ModeSwitched;
+
 /// Small xorshift generator for spread, recoil and cosmetic jitter (footsteps use it too).
 #[derive(Resource, Debug)]
 pub(crate) struct WeaponRng(u64);
@@ -449,7 +483,11 @@ fn ease(t: f32) -> f32 {
 /// Builds the Weapons and Perk effects of `loadout`: the Primary with its Attachments in hand,
 /// the second Weapon (a Secondary, or a Primary with Overkill) stowed if the class has one,
 /// both with full magazines. Perk Greed's second Perks stack with the first.
-fn equip(loadout: &Loadout, data: &GameData) -> (HeldWeapon, Option<Stowed>, Kit) {
+fn equip(
+    loadout: &Loadout,
+    data: &GameData,
+    saved_modes: &HashMap<WeaponId, FireMode>,
+) -> (HeldWeapon, Option<Stowed>, Kit) {
     let effects = data.perk_effects(loadout.perks.iter());
     let primary = Arc::new(data.effective_weapon(loadout.primary, loadout.attachments, &effects));
     let secondary = loadout
@@ -483,12 +521,16 @@ fn equip(loadout: &Loadout, data: &GameData) -> (HeldWeapon, Option<Stowed>, Kit
         primary.falloff_end,
         primary.recoil_pitch_deg,
     );
+    let mut held = HeldWeapon::new(loadout.primary, loadout.attachments, primary);
+    held.mode = held
+        .stats
+        .usable_fire_mode(saved_modes.get(&loadout.primary).copied());
     (
-        HeldWeapon::new(loadout.primary, loadout.attachments, primary),
-        loadout
-            .secondary
-            .zip(secondary)
-            .map(|(id, stats)| Stowed::new(id, stats)),
+        held,
+        loadout.secondary.zip(secondary).map(|(id, stats)| {
+            let mode = stats.usable_fire_mode(saved_modes.get(&id).copied());
+            Stowed::new(id, stats, mode)
+        }),
         Kit {
             loadout: loadout.clone(),
             effects,
@@ -502,9 +544,11 @@ fn insert_kit(
     commands: &mut Commands,
     player: Entity,
     (held, stowed, kit): (HeldWeapon, Option<Stowed>, Kit),
+    data: &GameData,
 ) {
+    let carried = Carried::from_loadout(&kit.loadout, data);
     let mut player = commands.entity(player);
-    player.insert((held, kit));
+    player.insert((held, kit, carried));
     match stowed {
         Some(stowed) => player.insert(stowed),
         None => player.remove::<Stowed>(),
@@ -520,7 +564,8 @@ fn equip_local_player(
     insert_kit(
         &mut commands,
         add.entity,
-        equip(profile.loadout(&data), &data),
+        equip(profile.loadout(&data), &data, &profile.fire_modes),
+        &data,
     );
 }
 
@@ -537,7 +582,12 @@ fn equip_on_respawn(
     }
     let loadout = profile.loadout(&data);
     for player in &player {
-        insert_kit(&mut commands, player, equip(loadout, &data));
+        insert_kit(
+            &mut commands,
+            player,
+            equip(loadout, &data, &profile.fire_modes),
+            &data,
+        );
         info!("Spawned with Loadout \"{}\"", loadout.name);
     }
 }
@@ -563,7 +613,12 @@ fn swap_loadout(
             continue;
         }
         if open {
-            insert_kit(&mut commands, player, equip(loadout, &data));
+            insert_kit(
+                &mut commands,
+                player,
+                equip(loadout, &data, &profile.fire_modes),
+                &data,
+            );
             info!("Loadout \"{}\" applied now", loadout.name);
         } else {
             info!("Loadout \"{}\" applies on next spawn", loadout.name);
@@ -735,9 +790,41 @@ fn reload(
     weapon.tick_reload(&stats, time.delta_secs(), motor.sprinting());
 }
 
-/// Fires the Weapon at its rpm (blending to its ADS rpm with the sights) once it is up: held
-/// for `Auto`, one round per pull for `Semi`. Each round goes to the server with spread and
-/// the current recoil already applied, then kicks the view.
+/// X switches to the Weapon's next fire mode (a click, remembered per Weapon in the Profile).
+/// Not while a Weapon switch is under way or the body mantles.
+fn cycle_fire_mode(
+    keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<Bindings>,
+    captured: Res<MouseCaptured>,
+    life: Res<LocalLife>,
+    mut profile: ResMut<Profile>,
+    mut player: Query<&mut HeldWeapon, With<LocalPlayer>>,
+    mut switched: MessageWriter<ModeSwitched>,
+) {
+    let Ok(mut weapon) = player.single_mut() else {
+        return;
+    };
+    if life.is_dead()
+        || !captured.active()
+        || weapon.switch.is_some()
+        || weapon.mantling
+        || !bindings.fire_mode.just_pressed(&keys)
+    {
+        return;
+    }
+    let stats = Arc::clone(&weapon.stats);
+    let Some(mode) = weapon.switch_fire_mode(&stats) else {
+        return;
+    };
+    info!("{}: fire mode {}", stats.name, mode.label());
+    profile.fire_modes.insert(weapon.id, mode);
+    switched.write(ModeSwitched);
+}
+
+/// Fires the Weapon in its fire mode (blending to its ADS rpm with the sights) once it is up:
+/// held for `Auto`, a burst or one round per pull for the others (`trigger::step`). A pull on
+/// an empty magazine is a dry click, or with Auto reload a reload. Each round goes to the
+/// server with spread and the current recoil already applied, then kicks the view.
 fn fire(
     time: Res<Time>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -751,6 +838,8 @@ fn fire(
     gun: Query<&Transform, With<viewmodel::ViewmodelGun>>,
     mut shots: MessageWriter<ToServer<FireShot>>,
     mut fired: MessageWriter<ShotFired>,
+    mut dry: MessageWriter<DryFire>,
+    settings: Res<Settings>,
 ) {
     let Ok((mut pose, mut weapon)) = player.single_mut() else {
         return;
@@ -784,7 +873,12 @@ fn fire(
         BoltEvent::Closed => info!("Bolt closed"),
         BoltEvent::Idle => {}
     }
-    let rounds = weapon.rounds_to_fire(&stats, dt);
+    let outcome = weapon.pull_trigger(&stats, dt, settings.auto_reload);
+    if outcome.dry_click {
+        dry.write(DryFire);
+        info!("Dry fire: {} is empty", stats.name);
+    }
+    let rounds = outcome.fired;
     if rounds > 0 {
         let eye_height = eye
             .single()
@@ -967,7 +1061,7 @@ mod tests {
             ..data.default_loadouts[0].clone()
         };
         assert!(data.class_errors(&class, None).is_empty());
-        let (mut weapon, stowed, _) = equip(&class, &data);
+        let (mut weapon, stowed, _) = equip(&class, &data, &HashMap::new());
         let mut stowed = stowed.expect("the Overkill Primary is stowed");
         assert_eq!(
             (weapon.id, weapon.slot),
@@ -1000,7 +1094,7 @@ mod tests {
             secondary: None,
             ..data.default_loadouts[0].clone()
         };
-        assert!(equip(&class, &data).1.is_none());
+        assert!(equip(&class, &data, &HashMap::new()).1.is_none());
     }
 
     #[test]
@@ -1014,7 +1108,7 @@ mod tests {
             wildcards: vec![WildcardId::PerkGreed1],
             ..data.default_loadouts[0].clone()
         };
-        let (weapon, _, kit) = equip(&class, &data);
+        let (weapon, _, kit) = equip(&class, &data, &HashMap::new());
         assert!(kit.effects.scavenger, "the Greed Perk is in effect");
         assert!(
             (kit.effects.reload_time_mul - 0.7).abs() < 1e-6,
@@ -1028,11 +1122,16 @@ mod tests {
         HeldWeapon::new(id, Attachments::default(), Arc::new(stats.clone()))
     }
 
-    /// One frame of `reload` then `fire`, as the systems are chained; returns rounds fired.
-    fn frame(weapon: &mut HeldWeapon, stats: &WeaponStats, dt: f32) -> u32 {
+    /// One frame of `reload` then `fire`, as the systems are chained, with Auto reload as given.
+    fn frame_with(weapon: &mut HeldWeapon, stats: &WeaponStats, dt: f32, auto: bool) -> Outcome {
         weapon.tick_reload(stats, dt, false);
         weapon.step_bolt(stats, dt);
-        weapon.rounds_to_fire(stats, dt)
+        weapon.pull_trigger(stats, dt, auto)
+    }
+
+    /// Rounds fired by `frame_with`, Auto reload off.
+    fn frame(weapon: &mut HeldWeapon, stats: &WeaponStats, dt: f32) -> u32 {
+        frame_with(weapon, stats, dt, false).fired
     }
 
     #[test]
@@ -1048,7 +1147,7 @@ mod tests {
         weapon.rounds = 7;
         weapon.ads = 1.0;
         weapon.reload_left = Some(0.5);
-        let mut stowed = Stowed::new(WeaponId::Pistol, Arc::new(pistol));
+        let mut stowed = Stowed::new(WeaponId::Pistol, Arc::new(pistol), FireMode::Semi);
         stowed.rounds = 11;
 
         weapon.exchange(&mut stowed);
@@ -1118,7 +1217,7 @@ mod tests {
         // Semi at 60 rpm: holding fires one round; the next needs a new pull and the 1 s
         // cooldown.
         let semi = WeaponStats {
-            fire_mode: FireMode::Semi,
+            fire_modes: vec![FireMode::Semi],
             rpm: 60.0,
             ads_rpm: 60.0,
             ..WeaponStats::fixture()
@@ -1147,10 +1246,9 @@ mod tests {
     #[test]
     fn a_bolt_action_needs_a_rack_between_shots() {
         let stats = WeaponStats {
-            fire_mode: FireMode::Semi,
+            fire_modes: vec![FireMode::Bolt],
             rpm: 50.0,
             ads_rpm: 50.0,
-            bolt_action: true,
             rack_secs_scoped: 1.4,
             rack_secs_unscoped: 0.9,
             ..WeaponStats::fixture()
@@ -1212,7 +1310,7 @@ mod tests {
     }
 
     #[test]
-    fn running_dry_reloads_then_fires_again_unless_sprint_cancels() {
+    fn with_auto_reload_running_dry_reloads_then_fires_again_unless_sprint_cancels() {
         let stats = WeaponStats {
             magazine: 3,
             ..WeaponStats::fixture()
@@ -1220,11 +1318,11 @@ mod tests {
         let mut weapon = held(WeaponId::AssaultRifle, &stats);
         weapon.trigger = true;
 
-        assert_eq!(frame(&mut weapon, &stats, 1.0), 3);
+        assert_eq!(frame_with(&mut weapon, &stats, 1.0, true).fired, 3);
         assert_eq!(weapon.rounds, 0);
         assert!(
             weapon.reload_left.is_some(),
-            "an empty magazine starts a reload"
+            "with Auto reload an empty pull starts a reload"
         );
         assert_eq!(
             frame(&mut weapon, &stats, 0.5),
@@ -1241,6 +1339,105 @@ mod tests {
         weapon.tick_reload(&stats, 0.1, true);
         assert_eq!(weapon.reload_left, None);
         assert_eq!(weapon.rounds, 0);
+    }
+
+    #[test]
+    fn by_default_an_empty_magazine_clicks_and_waits_for_the_reload_key() {
+        let stats = WeaponStats {
+            magazine: 3,
+            ..WeaponStats::fixture()
+        };
+        let mut weapon = held(WeaponId::AssaultRifle, &stats);
+        weapon.trigger = true;
+
+        let outcome = frame_with(&mut weapon, &stats, 1.0, false);
+        assert_eq!((outcome.fired, outcome.dry_click), (3, false));
+        assert_eq!(weapon.rounds, 0);
+        assert_eq!(weapon.reload_left, None, "it doesn't reload on its own");
+        let clicks: u32 = (0..10)
+            .map(|_| frame_with(&mut weapon, &stats, 0.2, false).dry_click as u32)
+            .sum();
+        assert_eq!(clicks, 0, "the held pull that emptied it doesn't click");
+        assert_eq!(weapon.reload_left, None);
+
+        weapon.trigger = false;
+        frame(&mut weapon, &stats, 0.1);
+        weapon.trigger = true;
+        let outcome = frame_with(&mut weapon, &stats, 0.1, false);
+        assert!(outcome.dry_click && !outcome.reload, "a new pull clicks");
+        assert_eq!(weapon.reload_left, None);
+
+        // R reloads it, and it fires again.
+        weapon.start_reload(&stats);
+        assert!(weapon.reload_left.is_some());
+        weapon.tick_reload(&stats, 10.0, false);
+        assert_eq!(weapon.rounds, 3);
+        weapon.trigger = false;
+        frame(&mut weapon, &stats, 0.1);
+        weapon.trigger = true;
+        assert_eq!(frame(&mut weapon, &stats, 0.2), 2);
+    }
+
+    #[test]
+    fn x_cycles_the_fire_modes_and_a_switch_ends_the_burst() {
+        let stats = WeaponStats {
+            fire_modes: vec![FireMode::Auto, FireMode::Burst(3), FireMode::Semi],
+            burst_rpm: 900.0,
+            burst_delay_secs: 0.1,
+            ..WeaponStats::fixture()
+        };
+        let mut weapon = held(WeaponId::AssaultRifle, &stats);
+        assert_eq!(
+            weapon.mode,
+            FireMode::Auto,
+            "the first listed is the default"
+        );
+        assert_eq!(weapon.switch_fire_mode(&stats), Some(FireMode::Burst(3)));
+        weapon.trigger = true;
+        assert_eq!(frame(&mut weapon, &stats, 0.01), 1);
+        assert_eq!(weapon.firing.burst_left, 2);
+        assert_eq!(weapon.switch_fire_mode(&stats), Some(FireMode::Semi));
+        assert_eq!(
+            weapon.firing.burst_left, 0,
+            "the burst ends with the switch"
+        );
+        let held_on: u32 = (0..30).map(|_| frame(&mut weapon, &stats, 0.1)).sum();
+        assert_eq!(held_on, 0, "the pull held through the switch is spent");
+        assert_eq!(weapon.switch_fire_mode(&stats), Some(FireMode::Auto));
+        assert_eq!(weapon.mode, FireMode::Auto, "and it wraps round");
+
+        let single = WeaponStats {
+            fire_modes: vec![FireMode::Semi],
+            ..WeaponStats::fixture()
+        };
+        let mut pistol = held(WeaponId::Pistol, &single);
+        assert_eq!(
+            pistol.switch_fire_mode(&single),
+            None,
+            "one mode has nothing to switch to"
+        );
+    }
+
+    #[test]
+    fn the_saved_mode_is_used_only_when_the_weapon_has_it() {
+        let data = GameData::load();
+        let class = data.default_loadouts[0].clone();
+        let rifle = data.weapon(class.primary);
+        assert!(rifle.fire_modes.len() > 1, "the M4 has modes to remember");
+        let mut saved = HashMap::new();
+        saved.insert(class.primary, FireMode::Semi);
+        assert_eq!(equip(&class, &data, &saved).0.mode, FireMode::Semi);
+        saved.insert(class.primary, FireMode::Bolt);
+        assert_eq!(
+            equip(&class, &data, &saved).0.mode,
+            rifle.default_fire_mode(),
+            "a mode the Weapon doesn't list falls back to its default"
+        );
+        let pistol = data.weapon(WeaponId::Pistol);
+        assert_eq!(
+            pistol.usable_fire_mode(Some(FireMode::Auto)),
+            FireMode::Semi
+        );
     }
 
     #[test]

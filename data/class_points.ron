@@ -30,7 +30,23 @@
         Gunfighter: (name: "Gunfighter", description: "A third Attachment on your Primary."),
         Overkill: (name: "Overkill", description: "A Primary Weapon as your second Weapon."),
     },
-    // Equipment, once there is some: lethal and tactical items with their own `name`,
-    // `description`, `slot` (Lethal or Tactical) and optional `cost`.
-    equipment: {},
+    // Equipment: lethal and tactical items with their own `name`, `description`, `slot` (Lethal or
+    // Tactical) and optional `cost`. How each Grenade flies and what it does is data/equipment.ron.
+    equipment: {
+        Frag: (
+            name: "Frag Grenade",
+            description: "Lethal. Bounces, then bursts after about 3 s: heavy damage that fades with distance. Throw with G.",
+            slot: Lethal,
+        ),
+        Flashbang: (
+            name: "Flashbang",
+            description: "Tactical. Bursts after about 1.6 s: anyone near it looking its way is blinded, and everyone near is deafened. Throw with Q.",
+            slot: Tactical,
+        ),
+        Smoke: (
+            name: "Smoke Grenade",
+            description: "Tactical. Bursts into a cloud that blocks the view for about 14 s. Throw with Q.",
+            slot: Tactical,
+        ),
+    },
 )

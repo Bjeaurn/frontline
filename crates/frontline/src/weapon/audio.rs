@@ -1,6 +1,7 @@
 //! Weapon sounds from the recordings in `assets/sounds/` (credits there): each Weapon's gunshot
-//! (`shot_sound` in `data/weapons.ron`), the dry-fire click and the magazine on reloads, and the
-//! odd bullet impact or ricochet where a shot ends.
+//! (`shot_sound` in `data/weapons.ron`), the dry-fire click of a trigger pulled on an empty
+//! magazine, the higher click of a fire-mode switch and the magazine on reloads, and the odd
+//! bullet impact or ricochet where a shot ends.
 //!
 //! The local player's own sounds play flat (non-spatial). Other players' shots are spatial: they
 //! come from the shooter's muzzle and fade with distance, heard from the eye camera (`rear_cue`,
@@ -14,7 +15,7 @@ use bevy::prelude::*;
 use lightyear::prelude::LocalId;
 use lightyear::prelude::client::{Client, Connected};
 
-use super::{HeldWeapon, ShotFired, WeaponRng, WeaponSystems};
+use super::{DryFire, HeldWeapon, ModeSwitched, ShotFired, WeaponRng, WeaponSystems};
 use crate::assets::EMBEDDED_ROOT;
 use crate::data::{GameData, WeaponId};
 use crate::net::protocol::{ProjectileFired, ProjectileLanded, ShotTracer};
@@ -31,6 +32,9 @@ const LOCAL_SHOT_VOLUME: f32 = 0.8;
 const REMOTE_SHOT_VOLUME: f32 = 1.8;
 const CLICK_VOLUME: f32 = 0.5;
 const MAG_VOLUME: f32 = 0.45;
+/// The fire-mode switch is the dry-fire click, higher and a little quieter.
+const MODE_CLICK_SPEED: f32 = 1.7;
+const MODE_CLICK_VOLUME: f32 = 0.4;
 const IMPACT_VOLUME: f32 = 0.9;
 /// Gunshots play between `1 - PITCH_JITTER` and `1 + PITCH_JITTER` times their normal speed.
 const PITCH_JITTER: f32 = 0.05;
@@ -46,18 +50,18 @@ pub(super) struct WeaponAudioPlugin;
 
 impl Plugin for WeaponAudioPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, load_sounds)
-            .add_systems(
-                Update,
-                (
-                    play_local_shots,
-                    play_remote_shots,
-                    play_projectile_sounds,
-                    play_reload_sounds,
-                    log_sounds_loaded,
-                )
-                    .after(WeaponSystems),
-            );
+        app.add_systems(Startup, load_sounds).add_systems(
+            Update,
+            (
+                play_local_shots,
+                play_remote_shots,
+                play_projectile_sounds,
+                play_reload_sounds,
+                play_trigger_clicks,
+                log_sounds_loaded,
+            )
+                .after(WeaponSystems),
+        );
     }
 }
 
@@ -242,37 +246,40 @@ fn play_projectile_sounds(
     }
 }
 
-/// Where the local Weapon's reload stands, so each sound plays once per reload.
-#[derive(Default)]
-struct ReloadWatch {
-    reloading: bool,
-    mag_played: bool,
-}
-
-/// The click of a trigger pulled on an empty magazine as the reload starts, then the magazine
-/// going in part-way through.
+/// The magazine going in part-way through a reload, once per reload (`played` remembers).
 fn play_reload_sounds(
     player: Query<&HeldWeapon, With<LocalPlayer>>,
     sounds: Res<WeaponSounds>,
-    mut watch: Local<ReloadWatch>,
+    mut played: Local<bool>,
     mut commands: Commands,
 ) {
-    let Ok(weapon) = player.single() else {
-        *watch = ReloadWatch::default();
+    let progress = player.single().ok().and_then(HeldWeapon::reload_progress);
+    let Some(progress) = progress else {
+        *played = false;
         return;
     };
-    let Some(progress) = weapon.reload_progress() else {
-        *watch = ReloadWatch::default();
-        return;
-    };
-    if !watch.reloading {
-        watch.reloading = true;
-        if weapon.rounds == 0 {
-            play_flat(&mut commands, &sounds.dry_fire, CLICK_VOLUME, 1.0);
-        }
-    }
-    if progress >= MAG_INSERT_AT && !watch.mag_played {
-        watch.mag_played = true;
+    if progress >= MAG_INSERT_AT && !*played {
+        *played = true;
         play_flat(&mut commands, &sounds.mag_insert, MAG_VOLUME, 1.0);
+    }
+}
+
+/// The click of a trigger pulled on an empty magazine, and the higher one of a fire-mode switch.
+fn play_trigger_clicks(
+    mut dry: MessageReader<DryFire>,
+    mut switched: MessageReader<ModeSwitched>,
+    sounds: Res<WeaponSounds>,
+    mut commands: Commands,
+) {
+    for _ in dry.read() {
+        play_flat(&mut commands, &sounds.dry_fire, CLICK_VOLUME, 1.0);
+    }
+    for _ in switched.read() {
+        play_flat(
+            &mut commands,
+            &sounds.dry_fire,
+            MODE_CLICK_VOLUME,
+            MODE_CLICK_SPEED,
+        );
     }
 }

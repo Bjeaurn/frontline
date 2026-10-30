@@ -21,3 +21,5 @@ their own, which the embedded game assets are not.
 Which Weapon plays which shot is `shot_sound` in `data/weapons.ron`.
 
 The M9 Pistol reuses `shot_smg.ogg`. A Silencer plays a shot quieter and at a lower speed (`data/attachments.ron`). Remote players' footsteps are a random one of the five `footstep_concrete` files at ±5% speed (`player/footsteps.rs`). Impact Sounds is CC0, so it needs no credit and may be redistributed.
+
+`ring.ogg` is synthesized (a 3.15 kHz sine with a long fade, `ffmpeg -f lavfi -i sine=f=3150:d=6`): the ringing after a flashbang. Grenade bangs reuse `impact.ogg` and `shot_sniper.ogg` at low speed. `shot_ar.ogg` and `shot_smg.ogg` were trimmed to 0.5 s and 0.4 s with a fade-out so fast bursts don't smear.

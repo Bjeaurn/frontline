@@ -25,6 +25,8 @@ pub enum XpReason {
     Kill(WeaponId),
     /// The kill above was a headshot (paid on top of it).
     Headshot(WeaponId),
+    /// An enemy killed by a Grenade's blast (counts for no Weapon).
+    Explosive,
     Assist,
     /// The `n`th kill in a row within the Multikill window.
     Multikill(u32),
@@ -44,6 +46,7 @@ impl XpReason {
         match self {
             XpReason::Kill(_) => "Kill".into(),
             XpReason::Headshot(_) => "Headshot".into(),
+            XpReason::Explosive => "Explosive Kill".into(),
             XpReason::Assist => "Assist".into(),
             XpReason::Multikill(2) => "Double Kill".into(),
             XpReason::Multikill(3) => "Triple Kill".into(),
@@ -622,9 +625,22 @@ mod tests {
     fn the_shipped_table_unlocks_the_starting_kit_then_the_rest_in_order() {
         let data = data();
         let progression = &data.progression;
-        for id in WeaponId::ALL {
+        for id in WeaponId::ALL.into_iter().filter(|id| *id != WeaponId::M16) {
             assert!(progression.is_unlocked(UnlockItem::Weapon(id), 1), "{id:?}");
         }
+        // The M16A4 and the tactical Equipment come with Levels.
+        let m16 = UnlockItem::Weapon(WeaponId::M16);
+        assert!(!progression.is_unlocked(m16, 3) && progression.is_unlocked(m16, 4));
+        let equipment = |id| UnlockItem::Equipment(id);
+        assert!(progression.is_unlocked(equipment(crate::class::EquipmentId::Frag), 1));
+        assert_eq!(
+            progression.unlock_level(equipment(crate::class::EquipmentId::Flashbang)),
+            3
+        );
+        assert_eq!(
+            progression.unlock_level(equipment(crate::class::EquipmentId::Smoke)),
+            4
+        );
         for slot in 1..=crate::gear::PERK_SLOTS {
             assert!(
                 data.perks_in_slot(slot)

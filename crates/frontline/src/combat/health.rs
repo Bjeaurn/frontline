@@ -12,7 +12,7 @@ use super::hitbox::{Hitboxes, set_hitboxes_enabled, spawn_hitboxes};
 use super::match_flow::is_live;
 use super::mode_systems::{ModeRuntime, UseHeld};
 use super::packs::drop_ammo_pack;
-use super::shots::PlayerHit;
+use super::shots::{HitSource, PlayerHit};
 use super::spawn::{bias_toward, choose_spawn};
 use super::xp::{DamageLedger, KillChain, XpOut};
 use crate::data::{GameData, GameModeId, MatchRules};
@@ -192,19 +192,49 @@ pub(super) fn apply_hits(
             );
             continue;
         }
-        let headshot = hit.zone == HitZone::Head;
         let effects = perks
             .get(hit.shooter)
             .map(|perks| data.perk_effects(perks.0.iter()))
             .unwrap_or_default();
-        let amount = shot_damage(
-            data.weapon(hit.weapon),
-            &data.attachment_mods(hit.attachments),
-            &effects,
-            hit.distance,
-            hit.zone,
-            &rules,
-        );
+        // How much it hurt, whether it was a headshot, and how the log and kill feed say it.
+        let (amount, headshot, how, cause, kill_xp) = match hit.source {
+            HitSource::Bullet {
+                weapon,
+                attachments,
+                zone,
+                distance,
+            } => (
+                shot_damage(
+                    data.weapon(weapon),
+                    &data.attachment_mods(attachments),
+                    &effects,
+                    distance,
+                    zone,
+                    &rules,
+                ),
+                zone == HitZone::Head,
+                format!(
+                    "in the {zone} ({weapon:?}, {distance:.1} m, Perks x{:.2} damage)",
+                    effects.damage_mul
+                ),
+                DeathCause::Shot {
+                    killer: shooter_name.clone(),
+                    weapon,
+                    headshot: zone == HitZone::Head,
+                },
+                XpReason::Kill(weapon),
+            ),
+            HitSource::Blast { kind, damage } => (
+                damage * rules.damage_scale,
+                false,
+                format!("with a {kind:?} blast"),
+                DeathCause::Explosive {
+                    killer: shooter_name.clone(),
+                    kind,
+                },
+                XpReason::Explosive,
+            ),
+        };
         let applied = amount.min(health.0);
         health.0 = (health.0 - amount).max(0.0);
         last_damaged.0 = time.elapsed();
@@ -213,8 +243,8 @@ pub(super) fn apply_hits(
         }
         let kill = health.is_dead();
         info!(
-            "{shooter_name} hit {} in the {} for {amount:.1} ({:?}, {:.1} m, Perks x{:.2} damage), health {:.1}",
-            victim_name.0, hit.zone, hit.weapon, hit.distance, effects.damage_mul, health.0
+            "{shooter_name} hit {} {how} for {amount:.1}, health {:.1}",
+            victim_name.0, health.0
         );
         if let Ok(mut sender) = damaged.get_mut(victim_link.owner) {
             sender.send::<EventChannel>(Damaged {
@@ -241,11 +271,7 @@ pub(super) fn apply_hits(
         );
         let feed = KillFeed {
             victim: victim_name.0.clone(),
-            cause: DeathCause::Shot {
-                killer: shooter_name.clone(),
-                weapon: hit.weapon,
-                headshot,
-            },
+            cause,
         };
         // The life is over: its damage ledger pays out (to enemies only) and the victim's own
         // Multikill chain ends.
@@ -258,9 +284,9 @@ pub(super) fn apply_hits(
         }
         if enemy {
             let tuning = &data.progression.xp;
-            xp.give(hit.shooter, tuning.kill, XpReason::Kill(hit.weapon));
-            if headshot {
-                xp.give(hit.shooter, tuning.headshot, XpReason::Headshot(hit.weapon));
+            xp.give(hit.shooter, tuning.kill, kill_xp);
+            if headshot && let HitSource::Bullet { weapon, .. } = hit.source {
+                xp.give(hit.shooter, tuning.headshot, XpReason::Headshot(weapon));
             }
             if let Ok(mut chain) = chains.get_mut(hit.shooter) {
                 let count = chain.record(time.elapsed(), tuning.multikill_window_secs);

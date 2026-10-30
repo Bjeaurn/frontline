@@ -10,7 +10,7 @@ use lightyear::prelude::*;
 
 use super::hitbox::{Hitbox, HitboxOf, Hitboxes};
 use super::match_flow::is_live;
-use super::shots::PlayerHit;
+use super::shots::{HitSource, PlayerHit};
 use crate::ballistics::Bullet;
 use crate::data::{GameData, ProjectileModel, WeaponId};
 use crate::gear::Attachments;
@@ -119,10 +119,12 @@ pub(super) fn fly_bullets(
                     hits.write(PlayerHit {
                         shooter: flying.shooter,
                         victim: *victim,
-                        weapon: flying.weapon,
-                        attachments: flying.attachments,
-                        zone: hitbox.zone,
-                        distance: flying.travelled + hit.distance,
+                        source: HitSource::Bullet {
+                            weapon: flying.weapon,
+                            attachments: flying.attachments,
+                            zone: hitbox.zone,
+                            distance: flying.travelled + hit.distance,
+                        },
                         origin: flying.origin,
                     });
                 }

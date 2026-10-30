@@ -125,17 +125,10 @@ fn describe(loadout: &Loadout, data: &GameData) -> String {
             )
         })
         .collect();
-    let equipment: Vec<String> = EquipmentSlot::ALL
+    let equipment: Vec<&str> = EquipmentSlot::ALL
         .into_iter()
-        .filter_map(|slot| {
-            loadout.equipment(slot).map(|id| {
-                format!(
-                    "{}  {}",
-                    format!("{slot:?}").to_uppercase(),
-                    data.class_points.equipment[&id].name
-                )
-            })
-        })
+        .filter_map(|slot| loadout.equipment(slot))
+        .map(|id| data.class_points.equipment[&id].name.as_str())
         .collect();
     let wildcards = if loadout.wildcards.is_empty() {
         String::new()
@@ -152,7 +145,9 @@ fn describe(loadout: &Loadout, data: &GameData) -> String {
         format!("SECONDARY  {secondary}"),
     ];
     lines.extend(perks);
-    lines.extend(equipment);
+    if !equipment.is_empty() {
+        lines.push(format!("EQUIPMENT  {}", equipment.join(" + ")));
+    }
     format!(
         "{}{wildcards}\nPOINTS  {} / {}",
         lines.join("\n"),

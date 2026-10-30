@@ -13,6 +13,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::class::ClassPoints;
+use crate::equipment::{GrenadeKind, GrenadeTuning};
 use crate::gear::{AmmoPackTuning, Attachment, AttachmentId, Loadout, PERK_SLOTS, Perk, PerkId};
 use crate::progression::Progression;
 use crate::shared::MatchState;
@@ -28,6 +29,7 @@ const ATTACHMENTS_FILE: &str = "attachments.ron";
 const PERKS_FILE: &str = "perks.ron";
 const PROGRESSION_FILE: &str = "progression.ron";
 const CLASS_POINTS_FILE: &str = "class_points.ron";
+const EQUIPMENT_FILE: &str = "equipment.ron";
 const BUILTIN_WEAPONS: &str = include_str!("../../../data/weapons.ron");
 const BUILTIN_MATCH_RULES: &str = include_str!("../../../data/match_rules.ron");
 const BUILTIN_MOVEMENT: &str = include_str!("../../../data/movement.ron");
@@ -39,6 +41,7 @@ const BUILTIN_ATTACHMENTS: &str = include_str!("../../../data/attachments.ron");
 const BUILTIN_PERKS: &str = include_str!("../../../data/perks.ron");
 const BUILTIN_PROGRESSION: &str = include_str!("../../../data/progression.ron");
 const BUILTIN_CLASS_POINTS: &str = include_str!("../../../data/class_points.ron");
+const BUILTIN_EQUIPMENT: &str = include_str!("../../../data/equipment.ron");
 
 /// The Match Rules preset a server runs when `--rules` isn't given, and the one clients fall back
 /// to for a preset their own data lacks.
@@ -50,24 +53,44 @@ pub enum WeaponId {
     Smg,
     SniperRifle,
     Pistol,
+    /// The M16A4: a 3-round burst rifle, the only Weapon that takes the grenade launcher.
+    M16,
 }
 
 impl WeaponId {
     /// Every Weapon, in the order menus list them.
-    pub const ALL: [WeaponId; 4] = [
+    pub const ALL: [WeaponId; 5] = [
         WeaponId::AssaultRifle,
+        WeaponId::M16,
         WeaponId::Smg,
         WeaponId::SniperRifle,
         WeaponId::Pistol,
     ];
 }
 
-/// How the trigger works: `Auto` fires while held; `Semi` fires once per pull (bolt-action
-/// rifles are `Semi` with a low `rpm` acting as the bolt cycle).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+/// How the trigger works (CONTEXT.md: Fire mode). `Auto` fires while held, `Burst(n)` fires `n`
+/// rounds at the Weapon's `burst_rpm` per pull (and again, after `burst_delay_secs`, while the
+/// trigger stays held), `Semi` fires one round per pull and `Bolt` is a bolt-action's one round
+/// per pull with a rack in between (`rack_secs_*`). A Weapon lists the modes X cycles through
+/// (`fire_modes` in weapons.ron).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FireMode {
     Auto,
+    Burst(u32),
     Semi,
+    Bolt,
+}
+
+impl FireMode {
+    /// Short name for the HUD and the class screens: "AUTO", "BURST 3", "SEMI", "BOLT".
+    pub fn label(self) -> String {
+        match self {
+            FireMode::Auto => "AUTO".into(),
+            FireMode::Burst(n) => format!("BURST {n}"),
+            FireMode::Semi => "SEMI".into(),
+            FireMode::Bolt => "BOLT".into(),
+        }
+    }
 }
 
 /// Which first-person gun body a Weapon is drawn with.
@@ -162,7 +185,18 @@ impl GameModeId {
 #[derive(Clone, Debug, Deserialize)]
 pub struct WeaponStats {
     pub name: String,
-    pub fire_mode: FireMode,
+    /// The modes X cycles through, first is the default. A bolt-action lists just `Bolt`.
+    pub fire_modes: Vec<FireMode>,
+    /// `Burst` modes: rounds per minute inside a burst, and the pause after its last round
+    /// before the next burst may start (on top of the usual round spacing).
+    #[serde(default)]
+    pub burst_rpm: f32,
+    #[serde(default)]
+    pub burst_delay_secs: f32,
+    /// `Semi`: the least seconds between two rounds (and two dry clicks), so mashing the
+    /// button can't fire faster; never faster than the Weapon's own `rpm` allows.
+    #[serde(default)]
+    pub semi_interval_secs: f32,
     /// Rounds per minute from the hip.
     pub rpm: f32,
     /// Rounds per minute fully aimed down sights; equal to `rpm` for guns that don't slow.
@@ -217,9 +251,6 @@ pub struct WeaponStats {
     /// on the screen centre `sight_eye_relief` in front of the eye, its axis on the aim line.
     pub sight_point: (f32, f32, f32),
     pub sight_eye_relief: f32,
-    /// Each shot opens the bolt; it has to be racked before the next round fires (see
-    /// `rack_secs_scoped`).
-    pub bolt_action: bool,
     /// Aiming down sights looks through a scope (black mask, viewmodel hidden).
     pub scope: bool,
     /// Which Weapons a Loadout can put in which slot.
@@ -287,6 +318,38 @@ impl WeaponStats {
         }
     }
 
+    /// A bolt-action: each shot opens the bolt and it has to be racked before the next round.
+    pub fn bolt_action(&self) -> bool {
+        self.fire_modes.contains(&FireMode::Bolt)
+    }
+
+    /// The mode a Weapon starts in: the first it lists.
+    pub fn default_fire_mode(&self) -> FireMode {
+        self.fire_modes.first().copied().unwrap_or(FireMode::Semi)
+    }
+
+    /// `saved` (a mode remembered in the Profile) if this Weapon has it, else its default.
+    pub fn usable_fire_mode(&self, saved: Option<FireMode>) -> FireMode {
+        saved
+            .filter(|mode| self.fire_modes.contains(mode))
+            .unwrap_or_else(|| self.default_fire_mode())
+    }
+
+    /// The mode X switches to from `current`: the next one listed, wrapping round. A Weapon
+    /// with one mode stays in it.
+    pub fn next_fire_mode(&self, current: FireMode) -> FireMode {
+        let at = self.fire_modes.iter().position(|mode| *mode == current);
+        match at {
+            Some(at) => self.fire_modes[(at + 1) % self.fire_modes.len()],
+            None => self.default_fire_mode(),
+        }
+    }
+
+    /// Seconds between rounds of a burst.
+    pub fn seconds_per_burst_shot(&self) -> f32 {
+        60.0 / self.burst_rpm.max(1.0)
+    }
+
     /// Time between rounds at an aim-down-sights blend `ads` (0 hip, 1 fully aimed).
     pub fn seconds_per_shot(&self, ads: f32) -> f32 {
         60.0 / self.rpm.lerp(self.ads_rpm, ads)
@@ -341,7 +404,10 @@ impl WeaponStats {
     pub fn fixture() -> Self {
         Self {
             name: "Test Rifle".into(),
-            fire_mode: FireMode::Auto,
+            fire_modes: vec![FireMode::Auto],
+            burst_rpm: 0.0,
+            burst_delay_secs: 0.0,
+            semi_interval_secs: 0.0,
             rpm: 480.0,
             ads_rpm: 480.0,
             damage_near: 30.0,
@@ -375,7 +441,6 @@ impl WeaponStats {
             move_scale: 1.0,
             model: GunModel::Rifle,
             shot_sound: String::new(),
-            bolt_action: false,
             muzzle_offset: (0.0, 0.0, -0.5),
             sight_point: (0.0, 0.08, 0.0),
             sight_eye_relief: 0.15,
@@ -685,11 +750,17 @@ pub struct GameData {
     pub progression: Progression,
     /// The Pick 10 budget, costs and Wildcards.
     pub class_points: ClassPoints,
+    /// How each Grenade flies and what it does.
+    pub equipment: HashMap<GrenadeKind, GrenadeTuning>,
 }
 
 impl GameData {
     pub fn weapon(&self, id: WeaponId) -> &WeaponStats {
         &self.weapons[&id]
+    }
+
+    pub fn grenade(&self, kind: GrenadeKind) -> &GrenadeTuning {
+        &self.equipment[&kind]
     }
 
     pub fn game_mode(&self, id: GameModeId) -> &GameModeSettings {
@@ -794,9 +865,16 @@ impl GameData {
             weapon_switch_secs: loadouts.weapon_switch_secs,
             progression: load(PROGRESSION_FILE, BUILTIN_PROGRESSION),
             class_points: load(CLASS_POINTS_FILE, BUILTIN_CLASS_POINTS),
+            equipment: load(EQUIPMENT_FILE, BUILTIN_EQUIPMENT),
         };
         data.progression.check(PROGRESSION_FILE);
         data.class_points.check(CLASS_POINTS_FILE);
+        for kind in GrenadeKind::ALL {
+            data.equipment
+                .get(&kind)
+                .unwrap_or_else(|| panic!("{EQUIPMENT_FILE} must define {kind:?}"))
+                .check(EQUIPMENT_FILE, kind);
+        }
         assert!(
             data.match_rules.contains_key(DEFAULT_MATCH_RULES),
             "{MATCH_RULES_FILE} must define the \"{DEFAULT_MATCH_RULES}\" preset"
@@ -835,7 +913,31 @@ impl GameData {
                 "{WEAPONS_FILE}: {id:?} needs an iron_magnification of at least 1 and a positive iron_sway_scale"
             );
             assert!(
-                !weapon.bolt_action
+                !weapon.fire_modes.is_empty()
+                    && (!weapon.bolt_action() || weapon.fire_modes == [FireMode::Bolt])
+                    && weapon
+                        .fire_modes
+                        .iter()
+                        .enumerate()
+                        .all(|(at, mode)| !weapon.fire_modes[..at].contains(mode)),
+                "{WEAPONS_FILE}: {id:?} needs fire_modes: at least one, none twice, and Bolt only alone"
+            );
+            assert!(
+                weapon
+                    .fire_modes
+                    .iter()
+                    .all(|mode| !matches!(mode, FireMode::Burst(n) if *n < 2))
+                    && (weapon.burst_rpm > 0.0
+                        && weapon.burst_delay_secs >= 0.0
+                        && weapon.semi_interval_secs >= 0.0
+                        || !weapon
+                            .fire_modes
+                            .iter()
+                            .any(|mode| matches!(mode, FireMode::Burst(_)))),
+                "{WEAPONS_FILE}: {id:?}'s Burst needs 2 or more rounds, a burst_rpm and a burst_delay_secs"
+            );
+            assert!(
+                !weapon.bolt_action()
                     || (weapon.rack_secs_scoped > 0.0 && weapon.rack_secs_unscoped > 0.0),
                 "{WEAPONS_FILE}: bolt-action {id:?} needs rack_secs_scoped and rack_secs_unscoped"
             );
@@ -1032,6 +1134,70 @@ mod tests {
                 "{name}: fall damage needs 0 < min_height < max_height"
             );
             assert!(rules.min_respawn_secs >= 0.0, "{name}: min_respawn_secs");
+        }
+    }
+
+    #[test]
+    fn x_cycles_a_weapons_modes_in_order_and_wraps() {
+        let data = GameData::load();
+        let rifle = data.weapon(WeaponId::AssaultRifle);
+        assert_eq!(
+            rifle.fire_modes,
+            [FireMode::Auto, FireMode::Burst(3), FireMode::Semi]
+        );
+        let mut mode = rifle.default_fire_mode();
+        let mut seen = vec![mode];
+        for _ in 0..3 {
+            mode = rifle.next_fire_mode(mode);
+            seen.push(mode);
+        }
+        assert_eq!(
+            seen,
+            [
+                FireMode::Auto,
+                FireMode::Burst(3),
+                FireMode::Semi,
+                FireMode::Auto
+            ]
+        );
+        // A one-mode Weapon stays put; an unknown current mode lands on the default.
+        let sniper = data.weapon(WeaponId::SniperRifle);
+        assert_eq!(sniper.next_fire_mode(FireMode::Bolt), FireMode::Bolt);
+        assert_eq!(rifle.next_fire_mode(FireMode::Bolt), FireMode::Auto);
+        assert!(sniper.bolt_action() && !rifle.bolt_action());
+    }
+
+    #[test]
+    fn bursts_are_slower_than_auto_with_a_longer_gap_between_bursts_and_semi_has_an_interval() {
+        let data = GameData::load();
+        for id in WeaponId::ALL {
+            let stats = data.weapon(id);
+            if stats
+                .fire_modes
+                .iter()
+                .any(|mode| matches!(mode, FireMode::Burst(_)))
+            {
+                let inside = stats.seconds_per_burst_shot();
+                assert!(
+                    (0.07..=0.10).contains(&inside),
+                    "{id:?}: {inside:.3} s between burst rounds is an audible cadence"
+                );
+                assert!(
+                    inside >= 60.0 / stats.rpm,
+                    "{id:?}: a burst isn't faster than the Weapon's auto rate"
+                );
+                assert!(
+                    inside + stats.burst_delay_secs > 2.0 * inside,
+                    "{id:?}: the gap between bursts is clearly longer"
+                );
+            }
+            if stats.fire_modes.contains(&FireMode::Semi) {
+                assert!(
+                    (0.1..=0.25).contains(&stats.semi_interval_secs),
+                    "{id:?}: semi interval {:.2} s",
+                    stats.semi_interval_secs
+                );
+            }
         }
     }
 }

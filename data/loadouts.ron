@@ -11,20 +11,23 @@
     // the game at startup. Default Loadouts ignore the unlock tables: they are always usable.
     defaults: [
         (
-            // 7 points: Primary 1, Red Dot 1, Foregrip 1, Secondary 1, three Perks 3.
+            // 9 points: Primary 1, Red Dot 1, Foregrip 1, Secondary 1, three Perks 3, Frag 1, Flashbang 1.
             name: "Assault",
             primary: AssaultRifle,
             attachments: (optic: Some(RedDot), underbarrel: Some(Foregrip)),
             secondary: Some(Pistol),
             perks: (picks: (Some(SleightOfHand), Some(StoppingPower), Some(Marathon))),
+            lethal: Some(Frag),
+            tactical: Some(Flashbang),
         ),
         (
-            // 7 points: Primary 1, Silencer 1, Foregrip 1, Secondary 1, three Perks 3.
+            // 8 points: Primary 1, Silencer 1, Foregrip 1, Secondary 1, three Perks 3, Smoke 1.
             name: "Close Quarters",
             primary: Smg,
             attachments: (muzzle: Some(Silencer), underbarrel: Some(Foregrip)),
             secondary: Some(Pistol),
             perks: (picks: (Some(Scavenger), Some(Lightweight), Some(Ninja))),
+            tactical: Some(Smoke),
         ),
         (
             // 6 points: Primary 1, Silencer 1, Secondary 1, three Perks 3.
@@ -33,6 +36,17 @@
             attachments: (muzzle: Some(Silencer)),
             secondary: Some(Pistol),
             perks: (picks: (Some(SleightOfHand), Some(StoppingPower), Some(Ninja))),
+        ),
+        (
+            // 9 points: Primary 1, Grenade Launcher 2, Secondary 1, three Perks 3, Frag 1, Smoke 1.
+            // V fires the launcher, G throws the Frag, Q the Smoke.
+            name: "Grenadier",
+            primary: M16,
+            attachments: (underbarrel: Some(GrenadeLauncher)),
+            secondary: Some(Pistol),
+            perks: (picks: (Some(Scavenger), Some(StoppingPower), Some(Marathon))),
+            lethal: Some(Frag),
+            tactical: Some(Smoke),
         ),
     ],
 )

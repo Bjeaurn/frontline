@@ -8,6 +8,7 @@
 //! (`net::server_running`); the Match starts and ends with the server.
 
 mod damage;
+mod grenades;
 mod health;
 mod hitbox;
 mod lives;
@@ -32,6 +33,7 @@ pub struct CombatServerPlugin;
 impl Plugin for CombatServerPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<shots::PlayerHit>()
+            .add_message::<grenades::Detonation>()
             .init_resource::<projectiles::Bullets>()
             .add_observer(health::init_player)
             .add_observer(match_flow::start_match)
@@ -54,6 +56,8 @@ impl Plugin for CombatServerPlugin {
                     packs::tick_packs,
                     hitbox::sync_hitboxes,
                     projectiles::fly_bullets,
+                    grenades::fly_grenades,
+                    grenades::apply_detonations,
                 )
                     .chain()
                     .run_if(server_running),
@@ -70,6 +74,7 @@ impl Plugin for CombatServerPlugin {
                     lives::force_respawns,
                     lives::request_respawns,
                     shots::resolve_shots,
+                    grenades::receive_throws,
                     health::apply_hits,
                 )
                     .chain()

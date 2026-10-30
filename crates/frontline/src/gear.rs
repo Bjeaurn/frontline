@@ -33,17 +33,20 @@ pub enum AttachmentId {
     Acog,
     Silencer,
     Foregrip,
+    /// The M16A4's underslung grenade launcher (the "noob tube"): fires `GrenadeKind::Launcher`.
+    GrenadeLauncher,
 }
 
 impl AttachmentId {
     /// Every Attachment, in the order menus list them.
-    pub const ALL: [AttachmentId; 6] = [
+    pub const ALL: [AttachmentId; 7] = [
         AttachmentId::RedDot,
         AttachmentId::Holographic,
         AttachmentId::Prism,
         AttachmentId::Acog,
         AttachmentId::Silencer,
         AttachmentId::Foregrip,
+        AttachmentId::GrenadeLauncher,
     ];
 }
 

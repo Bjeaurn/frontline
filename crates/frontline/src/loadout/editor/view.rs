@@ -830,16 +830,6 @@ fn overview(ctx: &Ctx, commands: &mut Commands, content: Entity) {
             Slot::Primary => primary_body(ctx, commands, tile, draft),
             Slot::Perk(index) => perk_body(ctx, commands, tile, draft, index, (x, y)),
             Slot::Wildcards => wildcard_body(ctx, commands, tile, draft),
-            Slot::Equipment(_) if crate::class::EquipmentId::ALL.is_empty() => {
-                pick_body(
-                    ctx,
-                    commands,
-                    tile,
-                    draft,
-                    slot,
-                    Some("No equipment to pick yet.".into()),
-                );
-            }
             _ => pick_body(ctx, commands, tile, draft, slot, None),
         }
     }

@@ -133,6 +133,9 @@ pub struct Settings {
     pub ads_sensitivity: f32,
     /// Moving the mouse up looks down.
     pub invert_y: bool,
+    /// Settings > Gameplay: an empty magazine reloads when the trigger is pulled on it. Off by
+    /// default: the trigger only clicks and R reloads.
+    pub auto_reload: bool,
     /// Settings > Video.
     pub video: VideoSettings,
     /// Settings > Controls: the key and mouse bindings.
@@ -151,6 +154,7 @@ impl Default for Settings {
             cod4_path: None,
             ads_sensitivity: 1.0,
             invert_y: false,
+            auto_reload: false,
             video: VideoSettings::default(),
             bindings: Bindings::default(),
         }
@@ -346,6 +350,7 @@ fn open_team_select(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::player::input::Action;
 
     /// A settings.ron as written before Video, Controls and ADS sensitivity existed.
     const OLD_FILE: &str = r#"(
@@ -387,14 +392,47 @@ mod tests {
         let mut settings = Settings {
             ads_sensitivity: 0.6,
             invert_y: true,
+            auto_reload: true,
             ..default()
         };
         settings.video.fps_cap = 144;
-        settings
-            .bindings
-            .rebind_key(crate::player::input::Action::Reload, KeyCode::KeyE);
+        for (action, key) in [
+            (Action::Reload, KeyCode::KeyE),
+            (Action::FireMode, KeyCode::KeyC),
+            (Action::Lethal, KeyCode::KeyH),
+            (Action::Tactical, KeyCode::KeyJ),
+            (Action::Launcher, KeyCode::KeyN),
+        ] {
+            settings.bindings.rebind_key(action, key);
+        }
         let text =
             ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default()).unwrap();
         assert_eq!(ron::from_str::<Settings>(&text).unwrap(), settings);
+    }
+
+    #[test]
+    fn a_settings_file_from_before_the_new_options_loads_with_their_defaults() {
+        // What an older version wrote: its own bindings (Reload moved to E), no fire mode or throw
+        // keys, no Auto reload.
+        let old = r#"(fov_deg: 90.0, invert_y: true, bindings: (reload: ["KeyE"]))"#;
+        let settings: Settings = ron::from_str(old).unwrap();
+        let defaults = Settings::default();
+        assert!(
+            settings.invert_y && !settings.auto_reload,
+            "Auto reload is off by default"
+        );
+        assert_eq!(settings.bindings.describe(Action::Reload), "E");
+        for action in [
+            Action::FireMode,
+            Action::Lethal,
+            Action::Tactical,
+            Action::Launcher,
+        ] {
+            assert_eq!(
+                settings.bindings.describe(action),
+                defaults.bindings.describe(action)
+            );
+        }
+        assert_eq!(settings.bindings.describe(Action::FireMode), "X");
     }
 }

@@ -74,12 +74,20 @@ impl Stat {
     }
 }
 
-pub(super) fn fire_mode_text(stats: &WeaponStats) -> &'static str {
-    match stats.fire_mode {
-        FireMode::Auto => "Full auto",
-        FireMode::Semi if stats.bolt_action => "Bolt action",
-        FireMode::Semi => "Semi-auto",
-    }
+/// The modes a Weapon fires in, as the class screens say it: "Auto / Burst 3 / Semi", or
+/// "Bolt action".
+pub(super) fn fire_mode_text(stats: &WeaponStats) -> String {
+    stats
+        .fire_modes
+        .iter()
+        .map(|mode| match mode {
+            FireMode::Auto => "Auto".to_owned(),
+            FireMode::Burst(n) => format!("Burst {n}"),
+            FireMode::Semi => "Semi".to_owned(),
+            FireMode::Bolt => "Bolt action".to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join(" / ")
 }
 
 /// Spawns one labelled bar per stat under `parent`, empty until `update_bars` fills them.

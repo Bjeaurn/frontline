@@ -41,6 +41,7 @@
         (level: 1, item: Weapon(Smg)),
         (level: 1, item: Weapon(SniperRifle)),
         (level: 1, item: Weapon(Pistol)),
+        (level: 4, item: Weapon(M16)),
         (level: 1, item: Perk(SleightOfHand)),
         (level: 1, item: Perk(StoppingPower)),
         (level: 1, item: Perk(Marathon)),
@@ -53,7 +54,9 @@
         (level: 9, item: Wildcard(PerkGreed2)),
         (level: 10, item: Wildcard(PerkGreed3)),
         (level: 12, item: Wildcard(Overkill)),
-        // Equipment goes here once it exists: (level: 3, item: Equipment(Frag)).
+        // Equipment: the Frag is there from Level 1.
+        (level: 3, item: Equipment(Flashbang)),
+        (level: 4, item: Equipment(Smoke)),
     ],
     // Weapon Levels: every kill with a Weapon gives that Weapon XP (`xp_per_kill`, plus
     // `xp_per_headshot` when the killing shot hit the head). `thresholds` is the Weapon XP at
@@ -81,6 +84,16 @@
             (level: 3, attachment: Holographic),
             (level: 4, attachment: Foregrip),
             (level: 5, attachment: Prism),
+        ],
+        // The M16A4 is the only Weapon with the grenade launcher (it shares the Underbarrel slot with
+        // the Foregrip).
+        M16: [
+            (level: 1, attachment: RedDot),
+            (level: 2, attachment: Silencer),
+            (level: 2, attachment: GrenadeLauncher),
+            (level: 3, attachment: Holographic),
+            (level: 4, attachment: Foregrip),
+            (level: 5, attachment: Acog),
         ],
         SniperRifle: [
             (level: 1, attachment: Silencer),

@@ -48,15 +48,23 @@ impl WildcardId {
     }
 }
 
-/// A piece of equipment (lethal or tactical). There is none yet: a later change adds the
-/// variants (and their `equipment` entries in `class_points.ron`), and the class model, the
-/// editor rows, the unlock table and the costs already work with them.
+/// A piece of equipment (lethal or tactical): each has an `equipment` entry in
+/// `class_points.ron` (name, slot, cost) and, as a thrown Grenade, its tuning in
+/// `data/equipment.ron` (`equipment::GrenadeKind`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum EquipmentId {}
+pub enum EquipmentId {
+    Frag,
+    Flashbang,
+    Smoke,
+}
 
 impl EquipmentId {
     /// Every piece of equipment, in the order the editor lists them.
-    pub const ALL: [EquipmentId; 0] = [];
+    pub const ALL: [EquipmentId; 3] = [
+        EquipmentId::Frag,
+        EquipmentId::Flashbang,
+        EquipmentId::Smoke,
+    ];
 }
 
 /// The two equipment slots of a class.
@@ -134,6 +142,12 @@ impl ClassPoints {
             assert!(
                 self.wildcards.contains_key(&id),
                 "{file} must define the Wildcard {id:?}"
+            );
+        }
+        for id in EquipmentId::ALL {
+            assert!(
+                self.equipment.contains_key(&id),
+                "{file} must define the equipment {id:?}"
             );
         }
     }
@@ -539,6 +553,46 @@ mod tests {
         assert_eq!(data.class_cost(&class), 7, "a Wildcard is 1");
         assert_eq!(data.attachment_cost(AttachmentId::Holographic), 1);
         assert_eq!(data.attachment_cost(AttachmentId::Acog), 2);
+    }
+
+    #[test]
+    fn the_grenade_launcher_costs_two_points_and_only_the_m16_offers_it() {
+        let data = data();
+        let mut class = bare(WeaponId::M16);
+        class.attachments.underbarrel = Some(AttachmentId::GrenadeLauncher);
+        assert_eq!(data.attachment_cost(AttachmentId::GrenadeLauncher), 2);
+        assert_eq!(data.class_cost(&class), 3, "Primary 1 + launcher 2");
+        assert!(errors(&data, &class).is_empty());
+        for other in [WeaponId::AssaultRifle, WeaponId::Smg, WeaponId::SniperRifle] {
+            class.primary = other;
+            assert_eq!(
+                errors(&data, &class),
+                [ClassError::AttachmentNotOffered(
+                    AttachmentId::GrenadeLauncher,
+                    other
+                )]
+            );
+        }
+    }
+
+    #[test]
+    fn equipment_costs_a_point_and_belongs_in_its_own_slot() {
+        let data = data();
+        let mut class = bare(WeaponId::AssaultRifle);
+        class.lethal = Some(EquipmentId::Frag);
+        class.tactical = Some(EquipmentId::Smoke);
+        assert_eq!(
+            data.class_cost(&class),
+            3,
+            "Primary 1 + two pieces of equipment"
+        );
+        assert!(errors(&data, &class).is_empty());
+        class.lethal = Some(EquipmentId::Flashbang);
+        assert_eq!(
+            errors(&data, &class),
+            [ClassError::BadEquipment(EquipmentSlot::Lethal)],
+            "a tactical item in the lethal slot"
+        );
     }
 
     #[test]

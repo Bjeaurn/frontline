@@ -73,10 +73,13 @@ On joining, pick a Team (and then a Loadout). The mouse is grabbed while you pla
 | Vault | Jump into a thin wall or window sill (0.6–1.2 m high, up to 0.6 m thick) with floor behind it: you cross it crouched in ~0.5 s and land on the far side. Every generated window is vaultable |
 | Crouch | C |
 | Prone (while sprinting: dive) | Left Ctrl or Z |
-| Fire (full auto, or one round per click for semi; a bolt-action click racks first, see Aiming below) | Left mouse |
+| Fire (in the Weapon's fire mode; a bolt-action click racks first, see Aiming below) | Left mouse |
+| Fire mode (cycles the Weapon's modes: Auto, Burst, Semi or Bolt; a click sounds, the HUD shows the mode next to the ammo and the Profile remembers it per Weapon) | X |
 | Aim down sights | Right mouse (hold) |
 | Hold breath (aimed through a 3x or stronger sight; Shift is sprint otherwise) | Left Shift while aiming |
-| Reload | R (sprinting cancels it). Takes longer from an empty magazine (AR 2.5 / 3.1 s, SMG 2.4 / 2.9, Sniper 3.5 / 4.0, Pistol 1.7 / 2.1; Sleight of Hand x0.7) |
+| Reload | R (sprinting cancels it). An empty magazine does **not** reload on its own: pulling the trigger on it gives a dry-fire click (once per pull) and a flashing RELOAD hint shows, unless Settings > Gameplay > Auto reload is on (then the pull reloads). Takes longer from an empty magazine (AR 2.5 / 3.1 s, SMG 2.4 / 2.9, Sniper 3.5 / 4.0, Pistol 1.7 / 2.1; Sleight of Hand x0.7) |
+| Throw the lethal / the tactical equipment | G / Q (a Frag, Flashbang or Smoke thrown along the aim with a small lob; the HUD under the ammo lists what is left) |
+| Fire the underslung grenade launcher (M16A4 with the launcher fitted; 3 rounds, 2.5 s between) | V |
 | Scoreboard (every row shows the player's rank insignia and Level before the name) | Tab (hold) |
 | Chat to everyone / to your Team | Y / U: a one-line input opens bottom left (gameplay input is blocked while you type); Enter sends, Esc cancels |
 | Plant / defuse the bomb (Search & Destroy; hold) | F |
@@ -108,7 +111,7 @@ Every sight has a **Magnification** and a **Sway Scale** in the data (`iron_magn
 
 Fall damage (CoD style, from the peak of the fall): none below `min_height` (4.5 m by default, 3.5 m in hardcore), then linear up to a lethal fall at `max_height` (12 m, 8 m in hardcore). The kill feed says "X fell to their death". The Tab Scoreboard's header shows the win condition, e.g. `FIRST TO 50 · 10:00 LIMIT` (Search & Destroy: `FIRST TO 4 ROUNDS`), with the Host's limit overrides applied.
 
-Tuning lives in `data/`: `weapons.ron` (including per-Weapon Hit Zone damage multipliers), `attachments.ron` (Optics, with their magnification and sway scale, Muzzles and Underbarrels, as stat modifiers and optional class point costs), `perks.ron` (the six Perks and the ammo pack), `class_points.ron` (the Pick 10 budget, point costs, slot limits and the Wildcards), `loadouts.ron` (Default Loadouts, the instant-swap window and the Weapon switch time), `movement.ron`, `match_rules.ron` (presets: health, regen, respawn delay and the earliest early respawn, damage scale, friendly fire, fall damage and the HUD block), `game_modes.ron` (score and time limits, capture, HQ and bomb tuning of every Game Mode), `factions.ron`, `maps.ron` (every built-in Map: file, look, Game Modes, and the two Factions its theater plays), `looks.ron` (per-Map look presets: grade, fog, sun, ambient, sky), `presentation.ron` (how long bodies stay and how many at once) and `progression.ron` (XP awards, the Level curve, unlocks and camo Challenges). The game reads them at startup from `./data/` (relative to where you launch it), so edit and restart to retune. Without that folder it uses the copies built into the binary. Both machines should use the same files: damage and score are decided on the server, but movement, recoil, spread and fire rate come from each client's own copy.
+Tuning lives in `data/`: `weapons.ron` (including per-Weapon Hit Zone damage multipliers), `attachments.ron` (Optics, with their magnification and sway scale, Muzzles and Underbarrels, as stat modifiers and optional class point costs), `perks.ron` (the six Perks and the ammo pack), `class_points.ron` (the Pick 10 budget, point costs, slot limits and the Wildcards), `equipment.ron` (Grenade flight, fuse and effect tuning), `loadouts.ron` (Default Loadouts, the instant-swap window and the Weapon switch time), `movement.ron`, `match_rules.ron` (presets: health, regen, respawn delay and the earliest early respawn, damage scale, friendly fire, fall damage and the HUD block), `game_modes.ron` (score and time limits, capture, HQ and bomb tuning of every Game Mode), `factions.ron`, `maps.ron` (every built-in Map: file, look, Game Modes, and the two Factions its theater plays), `looks.ron` (per-Map look presets: grade, fog, sun, ambient, sky), `presentation.ron` (how long bodies stay and how many at once) and `progression.ron` (XP awards, the Level curve, unlocks and camo Challenges). The game reads them at startup from `./data/` (relative to where you launch it), so edit and restart to retune. Without that folder it uses the copies built into the binary. Both machines should use the same files: damage and score are decided on the server, but movement, recoil, spread and fire rate come from each client's own copy.
 
 ## Loadouts
 
@@ -116,12 +119,16 @@ A Loadout (a class) is a **Pick 10** build: every class has 10 points to spend (
 
 | Choice | Cost |
 |---|---|
-| Primary (AR, SMG or Sniper; always there) | 1 |
+| Primary (AR, M16A4, SMG or Sniper; always there) | 1 |
 | Secondary (the M9 pistol; optional) | 1 |
-| Each Attachment, up to 2 on the Primary | 1 (an Optic of 3x or more, the ACOG, costs 2; so will the grenade launcher) |
+| Each Attachment, up to 2 on the Primary | 1 (an Optic of 3x or more, the ACOG, costs 2; so does the Grenade Launcher, which only the M16A4 offers) |
 | Each Perk, one per Perk Slot | 1 |
-| Each piece of equipment (lethal and tactical slots; none exist yet) | 1 |
+| Each piece of equipment (lethal and tactical slots) | 1 |
 | Each Wildcard, up to 3 | 1 |
+
+**Fire modes.** Each Weapon lists its modes in `weapons.ron` (`fire_modes`) and X cycles them: the M4 Auto / Burst 3 / Semi, the M16A4 Burst 3 / Semi, the MP5 Auto / Burst 2 / Semi, the pistol Semi, the Sniper Bolt. A burst fires its rounds at `burst_rpm` (about 0.09 s apart, slower than the Weapon's auto rate) and, with the trigger held, the next burst starts after `burst_delay_secs` more; a started burst always finishes. Semi never fires faster than `semi_interval_secs` (M4 0.14 s, MP5 0.12 s, pistol 0.2 s), however fast the button is mashed; dry-fire clicks keep to it too. Every shot still reaches the server one by one.
+
+**Equipment** (`data/equipment.ron`, class entries in `class_points.ron`): the lethal Frag Grenade (150 damage at the centre falling off linearly to nothing at 8 m, only to players in a straight line from the blast, you included; the fuse is 3 s), the tactical Flashbang (1.6 s fuse; players within 16 m looking at it are whited out for up to 5 s, everyone near is deafened for up to 6 s with a ringing and quieter sound) and Smoke Grenade (a 5.5 m cloud for 14 s that greys the view, and a sphere you can't see through). Grenades are physical projectiles the server flies: they bounce off the World, lose speed and come to rest, and the fuse runs from the throw. The Frag unlocks at Level 1, the Flashbang at Level 3 and the Smoke at Level 4. The Grenade Launcher (M16A4 only, Underbarrel slot, 2 points, M16A4 level 2) fires a 40mm round with V: 3 rounds, 58 m/s with a game-tuned arc, bursting on the first surface after 5 m (130 damage, 5.5 m). The default classes Assault (Frag, Flashbang), Close Quarters (Smoke) and Grenadier (M16A4 with the launcher, Frag, Smoke) carry equipment; a kill by a blast is an Explosive Kill (it counts for no Weapon's level).
 
 **Wildcards** break a slot rule: *Perk 1 / 2 / 3 Greed* adds a second Perk in that Perk Slot (both Perks' effects stack), *Gunfighter* allows a third Attachment on the Primary, and *Overkill* lets the second Weapon be a Primary (a rifle, SMG or Sniper) instead of the pistol; it is carried and switched to like the pistol (`1`, `2` or the wheel). Everything but the Primary is optional: no Secondary frees a point for another Perk, and a class of just a Primary is valid. The Primary has three Attachment Slots, Optic (Red Dot 1x, Holographic 1.5x, Prism 2x, ACOG 4x; none on the Sniper, which has its built-in 8x scope), Muzzle (Silencer: no muzzle flash, a quieter and duller shot, damage falls off at 0.75x the distance) and Underbarrel (Foregrip: 25% less recoil, a little slower to aim), but only two Attachments at once without Gunfighter. Each Weapon offers its own set (see Progression). Camos (per Weapon, see Progression) go on the Primary and are free.
 
@@ -171,22 +178,24 @@ Level n+1 needs `n * 1500` XP in all (Level 2 at 1,500, Level 3 at 3,000, ...), 
 
 | Level | Unlocks |
 |---|---|
-| 1 | AR, SMG, Sniper, Pistol, Sleight of Hand, Stopping Power, Marathon |
+| 1 | AR, SMG, Sniper, Pistol, Frag Grenade, Sleight of Hand, Stopping Power, Marathon |
+| 3 / 4 | Flashbang / Smoke Grenade |
+| 4 | M16A4 |
 | 2 | Custom classes (editing and choosing the three custom slots) |
 | 5 / 6 / 8 | Scavenger / Lightweight / Ninja |
 | 6 | Gunfighter |
 | 8 / 9 / 10 | Perk 1 / 2 / 3 Greed |
 | 12 | Overkill |
 
-Equipment unlocks go in the same table (`Equipment(..)` entries) once there is equipment. Each **Weapon Level** unlocks that Weapon's Attachments, then its camos. Every kill with a Weapon gives it 1 Weapon XP and a headshot kill 1 more, and its Weapon Level rises at 5, 15, 30, 50 and 75 Weapon XP (`weapon_levels` in `progression.ron`; the Profile stores Weapon XP per Weapon). `weapon_attachments` lists, per Weapon, which Attachments it offers and at which Weapon Level (an Attachment a Weapon doesn't list can't be fitted to it: the Sniper has no Optics, the pistol takes none):
+Equipment unlocks are `Equipment(..)` entries in the same table. Each **Weapon Level** unlocks that Weapon's Attachments, then its camos. Every kill with a Weapon gives it 1 Weapon XP and a headshot kill 1 more, and its Weapon Level rises at 5, 15, 30, 50 and 75 Weapon XP (`weapon_levels` in `progression.ron`; the Profile stores Weapon XP per Weapon). `weapon_attachments` lists, per Weapon, which Attachments it offers and at which Weapon Level (an Attachment a Weapon doesn't list can't be fitted to it: the Sniper has no Optics, the pistol takes none, and only the M16A4 has the Grenade Launcher: Weapon level 2, on the Underbarrel slot it shares with the Foregrip):
 
-| Weapon Level | M4 (AR) | MP5 (SMG) | M40 (Sniper) |
-|---|---|---|---|
-| 1 | Red Dot | Red Dot | Silencer |
-| 2 | Silencer | Silencer | |
-| 3 | Holographic | Holographic | Foregrip |
-| 4 | Foregrip, Prism | Foregrip | |
-| 5 | ACOG | Prism | |
+| Weapon Level | M4 (AR) | M16A4 (AR) | MP5 (SMG) | M40 (Sniper) |
+|---|---|---|---|---|
+| 1 | Red Dot | Red Dot | Red Dot | Silencer |
+| 2 | Silencer | Silencer, Grenade Launcher | Silencer | |
+| 3 | Holographic | Holographic | Holographic | Foregrip |
+| 4 | Foregrip, Prism | Foregrip | Foregrip | |
+| 5 | ACOG | ACOG | Prism | |
 
 Reaching a Weapon Level shows a toast such as `M4 LEVEL 3: HOLOGRAPHIC UNLOCKED`, and the end-of-Match Scoreboard lists the Weapons that gained XP (up to three: `M4  +7 XP   LEVEL 2 > 3  12 / 15 XP`). The editor shows the Primary's Weapon Level and what the next one opens, and a locked Attachment says `Unlocks at M4 level 3`.
 
@@ -270,7 +279,7 @@ SETTINGS (title menu, or the pause menu in game) has four tabs. Edits wait for A
 - **Video:** display mode (windowed, borderless fullscreen, exclusive fullscreen), resolution (the sizes the monitor's video modes offer; borderless always uses the monitor's), vsync, an FPS cap (30 to 240 or unlimited, sleep-based; no effect above the refresh rate while vsync is on), a quality preset (Low, Medium, High, Custom) and its four settings: sun shadows (off, 1024 or 2048 px), ambient occlusion (off, low, medium, high), bloom and anti-aliasing (off, FXAA, SMAA), and brightness (50 to 150%, an exposure offset on the Map's look). Medium is what the game looked like before these settings existed. Changing a single quality setting switches the preset to Custom. Everything applies live as you change it. Changing the display mode or the resolution also asks "Keep these settings?" and puts the old ones back after 10 s unless you answer KEEP. There is no render scale: Bevy 0.20 has no supported way to render the 3D view below the window's size.
 - **Audio:** master volume. (There are no music or voice sounds yet, so no other sliders.)
 - **Controls:** mouse sensitivity, an ADS sensitivity multiplier (0.25x to 1.5x; the view blends to it as you aim down sights), invert Y, and the key-rebinding list. Click an action, then press the new key (or mouse button for Fire and Aim); Esc cancels. A key another action already uses is taken from it, and that action shows UNBOUND. Rebinding replaces all of an action's keys (Prone has two by default). RESET ALL restores the defaults. Esc stays the Pause / back key, and clicking the game still grabs the mouse; neither is in the list. Keys outside the usual letters, digits, F-keys, arrows, numpad, modifier and punctuation set can't be bound.
-- **Gameplay:** your name, the field of view, the CoD4 texture path (CHECK applies it and the status line says what was found) and the Custom Match Rules editor.
+- **Gameplay:** your name, the field of view, Auto reload (off by default: an empty magazine only clicks and R reloads; on, pulling the trigger on it reloads), the CoD4 texture path (CHECK applies it and the status line says what was found) and the Custom Match Rules editor.
 
 ## Layout
 
@@ -287,6 +296,9 @@ SETTINGS (title menu, or the pause menu in game) has four tabs. Edits wait for A
 - `crates/frontline/src/net/`: lightyear protocol, server, client, Host/Join/Leave sessions, LAN discovery
 - `crates/frontline/src/player/`: first-person controller, input bindings (rebindable, saved in Settings; `input.rs`), damage/kill-feed/death HUD, remote player visuals and their bodies
 - `crates/frontline/src/weapon/`: local Weapon (firing, ammo, aiming, recoil, sway, hold breath, flinch, the bolt rack), per-weapon viewmodels, shot effects, crosshair/hitmarker/ammo/scope/breath HUD
+- `crates/frontline/src/weapon/trigger.rs`: the trigger as a pure state machine (Auto, Burst, Semi and Bolt timing, the semi interval, dry fire and Auto reload; unit-tested at any frame rate)
+- `crates/frontline/src/equipment/`: Grenades: the data (`data/equipment.ron`) and the pure, unit-tested rules (body stepping with bounces and the fuse, blast falloff, flash and smoke exposure, the carried pouches); `client.rs` draws them, the throw keys, the HUD and the flash/smoke screen effects
+- `crates/frontline/src/combat/grenades.rs`: the server flying every Grenade (sphere casts against the World), blast damage through the damage path, flashes and smoke
 - `crates/frontline/src/gear.rs`: Attachments, Perks and the Loadout, and the pure rules that turn them into effective Weapon stats and Perk effects (unit-tested)
 - `crates/frontline/src/class.rs`: Pick 10: the point budget and costs, Wildcards, equipment slots, class validation (budget, slot rules, Wildcard rules, unlocks) and trimming a class that doesn't fit (unit-tested)
 - `crates/frontline/src/profile.rs`: the Profile file (`profile.ron`): custom Loadouts, the chosen one, XP and per-Weapon kill counters and Weapon XP, migrating old Profiles, and applying an award to them

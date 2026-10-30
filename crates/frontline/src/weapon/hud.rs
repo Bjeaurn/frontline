@@ -9,7 +9,7 @@ use bevy::window::PrimaryWindow;
 
 use super::{HeldWeapon, WeaponSystems, ease};
 use crate::data::ActiveRules;
-use crate::flow::AppState;
+use crate::flow::{AppState, Settings};
 use crate::net::protocol::HitConfirm;
 use crate::player::{EyeCamera, LocalLife};
 use crate::shared::{FromServer, LocalPlayer};
@@ -35,6 +35,12 @@ const AMMO_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.92);
 const AMMO_LOW_COLOR: Color = Color::srgb(1.0, 0.35, 0.25);
 /// Rounds at or below which the count turns `AMMO_LOW_COLOR`.
 const AMMO_LOW: u32 = 5;
+const MODE_FONT_SIZE: f32 = 18.0;
+const MODE_COLOR: Color = Color::srgba(1.0, 0.85, 0.35, 0.95);
+const RELOAD_PROMPT_SIZE: f32 = 24.0;
+const RELOAD_PROMPT_COLOR: Color = Color::srgb(1.0, 0.3, 0.2);
+/// The RELOAD hint flashes this many times a second.
+const RELOAD_FLASH_HZ: f32 = 2.5;
 
 pub(super) struct WeaponHudPlugin;
 
@@ -72,6 +78,8 @@ impl Plugin for WeaponHudPlugin {
                     show_hitmarker,
                     fade_hitmarker,
                     update_ammo,
+                    update_fire_mode,
+                    update_reload_prompt,
                     update_scope,
                     update_breath_cue,
                     update_rack_prompt,
@@ -113,6 +121,14 @@ struct AmmoCount;
 
 #[derive(Component)]
 struct WeaponLabel;
+
+/// The fire mode shown beside the ammo count.
+#[derive(Component)]
+struct FireModeLabel;
+
+/// "RELOAD", flashing under the crosshair while the magazine is empty.
+#[derive(Component)]
+struct ReloadPrompt;
 
 fn crosshair_arm(direction: Vec2) -> impl Bundle {
     let size = if direction.x == 0.0 {
@@ -251,6 +267,27 @@ fn spawn_aim_cues(commands: &mut Commands, vignette: Handle<Image>) {
                 ..default()
             },
             TextColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),
+            Visibility::Hidden,
+        )],
+    ));
+    commands.spawn((
+        Name::new("ReloadPrompt"),
+        DespawnOnExit(AppState::InGame),
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100.0),
+            top: percent(58.0),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        children![(
+            ReloadPrompt,
+            Text::new("RELOAD"),
+            TextFont {
+                font_size: FontSize::Px(RELOAD_PROMPT_SIZE),
+                ..default()
+            },
+            TextColor(RELOAD_PROMPT_COLOR),
             Visibility::Hidden,
         )],
     ));
@@ -419,6 +456,19 @@ fn spawn_weapon_hud(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                 },
                 children![
                     (
+                        FireModeLabel,
+                        Text::default(),
+                        TextFont {
+                            font_size: FontSize::Px(MODE_FONT_SIZE),
+                            ..default()
+                        },
+                        TextColor(MODE_COLOR),
+                        Node {
+                            margin: UiRect::right(px(14.0)),
+                            ..default()
+                        },
+                    ),
+                    (
                         AmmoCount,
                         Text::default(),
                         TextFont {
@@ -557,6 +607,40 @@ fn update_ammo(
     } else {
         name.clone()
     };
+}
+
+/// The current fire mode, e.g. `AUTO` or `BURST 3`, beside the ammo count.
+fn update_fire_mode(
+    weapons: Query<&HeldWeapon, With<LocalPlayer>>,
+    mut label: Single<&mut Text, With<FireModeLabel>>,
+) {
+    let Ok(weapon) = weapons.single() else {
+        return;
+    };
+    let shown = weapon.mode.label();
+    if label.0 != shown {
+        label.0 = shown;
+    }
+}
+
+/// A flashing "RELOAD" while the held Weapon's magazine is empty and nothing reloads it: with
+/// Auto reload on, pulling the trigger does that, so no hint is needed.
+fn update_reload_prompt(
+    time: Res<Time>,
+    settings: Res<Settings>,
+    life: Res<LocalLife>,
+    weapons: Query<&HeldWeapon, With<LocalPlayer>>,
+    mut prompt: Single<&mut Visibility, With<ReloadPrompt>>,
+) {
+    let empty = weapons
+        .single()
+        .is_ok_and(|weapon| !life.is_dead() && weapon.rounds == 0 && weapon.reload_left.is_none());
+    let flash = (time.elapsed_secs() * RELOAD_FLASH_HZ).fract() < 0.6;
+    prompt.set_if_neq(if empty && !settings.auto_reload && flash {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    });
 }
 
 /// Shows the scope mask while a scoped Weapon is aimed far enough in.

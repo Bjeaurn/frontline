@@ -685,8 +685,8 @@ mod tests {
         take(&mut class, Slot::Wildcards, "Overkill", &profile, &data);
         assert_eq!(
             names(&class).len(),
-            5,
-            "None, the pistol and the three primaries"
+            6,
+            "None, the pistol and the four primaries"
         );
         take(&mut class, Slot::Secondary, "M40 (Sniper)", &profile, &data);
         // Overkill can't be taken out from under a Primary in the second slot.

@@ -48,7 +48,7 @@ The definition for a MVP would be Team deathmatch, 3-5 weapons with a different 
   - **Video:** display mode (windowed / borderless fullscreen / exclusive fullscreen), resolution (from the monitor's modes), vsync, FPS cap (a sleep-based limiter), a quality preset (Low/Medium/High/Custom) for shadows, ambient occlusion, bloom and anti-aliasing, and brightness. Changes apply live; a display-mode or resolution change starts a 10 s "Keep these settings?" revert. **Render scale is not built:** Bevy 0.20 has no supported way to render the 3D view below the window's size (`MainPassResolutionOverride` only exists in the render world, meant for DLSS, and leaves post-processing at full size). Revisit if Bevy adds one.
   - **Audio:** master volume only. Effects, music and voice sliders wait for music and voice sounds to exist (all sound today is effects, which master already covers).
   - **Controls:** sensitivity, ADS sensitivity multiplier, invert Y, and a key-rebinding list (click an action, press a key; Esc cancels; a duplicate key is unbound from the other action; Fire and Aim take mouse buttons). Esc stays Pause/back.
-  - **Gameplay:** name, FOV, and the CoD4 texture path. An "Auto reload" toggle belongs to a later feature.
+  - **Gameplay:** name, FOV, Auto reload (default off) and the CoD4 texture path.
   All saved in settings.ron, which still loads when an older version wrote it.
 - **Create a Class, MW2 style:** reachable from the main menu (CREATE A CLASS) as well as in game. Three levels deep, never a scrolling form:
   1. **Class list:** the default + custom classes on the left; the selected class's summary on the right.

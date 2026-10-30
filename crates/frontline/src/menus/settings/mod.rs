@@ -3,8 +3,8 @@
 //!   live; a display change asks "Keep these settings?".
 //! - Audio: master volume.
 //! - Controls (`controls`): sensitivity, ADS multiplier, invert Y and the key-rebinding list.
-//! - Gameplay: name, field of view and the CoD4 folder for Homage Map textures (docs/adr/0004;
-//!   CHECK applies it at once so the status line can say what was found).
+//! - Gameplay: name, field of view, Auto reload and the CoD4 folder for Homage Map textures
+//!   (docs/adr/0004; CHECK applies it at once so the status line can say what was found).
 //!
 //! All four tabs exist at once (the others are hidden), so what was typed or dragged on one
 //! survives a visit to another. APPLY saves everything (`flow` writes the file) and goes back;
@@ -18,6 +18,7 @@ use bevy::prelude::*;
 use bevy::text::EditableText;
 use bevy::ui_widgets::{Activate, SliderStep, SliderValue};
 
+use super::host_setup::picker;
 use super::rules_editor::{EditorOrigin, RulesOrigin};
 use crate::cod4::{Cod4, parse_path_input};
 use crate::flow::{MenuScreen, Overlay, Settings};
@@ -36,7 +37,7 @@ const FOV_RANGE: (f32, f32) = (65.0, 110.0);
 const PANEL_WIDTH: f32 = 860.0;
 /// Height of the tab area: the Controls tab is the tallest, the others keep its size so the
 /// panel doesn't jump when switching.
-const TAB_HEIGHT: f32 = 390.0;
+const TAB_HEIGHT: f32 = 470.0;
 
 /// Where the screen was opened from, and so where APPLY/BACK return to.
 #[derive(Clone, Copy)]
@@ -73,6 +74,7 @@ impl Plugin for SettingsPlugin {
                     video::show_values,
                     video::show_revert_prompt,
                     controls::show_values,
+                    show_auto_reload,
                     controls::capture_rebind.run_if(resource_exists::<Draft>),
                 ),
             )
@@ -124,8 +126,13 @@ struct TabPanel(Tab);
 #[derive(Resource)]
 struct Draft {
     invert_y: bool,
+    auto_reload: bool,
     bindings: Bindings,
 }
+
+/// The Auto reload picker's text.
+#[derive(Component)]
+struct AutoReloadValue;
 
 #[derive(Component)]
 struct NameField;
@@ -269,6 +276,7 @@ fn spawn_settings(
 ) {
     commands.insert_resource(Draft {
         invert_y: settings.invert_y,
+        auto_reload: settings.auto_reload,
         bindings: settings.bindings.clone(),
     });
     let root = commands
@@ -380,7 +388,15 @@ fn spawn_settings(
     );
     controls::spawn_controls_tab(&mut commands, fonts, icon, controls_tab, settings);
 
-    spawn_gameplay_tab(&mut commands, fonts, gameplay_tab, settings, video, origin);
+    spawn_gameplay_tab(
+        &mut commands,
+        fonts,
+        icon,
+        gameplay_tab,
+        settings,
+        video,
+        origin,
+    );
 
     let buttons = commands
         .spawn((
@@ -417,6 +433,7 @@ fn spawn_settings(
 fn spawn_gameplay_tab(
     commands: &mut Commands,
     fonts: &UiFonts,
+    icon: &ArrowIcon,
     tab: Entity,
     settings: &Settings,
     video: &ActiveVideo,
@@ -430,6 +447,34 @@ fn spawn_gameplay_tab(
     ));
 
     slider_row(commands, fonts, tab, SettingSlider::Fov, settings, video);
+
+    let reload_row = setting_row(commands, fonts, tab, "Auto reload");
+    let (left, right, value) = picker(
+        commands,
+        fonts,
+        icon,
+        reload_row,
+        140.0,
+        video::on_off(settings.auto_reload),
+    );
+    commands.entity(value).insert(AutoReloadValue);
+    for arrow in [left, right] {
+        commands
+            .entity(arrow)
+            .observe(|_: On<Activate>, mut draft: ResMut<Draft>| {
+                draft.auto_reload = !draft.auto_reload;
+            });
+    }
+    let hint_row = setting_row(commands, fonts, tab, "");
+    commands.spawn((
+        ChildOf(hint_row),
+        label(
+            fonts,
+            "Off: an empty magazine clicks and R reloads. On: pulling the trigger reloads it.",
+            18.0,
+            TEXT_DIM,
+        ),
+    ));
 
     let cod4_row = setting_row(commands, fonts, tab, "CoD4 textures");
     let field = commands
@@ -566,6 +611,19 @@ fn show_readouts(
     }
 }
 
+/// Keeps the Auto reload picker in step with the draft.
+fn show_auto_reload(draft: Option<Res<Draft>>, mut value: Query<&mut Text, With<AutoReloadValue>>) {
+    let Some(draft) = draft else {
+        return;
+    };
+    let shown = video::on_off(draft.auto_reload).to_uppercase();
+    for mut text in &mut value {
+        if text.0 != shown {
+            text.0 = shown.clone();
+        }
+    }
+}
+
 /// Keeps the status line under the CoD4 field in step with the indexed source.
 fn show_cod4_status(cod4: Option<Res<Cod4>>, mut status: Query<&mut Text, With<Cod4Status>>) {
     let shown = cod4.map_or_else(String::new, |cod4| cod4.status());
@@ -651,6 +709,7 @@ impl Form<'_, '_> {
             }
         }
         edited.invert_y = self.draft.invert_y;
+        edited.auto_reload = self.draft.auto_reload;
         edited.bindings = self.draft.bindings.clone();
         edited.video = self.video.0.clone();
         if keep_display {

@@ -237,6 +237,12 @@ pub struct Bindings {
     /// Hold to aim down sights.
     pub aim: MouseBinding,
     pub reload: Binding,
+    /// Switch to the Weapon's next fire mode.
+    pub fire_mode: Binding,
+    /// Throw the lethal / the tactical equipment, and fire the underslung grenade launcher.
+    pub lethal: Binding,
+    pub tactical: Binding,
+    pub launcher: Binding,
     /// Take the Primary / the Secondary (the mouse wheel switches to the other Weapon).
     pub primary_weapon: Binding,
     pub secondary_weapon: Binding,
@@ -267,6 +273,10 @@ impl Default for Bindings {
             fire: MouseBinding(Some(MouseButton::Left)),
             aim: MouseBinding(Some(MouseButton::Right)),
             reload: Binding::keys(&[KeyCode::KeyR]),
+            fire_mode: Binding::keys(&[KeyCode::KeyX]),
+            lethal: Binding::keys(&[KeyCode::KeyG]),
+            tactical: Binding::keys(&[KeyCode::KeyQ]),
+            launcher: Binding::keys(&[KeyCode::KeyV]),
             primary_weapon: Binding::keys(&[KeyCode::Digit1]),
             secondary_weapon: Binding::keys(&[KeyCode::Digit2]),
             team_menu: Binding::keys(&[KeyCode::KeyT]),
@@ -292,6 +302,10 @@ pub enum Action {
     Fire,
     Aim,
     Reload,
+    FireMode,
+    Lethal,
+    Tactical,
+    Launcher,
     PrimaryWeapon,
     SecondaryWeapon,
     UseObjective,
@@ -309,7 +323,7 @@ pub enum Device {
 }
 
 impl Action {
-    pub const ALL: [Action; 18] = [
+    pub const ALL: [Action; 22] = [
         Action::Forward,
         Action::Back,
         Action::Left,
@@ -321,6 +335,10 @@ impl Action {
         Action::Fire,
         Action::Aim,
         Action::Reload,
+        Action::FireMode,
+        Action::Lethal,
+        Action::Tactical,
+        Action::Launcher,
         Action::PrimaryWeapon,
         Action::SecondaryWeapon,
         Action::UseObjective,
@@ -343,6 +361,10 @@ impl Action {
             Action::Fire => "Fire",
             Action::Aim => "Aim (ADS)",
             Action::Reload => "Reload",
+            Action::FireMode => "Fire mode",
+            Action::Lethal => "Lethal",
+            Action::Tactical => "Tactical",
+            Action::Launcher => "Launcher",
             Action::PrimaryWeapon => "Primary",
             Action::SecondaryWeapon => "Secondary",
             Action::UseObjective => "Plant/defuse",
@@ -373,6 +395,10 @@ impl Bindings {
             Action::Crouch => &mut self.crouch,
             Action::Prone => &mut self.prone,
             Action::Reload => &mut self.reload,
+            Action::FireMode => &mut self.fire_mode,
+            Action::Lethal => &mut self.lethal,
+            Action::Tactical => &mut self.tactical,
+            Action::Launcher => &mut self.launcher,
             Action::PrimaryWeapon => &mut self.primary_weapon,
             Action::SecondaryWeapon => &mut self.secondary_weapon,
             Action::UseObjective => &mut self.use_objective,
@@ -385,7 +411,7 @@ impl Bindings {
     }
 
     /// Every keyboard binding, for removing a key from all but one.
-    fn all_keys_mut(&mut self) -> [&mut Binding; 17] {
+    fn all_keys_mut(&mut self) -> [&mut Binding; 21] {
         [
             &mut self.forward,
             &mut self.back,
@@ -397,6 +423,10 @@ impl Bindings {
             &mut self.prone,
             &mut self.pause,
             &mut self.reload,
+            &mut self.fire_mode,
+            &mut self.lethal,
+            &mut self.tactical,
+            &mut self.launcher,
             &mut self.primary_weapon,
             &mut self.secondary_weapon,
             &mut self.team_menu,
@@ -450,6 +480,10 @@ impl Bindings {
                     Action::Crouch => &self.crouch,
                     Action::Prone => &self.prone,
                     Action::Reload => &self.reload,
+                    Action::FireMode => &self.fire_mode,
+                    Action::Lethal => &self.lethal,
+                    Action::Tactical => &self.tactical,
+                    Action::Launcher => &self.launcher,
                     Action::PrimaryWeapon => &self.primary_weapon,
                     Action::SecondaryWeapon => &self.secondary_weapon,
                     Action::UseObjective => &self.use_objective,

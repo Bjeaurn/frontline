@@ -12,6 +12,7 @@ use super::hitbox::{Hitbox, HitboxOf, Hitboxes};
 use super::match_flow::is_live;
 use super::projectiles::Bullets;
 use crate::data::{GameData, WeaponId};
+use crate::equipment::GrenadeKind;
 use crate::gear::Attachments;
 use crate::net::LinkPlayer;
 use crate::net::protocol::{
@@ -19,18 +20,30 @@ use crate::net::protocol::{
 };
 use crate::shared::{GameLayer, Health, MatchState};
 
-/// A shot struck a player's hitbox.
+/// What struck a player: a bullet, or a Grenade's blast.
+#[derive(Clone, Copy, Debug)]
+pub enum HitSource {
+    Bullet {
+        weapon: WeaponId,
+        /// The Attachments fitted to it.
+        attachments: Attachments,
+        zone: HitZone,
+        /// Distance the bullet travelled, for damage falloff.
+        distance: f32,
+    },
+    /// A Grenade of `kind` went off in reach: `damage` is already the blast's falloff at the
+    /// victim's distance.
+    Blast { kind: GrenadeKind, damage: f32 },
+}
+
+/// Something struck a player: a shot hit their hitbox, or a blast reached them.
 #[derive(bevy::ecs::message::Message, Clone, Copy, Debug)]
 pub struct PlayerHit {
     pub shooter: Entity,
     pub victim: Entity,
-    pub weapon: WeaponId,
-    /// The Attachments fitted to it.
-    pub attachments: Attachments,
-    pub zone: HitZone,
-    /// Distance the bullet travelled, for damage falloff.
-    pub distance: f32,
-    /// Where the shot was fired from.
+    pub source: HitSource,
+    /// Where the shot was fired from, or the blast went off: the victim's damage indicator
+    /// points there.
     pub origin: Vec3,
 }
 
@@ -84,10 +97,12 @@ pub(super) fn resolve_shots(
                 hits.write(PlayerHit {
                     shooter: player.0,
                     victim: *victim,
-                    weapon: shot.weapon,
-                    attachments: shot.attachments,
-                    zone: hitbox.zone,
-                    distance,
+                    source: HitSource::Bullet {
+                        weapon: shot.weapon,
+                        attachments: shot.attachments,
+                        zone: hitbox.zone,
+                        distance,
+                    },
                     origin: shot.origin,
                 });
             }

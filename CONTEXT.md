@@ -192,6 +192,22 @@ _Avoid_: Cycle, chamber
 The part of a body a bullet strikes: head, upper torso, lower torso or limbs (arms and legs). Each **Weapon** sets its own damage multiplier per zone.
 _Avoid_: Hit location, body part (for the damage category)
 
+**Fire Mode**:
+How a **Weapon**'s trigger fires: Auto (rounds while held), Burst (n rounds per pull at the burst rate, then a longer delay before the next burst), Semi (one round per pull, never faster than the Weapon's semi interval) or Bolt (one round, then a **Rack**). Each Weapon lists the modes it has in weapons.ron; X cycles them and the last one used on each Weapon is kept in the **Profile**.
+_Avoid_: Firing mode, trigger mode
+
+**Dry Fire**:
+Pulling the trigger on an empty magazine: a click per pull and a flashing RELOAD hint, but no reload; R reloads. The Gameplay setting Auto reload turns the pull into a reload.
+_Avoid_: Empty click
+
+**Grenade**:
+A physical projectile the server flies with gravity, bounces and a fuse: the lethal Frag (blast damage that falls off with distance), the tactical Flashbang (blinds a viewer facing it, deafens everyone near) and Smoke (a cloud that blocks the view for a while), and the Grenade Launcher's 40mm round.
+_Avoid_: Nade, bomb (a **Bomb** is the Search & Destroy objective)
+
+**Grenade Launcher**:
+The underslung "noob tube" Attachment (Underbarrel slot, 2 **Class Points**) only the M16A4 offers; its 40mm round arcs and bursts on impact, 3 rounds per life.
+_Avoid_: Noob tube (in docs), GL
+
 ### Loadouts & progression
 
 **Loadout**:
@@ -294,6 +310,8 @@ _Avoid_: Combo, double/triple (as the general term)
 - A **Rotation entry** only names a **Game Mode** its **Map** supports
 - A **Loadout** costs at most 10 **Class Points**; it has one **Primary**, optionally one **Secondary** (a **Primary** with Overkill), a **Perk** per **Perk Slot** (two with that slot's Perk Greed), optionally a lethal and a tactical piece of equipment, and up to three **Wildcards**
 - A **Weapon** fires through exactly one sight at a time (its own, or the fitted Optic); that sight's **Magnification** and Sway Scale drive aiming
+- A **Weapon** has at least one **Fire Mode** and starts in the first it lists (or the one last used on it, from the **Profile**); a **Dry Fire** pull never reloads unless Auto reload is on
+- Only the M16A4 offers the **Grenade Launcher**; its rounds, like a thrown **Grenade**, are simulated by the server
 - A **Primary** has an Optic, a Muzzle and an Underbarrel **Attachment Slot**, each optionally filled, but carries two **Attachments** at most (three with Gunfighter); a scoped Primary (the sniper rifle) has no Optic slot, and a **Secondary** has no Attachment Slots
 - Each **Weapon** offers its own **Attachments**, each unlocked at a **Weapon Level**; the sniper rifle offers no Optics
 - A **Profile** belongs to one player and is independent of any **Host**

@@ -352,13 +352,22 @@ pub(super) fn add_kill_feed_lines(
             )
         };
         let entity = match &line.cause {
-            DeathCause::Shot {
-                killer,
-                weapon,
-                headshot,
-            } => {
-                let weapon = &data.weapon(*weapon).name;
-                let headshot = if *headshot { "  (headshot)" } else { "" };
+            DeathCause::Shot { .. } | DeathCause::Explosive { .. } => {
+                let (killer, weapon, headshot) = match &line.cause {
+                    DeathCause::Shot {
+                        killer,
+                        weapon,
+                        headshot,
+                    } => (
+                        killer,
+                        data.weapon(*weapon).name.clone(),
+                        if *headshot { "  (headshot)" } else { "" },
+                    ),
+                    DeathCause::Explosive { killer, kind } => {
+                        (killer, data.grenade(*kind).name.clone(), "")
+                    }
+                    _ => unreachable!("matched above"),
+                };
                 let killer_color = name_color(killer);
                 commands
                     .spawn((
@@ -441,7 +450,9 @@ pub(super) fn update_death_screen(
         return;
     }
     let heading = match life.cause() {
-        Some(DeathCause::Shot { killer, .. }) => format!("You were killed by {killer}"),
+        Some(DeathCause::Shot { killer, .. } | DeathCause::Explosive { killer, .. }) => {
+            format!("You were killed by {killer}")
+        }
         Some(DeathCause::Fall) => "You fell to your death".to_owned(),
         Some(DeathCause::Respawn) => "You respawned".to_owned(),
         None if life.switched_team() => "You switched to the other team".to_owned(),

@@ -68,6 +68,7 @@ const EMBEDDED: &[(&str, &[u8])] = embed![
     "sounds/dry_fire.ogg",
     "sounds/mag_insert.ogg",
     "sounds/impact.ogg",
+    "sounds/ring.ogg",
     "sounds/ricochet.ogg",
     "sounds/footstep_concrete_000.ogg",
     "sounds/footstep_concrete_001.ogg",

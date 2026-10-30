@@ -63,4 +63,13 @@
         slot: Underbarrel,
         mods: (recoil_mul: 0.75, ads_secs_mul: 1.05),
     ),
+    // Only the M16A4 offers it (progression.ron). V fires its 40mm round (equipment.ron: Launcher):
+    // 3 rounds per life, an arcing grenade that bursts on impact. The weight slows the aim a little.
+    GrenadeLauncher: (
+        name: "Grenade Launcher",
+        description: "Underslung 40mm launcher (the noob tube). V fires a 3 round arcing grenade that bursts on impact. Slower to aim.",
+        slot: Underbarrel,
+        cost: Some(2),
+        mods: (ads_secs_mul: 1.1),
+    ),
 }

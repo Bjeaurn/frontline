@@ -7,6 +7,7 @@ use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::data::WeaponId;
+use crate::equipment::{Grenade, GrenadeKind};
 use crate::gear::{AmmoPack, Attachments, EquippedPerks, Perks};
 use crate::modes::ModeView;
 use crate::progression::XpReason;
@@ -60,6 +61,34 @@ pub struct EquipPerks(pub Perks);
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BombExploded {
     pub position: Vec3,
+}
+
+/// Client -> server (`ControlChannel`): throw a Grenade of `kind` from `origin` along
+/// `direction` (unit; clients are trusted, docs/adr/0002). The server flies it and applies what
+/// it does where it goes off.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ThrowGrenade {
+    pub kind: GrenadeKind,
+    pub origin: Vec3,
+    pub direction: Vec3,
+}
+
+/// Server -> all clients (`EventChannel`): a Grenade went off at `position`. `radius` and
+/// `secs` are the effect's reach and how long a smoke cloud stays.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GrenadeDetonated {
+    pub kind: GrenadeKind,
+    pub position: Vec3,
+    pub radius: f32,
+    pub secs: f32,
+}
+
+/// Server -> the player a flashbang caught (`EventChannel`): blind them for `blind_secs` (0 when
+/// they were looking away) and deafen them for `deaf_secs`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Flashed {
+    pub blind_secs: f32,
+    pub deaf_secs: f32,
 }
 
 /// Unreliable channel where only the newest pose is kept.
@@ -164,6 +193,8 @@ pub enum DeathCause {
     },
     /// Fell from too high.
     Fall,
+    /// Killed by a Grenade (`GrenadeKind`): blast damage, whoever threw it.
+    Explosive { killer: String, kind: GrenadeKind },
     /// Used the pause menu's RESPAWN.
     Respawn,
 }
@@ -241,6 +272,7 @@ pub(super) fn register(app: &mut App) {
     app.component::<ModeView>().replicate();
     app.component::<EquippedPerks>().replicate();
     app.component::<AmmoPack>().replicate();
+    app.component::<Grenade>().replicate();
 
     app.add_channel::<PoseChannel>(ChannelSettings {
         mode: ChannelMode::SequencedUnreliable,
@@ -272,6 +304,8 @@ pub(super) fn register(app: &mut App) {
     app.register_message::<ReportLevel>()
         .add_direction(NetworkDirection::ClientToServer);
     app.register_message::<SendChat>()
+        .add_direction(NetworkDirection::ClientToServer);
+    app.register_message::<ThrowGrenade>()
         .add_direction(NetworkDirection::ClientToServer);
 
     app.add_channel::<ShotChannel>(ChannelSettings {
@@ -313,6 +347,10 @@ pub(super) fn register(app: &mut App) {
     app.register_message::<XpAward>()
         .add_direction(NetworkDirection::ServerToClient);
     app.register_message::<ChatLine>()
+        .add_direction(NetworkDirection::ServerToClient);
+    app.register_message::<GrenadeDetonated>()
+        .add_direction(NetworkDirection::ServerToClient);
+    app.register_message::<Flashed>()
         .add_direction(NetworkDirection::ServerToClient);
 }
 

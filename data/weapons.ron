@@ -7,13 +7,21 @@
 // field of view follows the magnification, and from 3x you can hold breath and show a glint.
 // `sway_deg` is the idle sway's peak angle at a sway scale of 1 (standing, breathing),
 // `flinch_deg` the view kick of a 50-damage hit from the hip (less when aimed).
-// Bolt-action (`bolt_action: true`): a shot opens the bolt; `rack_secs_scoped` is the click-to-rack
-// time while aimed (with a `rack_kick_deg` sway kick), `rack_secs_unscoped` the automatic rack
-// once the sights are released.
+// Fire modes: `fire_modes` lists the modes X cycles through, the first is the default. `Auto` fires
+// while the trigger is held at `rpm`; `Burst(n)` fires n rounds per pull at `burst_rpm` and, with the
+// trigger held, another burst after `burst_delay_secs` (on top of the last round's spacing, so the gap
+// between bursts is clearly longer than the one inside a burst); `Semi` is one round per pull at `rpm`
+// but never faster than `semi_interval_secs` (mashing the button can't beat it); `Bolt`
+// (a bolt-action, listed alone) fires one round and then needs a rack: `rack_secs_scoped` is the
+// click-to-rack time while aimed (with a `rack_kick_deg` sway kick), `rack_secs_unscoped` the
+// automatic rack once the sights are released.
 {
     AssaultRifle: (
         name: "M4 (AR)",
-        fire_mode: Auto,
+        fire_modes: [Auto, Burst(3), Semi],
+        burst_rpm: 660.0,        // 0.09 s between burst rounds: slower than the 750 rpm auto rate
+        burst_delay_secs: 0.28,
+        semi_interval_secs: 0.14,
         rpm: 750.0,
         ads_rpm: 715.0,
         damage_near: 30.0,
@@ -47,7 +55,6 @@
         muzzle_offset: (0.0, 0.015, -0.48),
         sight_point: (0.0, 0.095, -0.02),
         sight_eye_relief: 0.16,
-        bolt_action: false,
         scope: false,
         class: Primary,
         iron_point: (0.0, 0.066, 0.06),
@@ -58,9 +65,61 @@
         sway_deg: 0.5,
         flinch_deg: 2.0,
     ),
+    // The M16A4: a 3-round burst rifle with no full auto, heavier hitting and steadier than the M4.
+    // The only Weapon that offers the grenade launcher (progression.ron: weapon_attachments).
+    M16: (
+        name: "M16A4 (AR)",
+        fire_modes: [Burst(3), Semi],
+        burst_rpm: 660.0,
+        burst_delay_secs: 0.24,
+        semi_interval_secs: 0.14,
+        rpm: 700.0,
+        ads_rpm: 670.0,
+        damage_near: 34.0,
+        damage_far: 24.0,
+        falloff_start: 25.0,
+        falloff_end: 50.0,
+        zone_multipliers: (head: 1.4, upper_torso: 1.0, lower_torso: 1.0, limbs: 0.8),
+        range: 320.0,
+        magazine: 30,
+        reload_secs: 2.6,
+        empty_reload_secs: 3.2,
+        hip_spread_deg: 2.8,
+        ads_spread_deg: 0.2,
+        ads_secs: 0.27,
+        ads_move_scale: 0.6,
+        recoil_pitch_deg: 0.8,
+        recoil_yaw_deg: 0.3,
+        recoil_recovery_per_sec: 6.0,
+        ads_recoil_scale: 0.55,
+        move_spread_deg: 2.0,
+        air_spread_deg: 5.0,
+        bloom_follow_per_sec: 8.0,
+        crouch_accuracy_scale: 0.75,
+        prone_accuracy_scale: 0.5,
+        sprint_out_secs: 0.2,
+        move_scale: 0.98,
+        model: Rifle,
+        shot_sound: "embedded://frontline/sounds/shot_ar.ogg",
+        muzzle_offset: (0.0, 0.015, -0.48),
+        sight_point: (0.0, 0.095, -0.02),
+        sight_eye_relief: 0.16,
+        scope: false,
+        class: Primary,
+        iron_point: (0.0, 0.066, 0.06),
+        iron_eye_relief: 0.14,
+        iron_front_z: -0.4,
+        iron_magnification: 1.0,
+        iron_sway_scale: 0.8,
+        sway_deg: 0.45,
+        flinch_deg: 2.0,
+    ),
     Smg: (
         name: "MP5 (SMG)",
-        fire_mode: Auto,
+        fire_modes: [Auto, Burst(2), Semi],
+        burst_rpm: 705.0,        // 0.085 s between burst rounds (auto is 0.075 s)
+        burst_delay_secs: 0.22,
+        semi_interval_secs: 0.12,
         rpm: 800.0,
         ads_rpm: 800.0,
         damage_near: 25.0,
@@ -93,7 +152,6 @@
         muzzle_offset: (0.0, 0.01, -0.30),
         sight_point: (0.0, 0.065, 0.09),
         sight_eye_relief: 0.09,
-        bolt_action: false,
         scope: false,
         class: Primary,
         iron_point: (0.0, 0.065, 0.09),
@@ -104,10 +162,10 @@
         sway_deg: 0.15,
         flinch_deg: 2.4,
     ),
-    // Bolt-action: `Semi`; the rack (below) paces the shots, `rpm` is only its nominal rate.
+    // Bolt-action: `Bolt`; the rack (below) paces the shots, `rpm` is only its nominal rate.
     SniperRifle: (
         name: "M40 (Sniper)",
-        fire_mode: Semi,
+        fire_modes: [Bolt],
         rpm: 50.0,
         ads_rpm: 50.0,
         damage_near: 100.0,
@@ -140,7 +198,6 @@
         muzzle_offset: (0.0, 0.01, -0.86),
         sight_point: (0.0, 0.085, 0.18),
         sight_eye_relief: 0.08,
-        bolt_action: true,
         scope: true,
         class: Primary,
         iron_point: (0.0, 0.085, 0.18),
@@ -156,10 +213,11 @@
         // Server-simulated bullet (docs/adr/0005): travel time and drop; other Weapons stay hitscan.
         projectile: Some((muzzle_speed: 600.0, gravity: 12.0)),
     ),
-    // Secondary. Semi-auto: one round per pull at its `rpm`.
+    // Secondary. Semi only: one round per pull at its `rpm`.
     Pistol: (
         name: "M9 (Pistol)",
-        fire_mode: Semi,
+        fire_modes: [Semi],
+        semi_interval_secs: 0.2,
         rpm: 420.0,
         ads_rpm: 420.0,
         damage_near: 28.0,
@@ -192,7 +250,6 @@
         muzzle_offset: (0.0, 0.005, -0.145),
         sight_point: (0.0, 0.034, 0.065),
         sight_eye_relief: 0.12,
-        bolt_action: false,
         scope: false,
         class: Secondary,
         iron_point: (0.0, 0.034, 0.065),

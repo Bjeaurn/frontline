@@ -15,10 +15,10 @@ use lightyear::prelude::*;
 
 use super::protocol::{
     AmmoRefill, BombExploded, CONNECTION_TIMEOUT_SECS, ChatLine, ChooseTeam, ControlChannel,
-    Damaged, EquipPerks, FallDamage, FireShot, ForceRespawn, Hello, HitConfirm, KillFeed,
-    ObjectiveHold, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseChannel, PoseUpdate,
-    ProjectileFired, ProjectileLanded, ReportLevel, RequestRespawn, Respawn, SendChat,
-    ShotChannel, ShotTracer, XpAward,
+    Damaged, EquipPerks, FallDamage, FireShot, Flashed, ForceRespawn, GrenadeDetonated, Hello,
+    HitConfirm, KillFeed, ObjectiveHold, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseChannel,
+    PoseUpdate, ProjectileFired, ProjectileLanded, ReportLevel, RequestRespawn, Respawn, SendChat,
+    ShotChannel, ShotTracer, ThrowGrenade, XpAward,
 };
 use crate::data::GameData;
 use crate::flow::Settings;
@@ -44,6 +44,9 @@ impl Plugin for ClientNetPlugin {
             .add_message::<FromServer<AmmoRefill>>()
             .add_message::<FromServer<XpAward>>()
             .add_message::<FromServer<ChatLine>>()
+            .add_message::<FromServer<GrenadeDetonated>>()
+            .add_message::<FromServer<Flashed>>()
+            .add_message::<ToServer<ThrowGrenade>>()
             .add_message::<ToServer<FireShot>>()
             .add_message::<ToServer<ChooseTeam>>()
             .add_message::<ToServer<ObjectiveHold>>()
@@ -68,6 +71,8 @@ impl Plugin for ClientNetPlugin {
                     forward_from_server::<AmmoRefill>,
                     forward_from_server::<XpAward>,
                     forward_from_server::<ChatLine>,
+                    forward_from_server::<GrenadeDetonated>,
+                    forward_from_server::<Flashed>,
                 )
                     .after(MessageSystems::Receive),
             )
@@ -83,6 +88,7 @@ impl Plugin for ClientNetPlugin {
                     send_control::<RequestRespawn>,
                     send_control::<ForceRespawn>,
                     send_control::<SendChat>,
+                    send_control::<ThrowGrenade>,
                 )
                     .before(MessageSystems::Send),
             )
