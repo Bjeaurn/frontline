@@ -1,17 +1,19 @@
 //! The Video tab: pickers for the display, quality and frame-rate settings, the brightness
-//! slider, and the "Keep these settings?" prompt after a display change. Everything here edits
-//! the live `ActiveVideo`.
+//! slider, and the "Keep these settings?" prompt after APPLY changed the display. Everything
+//! here edits the live `ActiveVideo` except the display mode and resolution, which are staged
+//! in `StagedDisplay` until APPLY.
 
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 
-use super::{SettingSlider, setting_row, slider_row};
-use crate::flow::Settings;
+use super::{Form, Origin, SettingSlider, setting_row, slider_row};
+use crate::flow::{MenuScreen, Overlay, Settings};
 use crate::menus::host_setup::picker;
+use crate::player::input::Rebinding;
 use crate::ui::{ArrowIcon, TEXT_DIM, UiFonts, compact_button, label};
 use crate::video::{
-    ActiveVideo, AntiAliasing, CurrentMonitor, DisplayMode, FPS_CAPS, PendingRevert, QualityPreset,
-    ShadowQuality, SsaoQuality, VideoSettings, change_display, step,
+    ActiveVideo, AntiAliasing, CurrentMonitor, DisplayChoice, DisplayMode, FPS_CAPS, PendingRevert,
+    QualityPreset, ShadowQuality, SsaoQuality, StagedDisplay, VideoSettings, step,
 };
 
 const PICKER_WIDTH: f32 = 280.0;
@@ -58,11 +60,12 @@ impl VideoField {
         }
     }
 
-    /// What the picker shows.
-    fn value(self, video: &VideoSettings) -> String {
+    /// What the picker shows: the staged display for the display mode and resolution, the
+    /// live `video` for the rest.
+    fn value(self, video: &VideoSettings, staged: &DisplayChoice) -> String {
         match self {
-            VideoField::DisplayMode => video.display_mode.label().to_owned(),
-            VideoField::Resolution => match (video.display_mode, video.resolution) {
+            VideoField::DisplayMode => staged.mode.label().to_owned(),
+            VideoField::Resolution => match (staged.mode, staged.resolution) {
                 // Borderless fullscreen always fills the monitor.
                 (DisplayMode::BorderlessFullscreen, _) => "Monitor's".to_owned(),
                 (_, None) => "Current".to_owned(),
@@ -81,20 +84,18 @@ impl VideoField {
         }
     }
 
-    /// Moves the setting `dir` places along what it offers (`resolutions`: the monitor's sizes).
-    fn step(self, video: &mut VideoSettings, resolutions: &[(u32, u32)], dir: i32) {
+    /// Moves the setting `dir` places along what it offers (`resolutions`: the monitor's
+    /// sizes). The display mode and resolution change `staged` only.
+    fn step(
+        self,
+        video: &mut VideoSettings,
+        staged: &mut DisplayChoice,
+        resolutions: &[(u32, u32)],
+        dir: i32,
+    ) {
         match self {
-            VideoField::DisplayMode => {
-                video.display_mode = step(&DisplayMode::ALL, video.display_mode, dir);
-            }
-            // Nothing to pick while borderless: the monitor decides.
-            VideoField::Resolution if video.display_mode == DisplayMode::BorderlessFullscreen => {}
-            VideoField::Resolution => {
-                let options: Vec<Option<(u32, u32)>> = std::iter::once(None)
-                    .chain(resolutions.iter().copied().map(Some))
-                    .collect();
-                video.resolution = step(&options, video.resolution, dir);
-            }
+            VideoField::DisplayMode => staged.step_mode(dir),
+            VideoField::Resolution => staged.step_resolution(resolutions, dir),
             VideoField::Vsync => video.vsync = !video.vsync,
             VideoField::FpsCap => video.fps_cap = step(&FPS_CAPS, video.fps_cap, dir),
             VideoField::Preset => video.set_preset(step(&QualityPreset::ALL, video.preset, dir)),
@@ -144,20 +145,20 @@ pub(super) fn spawn_video_tab(
             icon,
             row,
             PICKER_WIDTH,
-            &field.value(&video.0),
+            &field.value(&video.0, &video.0.display()),
         );
         commands.entity(value).insert(FieldValue(field));
         for (arrow, dir) in [(left, -1), (right, 1)] {
             commands.entity(arrow).observe(
                 move |_: On<Activate>,
                       mut video: ResMut<ActiveVideo>,
-                      pending: Option<Res<PendingRevert>>,
-                      monitor: CurrentMonitor,
-                      mut commands: Commands| {
-                    let resolutions = monitor.resolutions();
-                    change_display(&mut video, pending.as_deref(), &mut commands, |video| {
-                        field.step(video, &resolutions, dir);
-                    });
+                      mut staged: ResMut<StagedDisplay>,
+                      monitor: CurrentMonitor| {
+                    let mut edited = video.0.clone();
+                    let mut picked = staged.0;
+                    field.step(&mut edited, &mut picked, &monitor.resolutions(), dir);
+                    video.set_if_neq(ActiveVideo(edited));
+                    staged.set_if_neq(StagedDisplay(picked));
                 },
             );
         }
@@ -173,7 +174,12 @@ pub(super) fn spawn_video_tab(
 }
 
 /// The "Keep these settings?" row, under the tab bar.
-pub(super) fn spawn_revert_prompt(commands: &mut Commands, fonts: &UiFonts, panel: Entity) {
+pub(super) fn spawn_revert_prompt(
+    commands: &mut Commands,
+    fonts: &UiFonts,
+    panel: Entity,
+    origin: Origin,
+) {
     let row = commands
         .spawn((
             ChildOf(panel),
@@ -195,35 +201,65 @@ pub(super) fn spawn_revert_prompt(commands: &mut Commands, fonts: &UiFonts, pane
             ..default()
         },
     ));
+    // KEEP confirms the display and saves everything, as APPLY does without a display change.
     commands
         .spawn((ChildOf(row), compact_button(fonts, "Keep", 110.0, 22.0)))
-        .observe(|_: On<Activate>, mut commands: Commands| {
-            commands.remove_resource::<PendingRevert>();
-        });
+        .observe(
+            move |_: On<Activate>,
+                  mut form: Form,
+                  mut menu: ResMut<NextState<MenuScreen>>,
+                  mut overlay: ResMut<NextState<Overlay>>| {
+                form.commit(true);
+                origin.go_back(&mut menu, &mut overlay);
+            },
+        );
     commands
         .spawn((ChildOf(row), compact_button(fonts, "Revert", 110.0, 22.0)))
         .observe(
             |_: On<Activate>,
              pending: Option<Res<PendingRevert>>,
              mut video: ResMut<ActiveVideo>,
+             mut staged: ResMut<StagedDisplay>,
              mut commands: Commands| {
                 if let Some(pending) = pending {
-                    let mut reverted = video.0.clone();
-                    reverted.set_display(pending.previous);
-                    video.set_if_neq(ActiveVideo(reverted));
+                    video.revert_display(&pending, Some(&mut *staged));
                 }
                 commands.remove_resource::<PendingRevert>();
             },
         );
 }
 
-/// Keeps every picker's text in step with the live video settings.
-pub(super) fn show_values(video: Res<ActiveVideo>, mut values: Query<(&FieldValue, &mut Text)>) {
+/// Keeps every picker's text in step with the video settings, the display mode and resolution
+/// with what is staged.
+pub(super) fn show_values(
+    video: Res<ActiveVideo>,
+    staged: Option<Res<StagedDisplay>>,
+    mut values: Query<(&FieldValue, &mut Text)>,
+) {
+    let Some(staged) = staged else {
+        return;
+    };
     for (field, mut text) in &mut values {
-        let shown = field.0.value(&video.0).to_uppercase();
+        let shown = field.0.value(&video.0, &staged.0).to_uppercase();
         if text.0 != shown {
             text.0 = shown;
         }
+    }
+}
+
+/// Esc while "Keep these settings?" is up reverts, like REVERT. (The Pause menu's Settings also
+/// closes on Esc, which reverts as well.) A rebind in progress takes the Esc first.
+pub(super) fn revert_on_escape(
+    keys: Res<ButtonInput<KeyCode>>,
+    rebinding: Res<Rebinding>,
+    pending: Res<PendingRevert>,
+    mut video: ResMut<ActiveVideo>,
+    mut staged: Option<ResMut<StagedDisplay>>,
+    mut commands: Commands,
+) {
+    if keys.just_pressed(KeyCode::Escape) && !rebinding.active() {
+        video.revert_display(&pending, staged.as_deref_mut());
+        commands.remove_resource::<PendingRevert>();
     }
 }
 
@@ -257,43 +293,78 @@ pub(super) fn show_revert_prompt(
 mod tests {
     use super::*;
     use crate::video::Quality;
-    use bevy::ecs::system::RunSystemOnce;
 
     const MODES: [(u32, u32); 3] = [(1280, 720), (1920, 1080), (2560, 1440)];
 
-    #[test]
-    fn resolution_steps_through_the_monitors_modes_from_current() {
-        let mut video = VideoSettings::default();
-        VideoField::Resolution.step(&mut video, &MODES, 1);
-        assert_eq!(video.resolution, Some((1280, 720)));
-        VideoField::Resolution.step(&mut video, &MODES, 1);
-        assert_eq!(video.resolution, Some((1920, 1080)));
-        VideoField::Resolution.step(&mut video, &MODES, -1);
-        VideoField::Resolution.step(&mut video, &MODES, -1);
-        assert_eq!(video.resolution, None, "back to the window as it is");
-        VideoField::Resolution.step(&mut video, &MODES, -1);
-        assert_eq!(video.resolution, Some((2560, 1440)), "wraps");
+    fn windowed() -> DisplayChoice {
+        VideoSettings::default().display()
     }
 
     #[test]
-    fn borderless_fullscreen_leaves_the_resolution_alone() {
-        let mut video = VideoSettings {
-            display_mode: DisplayMode::BorderlessFullscreen,
+    fn the_display_pickers_change_the_staged_display_and_not_the_live_settings() {
+        let live = VideoSettings::default();
+        for field in [VideoField::DisplayMode, VideoField::Resolution] {
+            let mut video = live.clone();
+            let mut staged = windowed();
+            field.step(&mut video, &mut staged, &MODES, 1);
+            assert_eq!(video, live, "the window keeps its settings until APPLY");
+            assert_ne!(staged, windowed());
+        }
+    }
+
+    #[test]
+    fn the_other_pickers_change_the_live_settings_and_leave_the_staged_display() {
+        for field in [
+            VideoField::Vsync,
+            VideoField::FpsCap,
+            VideoField::Preset,
+            VideoField::Shadows,
+            VideoField::Ssao,
+            VideoField::Bloom,
+            VideoField::AntiAliasing,
+        ] {
+            let mut video = VideoSettings::default();
+            let mut staged = windowed();
+            field.step(&mut video, &mut staged, &MODES, 1);
+            assert_ne!(video, VideoSettings::default(), "{:?}", field.caption());
+            assert_eq!(staged, windowed());
+        }
+    }
+
+    #[test]
+    fn the_pickers_show_the_staged_display() {
+        let video = VideoSettings::default();
+        let staged = DisplayChoice {
+            mode: DisplayMode::ExclusiveFullscreen,
             resolution: Some((1920, 1080)),
-            ..default()
         };
-        VideoField::Resolution.step(&mut video, &MODES, 1);
-        assert_eq!(video.resolution, Some((1920, 1080)));
-        assert_eq!(VideoField::Resolution.value(&video), "Monitor's");
+        assert_eq!(
+            VideoField::DisplayMode.value(&video, &staged),
+            "Exclusive fullscreen"
+        );
+        assert_eq!(VideoField::Resolution.value(&video, &staged), "1920 x 1080");
+    }
+
+    #[test]
+    fn borderless_fullscreen_shows_the_monitors_resolution() {
+        let staged = DisplayChoice {
+            mode: DisplayMode::BorderlessFullscreen,
+            resolution: Some((1920, 1080)),
+        };
+        assert_eq!(
+            VideoField::Resolution.value(&VideoSettings::default(), &staged),
+            "Monitor's"
+        );
     }
 
     #[test]
     fn picking_a_preset_sets_the_quality_and_editing_one_makes_it_custom() {
         let mut video = VideoSettings::default();
-        VideoField::Preset.step(&mut video, &[], 1);
+        let mut staged = windowed();
+        VideoField::Preset.step(&mut video, &mut staged, &[], 1);
         assert_eq!(video.preset, QualityPreset::High);
         assert_eq!(Some(video.quality), QualityPreset::High.quality());
-        VideoField::Bloom.step(&mut video, &[], 1);
+        VideoField::Bloom.step(&mut video, &mut staged, &[], 1);
         assert_eq!(video.preset, QualityPreset::Custom);
         assert_eq!(
             video.quality,
@@ -302,27 +373,5 @@ mod tests {
                 ..QualityPreset::High.quality().unwrap()
             }
         );
-    }
-
-    #[test]
-    fn only_a_display_or_resolution_change_starts_the_prompt() {
-        let mut app = App::new();
-        app.insert_resource(ActiveVideo(VideoSettings::default()));
-        let prompt_after = |field: VideoField, dir: i32, app: &mut App| {
-            app.world_mut()
-                .run_system_once(
-                    move |mut video: ResMut<ActiveVideo>, mut commands: Commands| {
-                        change_display(&mut video, None, &mut commands, |video| {
-                            field.step(video, &MODES, dir);
-                        });
-                    },
-                )
-                .unwrap();
-            app.world().contains_resource::<PendingRevert>()
-        };
-        assert!(!prompt_after(VideoField::Vsync, 1, &mut app));
-        assert!(!prompt_after(VideoField::Shadows, 1, &mut app));
-        assert!(!prompt_after(VideoField::FpsCap, 1, &mut app));
-        assert!(prompt_after(VideoField::Resolution, 1, &mut app));
     }
 }

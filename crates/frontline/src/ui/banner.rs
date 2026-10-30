@@ -56,6 +56,7 @@ pub fn spawn_result_banner(commands: &mut Commands, fonts: &UiFonts, spec: &Bann
                 ..default()
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, BAR_ALPHA)),
+            Pickable::IGNORE,
         ))
         .id();
     let text = |commands: &mut Commands, text: &str, size: f32, color: Color, bold: bool| {
@@ -88,15 +89,18 @@ pub fn spawn_result_banner(commands: &mut Commands, fonts: &UiFonts, spec: &Bann
     );
     let subline = text(commands, spec.subline, subline_size, SUBLINE_COLOR, false);
     let words = commands
-        .spawn(Node {
-            position_type: PositionType::Absolute,
-            width: percent(100.0),
-            height: percent(100.0),
-            flex_direction: FlexDirection::Column,
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            ..default()
-        })
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: percent(100.0),
+                height: percent(100.0),
+                flex_direction: FlexDirection::Column,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            Pickable::IGNORE,
+        ))
         .add_children(&[headline, subline])
         .id();
     commands
@@ -120,6 +124,7 @@ pub fn spawn_result_banner(commands: &mut Commands, fonts: &UiFonts, spec: &Bann
                 ..default()
             },
             GlobalZIndex(spec.z_index),
+            Pickable::IGNORE,
         ))
         .add_children(&[bar, words])
         .id()

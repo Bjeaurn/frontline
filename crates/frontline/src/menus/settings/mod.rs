@@ -1,14 +1,16 @@
 //! Settings, from the main menu or the pause menu, in four tabs:
-//! - Video (`video`): display mode, resolution, vsync, FPS cap, quality, brightness. These apply
-//!   live; a display change asks "Keep these settings?".
+//! - Video (`video`): display mode, resolution, vsync, FPS cap, quality, brightness. All but the
+//!   display mode and resolution apply live; those two wait for APPLY, which then asks "Keep
+//!   these settings?".
 //! - Audio: master volume.
 //! - Controls (`controls`): sensitivity, ADS multiplier, invert Y and the key-rebinding list.
 //! - Gameplay: name, field of view, Auto reload and the CoD4 folder for Homage Map textures
 //!   (docs/adr/0004; CHECK applies it at once so the status line can say what was found).
 //!
 //! All four tabs exist at once (the others are hidden), so what was typed or dragged on one
-//! survives a visit to another. APPLY saves everything (`flow` writes the file) and goes back;
-//! BACK (or Esc) discards, including the live video changes.
+//! survives a visit to another. APPLY saves everything (`flow` writes the file) and goes back,
+//! unless the display mode or resolution changed: then it applies them, asks "Keep these
+//! settings?" and saves on KEEP. BACK (or Esc) discards, including the live video changes.
 
 mod controls;
 mod video;
@@ -27,7 +29,7 @@ use crate::ui::{
     ACCENT, ArrowIcon, TEXT, TEXT_DIM, UiFonts, backdrop, button, compact_button, label, panel,
     slider, text_field, title,
 };
-use crate::video::{ActiveVideo, BRIGHTNESS_RANGE, PendingRevert};
+use crate::video::{ActiveVideo, BRIGHTNESS_RANGE, PendingRevert, StagedDisplay};
 
 const MAX_NAME_CHARS: usize = 24;
 const MAX_PATH_CHARS: usize = 300;
@@ -73,6 +75,7 @@ impl Plugin for SettingsPlugin {
                     apply_brightness,
                     video::show_values,
                     video::show_revert_prompt,
+                    video::revert_on_escape.run_if(resource_exists::<PendingRevert>),
                     controls::show_values,
                     show_auto_reload,
                     controls::capture_rebind.run_if(resource_exists::<Draft>),
@@ -262,6 +265,7 @@ fn leave(
     video.set_if_neq(ActiveVideo(settings.video.clone()));
     rebinding.cancel();
     commands.remove_resource::<PendingRevert>();
+    commands.remove_resource::<StagedDisplay>();
     commands.remove_resource::<Draft>();
 }
 
@@ -274,6 +278,7 @@ fn spawn_settings(
     active_tab: Tab,
     origin: Origin,
 ) {
+    commands.insert_resource(StagedDisplay(video.0.display()));
     commands.insert_resource(Draft {
         invert_y: settings.invert_y,
         auto_reload: settings.auto_reload,
@@ -326,7 +331,7 @@ fn spawn_settings(
                 },
             );
     }
-    video::spawn_revert_prompt(&mut commands, fonts, panel);
+    video::spawn_revert_prompt(&mut commands, fonts, panel, origin);
 
     let tabs = commands
         .spawn((
@@ -415,8 +420,9 @@ fn spawn_settings(
                   mut form: Form,
                   mut menu: ResMut<NextState<MenuScreen>>,
                   mut overlay: ResMut<NextState<Overlay>>| {
-                form.commit(true);
-                origin.go_back(&mut menu, &mut overlay);
+                if form.apply() {
+                    origin.go_back(&mut menu, &mut overlay);
+                }
             },
         );
     commands
@@ -527,7 +533,7 @@ fn spawn_gameplay_tab(
                   mut menu: ResMut<NextState<MenuScreen>>,
                   mut overlay: ResMut<NextState<Overlay>>,
                   mut commands: Commands| {
-                form.commit(true);
+                form.commit(false);
                 match origin {
                     Origin::MainMenu => {
                         commands.insert_resource(RulesOrigin(EditorOrigin::Settings));
@@ -675,20 +681,36 @@ fn apply_brightness(
     }
 }
 
-/// Everything APPLY saves: the text fields, the sliders, the draft and the live video settings.
+/// Everything APPLY saves: the text fields, the sliders, the draft and the video settings (the
+/// staged display is what APPLY puts on the window first).
 #[derive(SystemParam)]
 struct Form<'w, 's> {
     name: Single<'w, 's, &'static EditableText, With<NameField>>,
     cod4_path: Single<'w, 's, &'static EditableText, With<Cod4Field>>,
     sliders: Query<'w, 's, (&'static SettingSlider, &'static SliderValue)>,
     draft: Res<'w, Draft>,
-    video: Res<'w, ActiveVideo>,
+    video: ResMut<'w, ActiveVideo>,
+    staged: Res<'w, StagedDisplay>,
     pending: Option<Res<'w, PendingRevert>>,
     settings: ResMut<'w, Settings>,
     commands: Commands<'w, 's>,
 }
 
 impl Form<'_, '_> {
+    /// APPLY. Puts the staged display on the window; when that changes it, the "Keep these
+    /// settings?" prompt starts and nothing is saved until KEEP. Otherwise writes the screen's
+    /// values into the Settings (with a prompt already up, that keeps its display). True when
+    /// they were saved, so the screen can go back.
+    fn apply(&mut self) -> bool {
+        let staged = self.staged.0;
+        if let Some(prompt) = self.video.apply_display(staged, self.pending.as_deref()) {
+            self.commands.insert_resource(prompt);
+            return false;
+        }
+        self.commit(true);
+        true
+    }
+
     /// Writes the screen's values into the Settings. A display change still waiting for its
     /// "Keep these settings?" is kept when `keep_display`, otherwise left unsaved.
     fn commit(&mut self, keep_display: bool) {
@@ -711,11 +733,9 @@ impl Form<'_, '_> {
         edited.invert_y = self.draft.invert_y;
         edited.auto_reload = self.draft.auto_reload;
         edited.bindings = self.draft.bindings.clone();
-        edited.video = self.video.0.clone();
+        edited.video = self.video.to_save(self.pending.as_deref(), keep_display);
         if keep_display {
             self.commands.remove_resource::<PendingRevert>();
-        } else if let Some(pending) = &self.pending {
-            edited.video.set_display(pending.previous);
         }
         self.settings.set_if_neq(edited);
     }

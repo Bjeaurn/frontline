@@ -529,6 +529,7 @@ fn spawn_blasts(
                 ..default()
             },
             GlobalZIndex(20),
+            Pickable::IGNORE,
             BackgroundColor(Color::srgba(1.0, 0.95, 0.85, 0.9)),
         ));
     }

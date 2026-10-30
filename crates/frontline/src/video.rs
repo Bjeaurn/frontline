@@ -3,9 +3,10 @@
 //! vsync) and a sleep-based frame limiter here, camera and light quality plus brightness in
 //! `atmosphere`. Client/Host only.
 //!
-//! Video changes apply live. A change of display mode or resolution starts a [`PendingRevert`]:
-//! the Settings screen asks "Keep these settings?" and puts the old ones back after
-//! [`KEEP_SECS`] unless they are kept.
+//! Most video changes apply live. The display mode and resolution are only staged in the Video
+//! tab ([`StagedDisplay`]) until APPLY ([`ActiveVideo::apply_display`]), which starts a
+//! [`PendingRevert`]: the Settings screen asks "Keep these settings?" and puts the old ones back
+//! after [`KEEP_SECS`] unless they are kept.
 //!
 //! There is no render scale: Bevy 0.20 has no supported way to render the main pass below the
 //! window size (`MainPassResolutionOverride` is render-world only, meant for DLSS, and leaves
@@ -25,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use crate::flow::Settings;
 
 /// Seconds the "Keep these settings?" prompt waits before reverting.
-pub const KEEP_SECS: f32 = 10.0;
+pub const KEEP_SECS: f32 = 15.0;
 
 /// FPS caps the picker offers; 0 is no cap.
 pub const FPS_CAPS: [u32; 8] = [0, 30, 60, 90, 120, 144, 165, 240];
@@ -215,11 +216,38 @@ impl QualityPreset {
     }
 }
 
-/// The display part of the settings: what the revert prompt puts back.
+/// The display part of the settings: what the pickers stage and the revert prompt puts back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DisplayChoice {
     pub mode: DisplayMode,
     pub resolution: Option<(u32, u32)>,
+}
+
+impl DisplayChoice {
+    /// Moves the display mode `dir` places along the three it offers.
+    pub fn step_mode(&mut self, dir: i32) {
+        self.mode = step(&DisplayMode::ALL, self.mode, dir);
+    }
+
+    /// Moves the resolution `dir` places along "as it is" and the monitor's `resolutions`.
+    /// Nothing to pick while borderless: the monitor decides.
+    pub fn step_resolution(&mut self, resolutions: &[(u32, u32)], dir: i32) {
+        if self.mode == DisplayMode::BorderlessFullscreen {
+            return;
+        }
+        let options: Vec<Option<(u32, u32)>> = std::iter::once(None)
+            .chain(resolutions.iter().copied().map(Some))
+            .collect();
+        self.resolution = step(&options, self.resolution, dir);
+    }
+
+    /// Whether `other` shows differently on the window. Borderless fullscreen always fills the
+    /// monitor, so its resolution doesn't count.
+    pub fn differs_on_screen(&self, other: &DisplayChoice) -> bool {
+        self.mode != other.mode
+            || (self.mode != DisplayMode::BorderlessFullscreen
+                && self.resolution != other.resolution)
+    }
 }
 
 /// Everything in Settings > Video. Loads with defaults for whatever an older settings.ron lacks.
@@ -296,10 +324,59 @@ pub fn step<T: Copy + PartialEq>(options: &[T], current: T, dir: i32) -> T {
     options[(at + dir.signum()).rem_euclid(options.len() as i32) as usize]
 }
 
-/// The video settings in effect. The Settings screen edits them live; APPLY copies them into
+/// The video settings in effect. The Settings screen edits them live, except the display mode
+/// and resolution, which wait in [`StagedDisplay`] until APPLY. APPLY copies them into
 /// `Settings` (which saves them), BACK sets them back to the saved ones.
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct ActiveVideo(pub VideoSettings);
+
+/// The display mode and resolution the Video tab shows: the active ones when Settings opens,
+/// then whatever was picked. Only [`ActiveVideo::apply_display`] puts them on the window.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct StagedDisplay(pub DisplayChoice);
+
+impl ActiveVideo {
+    /// APPLY of the Video tab: makes `staged` the active display. When that changes what the
+    /// window shows, returns the "Keep these settings?" prompt to start; a prompt already up
+    /// keeps the settings from before its first change.
+    pub fn apply_display(
+        &mut self,
+        staged: DisplayChoice,
+        pending: Option<&PendingRevert>,
+    ) -> Option<PendingRevert> {
+        let before = self.0.display();
+        if staged == before {
+            return None;
+        }
+        self.0.set_display(staged);
+        before
+            .differs_on_screen(&staged)
+            .then(|| PendingRevert::begin(pending, before))
+    }
+
+    /// Puts back the display settings the prompt `pending` was keeping, and the pickers with
+    /// them.
+    pub fn revert_display(&mut self, pending: &PendingRevert, staged: Option<&mut StagedDisplay>) {
+        if self.0.display() != pending.previous {
+            self.0.set_display(pending.previous);
+        }
+        if let Some(staged) = staged
+            && staged.0 != pending.previous
+        {
+            staged.0 = pending.previous;
+        }
+    }
+
+    /// The settings to save. A display still waiting for its "Keep these settings?" is left
+    /// out (the saved one stays) unless `keep_display`.
+    pub fn to_save(&self, pending: Option<&PendingRevert>, keep_display: bool) -> VideoSettings {
+        let mut video = self.0.clone();
+        if !keep_display && let Some(pending) = pending {
+            video.set_display(pending.previous);
+        }
+        video
+    }
+}
 
 /// A display change awaiting "Keep these settings?".
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
@@ -390,36 +467,17 @@ impl Plugin for VideoPlugin {
     }
 }
 
-/// Edits the live video settings and, when that changes the display mode or resolution, starts
-/// (or restarts) the "Keep these settings?" prompt.
-pub fn change_display(
-    video: &mut ActiveVideo,
-    pending: Option<&PendingRevert>,
-    commands: &mut Commands,
-    edit: impl FnOnce(&mut VideoSettings),
-) {
-    let before = video.0.display();
-    let mut edited = video.0.clone();
-    edit(&mut edited);
-    let after = edited.display();
-    if edited != video.0 {
-        video.0 = edited;
-    }
-    if after != before {
-        commands.insert_resource(PendingRevert::begin(pending, before));
-    }
-}
-
 /// Puts the old display settings back when nobody answered the prompt in time.
 fn revert_when_time_is_up(
     time: Res<Time<Real>>,
     mut pending: ResMut<PendingRevert>,
     mut video: ResMut<ActiveVideo>,
+    mut staged: Option<ResMut<StagedDisplay>>,
     mut commands: Commands,
 ) {
     if pending.tick(time.delta_secs()) {
         info!("Display settings not kept; going back");
-        video.0.set_display(pending.previous);
+        video.revert_display(&pending, staged.as_deref_mut());
         commands.remove_resource::<PendingRevert>();
     }
 }
@@ -586,19 +644,16 @@ mod tests {
     }
 
     fn display(mode: DisplayMode) -> DisplayChoice {
-        DisplayChoice {
-            mode,
-            resolution: None,
-        }
+        at(mode, None)
     }
 
     #[test]
     fn the_revert_prompt_counts_down_and_expires() {
         let mut prompt = PendingRevert::begin(None, display(DisplayMode::Windowed));
-        assert_eq!(prompt.secs_left(), 10);
-        assert!(!prompt.tick(4.0));
-        assert_eq!(prompt.secs_left(), 6);
-        assert!(!prompt.tick(5.5));
+        assert_eq!(prompt.secs_left(), 15);
+        assert!(!prompt.tick(6.0));
+        assert_eq!(prompt.secs_left(), 9);
+        assert!(!prompt.tick(8.5));
         assert_eq!(prompt.secs_left(), 1);
         assert!(prompt.tick(0.5));
         assert_eq!(prompt.secs_left(), 0);
@@ -610,7 +665,111 @@ mod tests {
         first.tick(7.0);
         let second = PendingRevert::begin(Some(&first), display(DisplayMode::BorderlessFullscreen));
         assert_eq!(second.previous, display(DisplayMode::Windowed));
-        assert_eq!(second.secs_left(), 10);
+        assert_eq!(second.secs_left(), 15);
+    }
+
+    const MODES: [(u32, u32); 3] = [(1280, 720), (1920, 1080), (2560, 1440)];
+
+    fn at(mode: DisplayMode, resolution: Option<(u32, u32)>) -> DisplayChoice {
+        DisplayChoice { mode, resolution }
+    }
+
+    fn active(display: DisplayChoice) -> ActiveVideo {
+        let mut video = VideoSettings::default();
+        video.set_display(display);
+        ActiveVideo(video)
+    }
+
+    #[test]
+    fn resolution_steps_through_the_monitors_modes_from_current() {
+        let mut choice = at(DisplayMode::Windowed, None);
+        choice.step_resolution(&MODES, 1);
+        assert_eq!(choice.resolution, Some((1280, 720)));
+        choice.step_resolution(&MODES, 1);
+        assert_eq!(choice.resolution, Some((1920, 1080)));
+        choice.step_resolution(&MODES, -1);
+        choice.step_resolution(&MODES, -1);
+        assert_eq!(choice.resolution, None, "back to the window as it is");
+        choice.step_resolution(&MODES, -1);
+        assert_eq!(choice.resolution, Some((2560, 1440)), "wraps");
+    }
+
+    #[test]
+    fn borderless_fullscreen_leaves_the_resolution_alone() {
+        let mut choice = at(DisplayMode::BorderlessFullscreen, Some((1920, 1080)));
+        choice.step_resolution(&MODES, 1);
+        assert_eq!(choice.resolution, Some((1920, 1080)));
+        // Its resolution doesn't show on the window either.
+        assert!(!choice.differs_on_screen(&at(DisplayMode::BorderlessFullscreen, None)));
+        assert!(choice.differs_on_screen(&at(DisplayMode::Windowed, Some((1920, 1080)))));
+    }
+
+    #[test]
+    fn applying_changes_the_display_and_starts_a_prompt_for_the_old_one() {
+        let windowed = at(DisplayMode::Windowed, None);
+        let mut video = active(windowed);
+        let wanted = at(DisplayMode::Windowed, Some((1920, 1080)));
+        let prompt = video.apply_display(wanted, None).expect("a prompt");
+        assert_eq!(video.0.display(), wanted);
+        assert_eq!(prompt.previous, windowed);
+        assert_eq!(prompt.secs_left(), 15);
+    }
+
+    #[test]
+    fn applying_what_is_already_active_starts_no_prompt() {
+        let wanted = at(DisplayMode::Windowed, Some((1920, 1080)));
+        let mut video = active(wanted);
+        assert_eq!(video.apply_display(wanted, None), None);
+        // Borderless fills the monitor whatever resolution was staged with it.
+        let mut video = active(at(DisplayMode::BorderlessFullscreen, None));
+        let staged = at(DisplayMode::BorderlessFullscreen, Some((1280, 720)));
+        assert_eq!(video.apply_display(staged, None), None);
+        assert_eq!(video.0.display(), staged, "the pickers can't drift from it");
+    }
+
+    #[test]
+    fn applying_again_during_the_prompt_still_reverts_to_the_first_display() {
+        let windowed = at(DisplayMode::Windowed, None);
+        let mut video = active(windowed);
+        let first = video
+            .apply_display(at(DisplayMode::Windowed, Some((1280, 720))), None)
+            .unwrap();
+        let second = video
+            .apply_display(at(DisplayMode::ExclusiveFullscreen, None), Some(&first))
+            .unwrap();
+        assert_eq!(second.previous, windowed);
+    }
+
+    #[test]
+    fn reverting_restores_the_old_display_and_the_pickers() {
+        let windowed = at(DisplayMode::Windowed, None);
+        let mut video = active(windowed);
+        let prompt = video
+            .apply_display(at(DisplayMode::BorderlessFullscreen, None), None)
+            .unwrap();
+        // The user picks something else while the prompt is up.
+        let mut staged = StagedDisplay(at(DisplayMode::ExclusiveFullscreen, Some((1280, 720))));
+        video.revert_display(&prompt, Some(&mut staged));
+        assert_eq!(video.0.display(), windowed);
+        assert_eq!(staged.0, windowed);
+    }
+
+    #[test]
+    fn only_a_kept_display_is_saved() {
+        let windowed = at(DisplayMode::Windowed, None);
+        let mut video = active(windowed);
+        let wanted = at(DisplayMode::BorderlessFullscreen, None);
+        let prompt = video.apply_display(wanted, None).unwrap();
+        video.0.vsync = false;
+        // Saving while the prompt is up (CHECK, leaving for the rules editor) keeps the old
+        // display; the live settings go along.
+        let saved = video.to_save(Some(&prompt), false);
+        assert_eq!(saved.display(), windowed);
+        assert!(!saved.vsync);
+        // KEEP.
+        assert_eq!(video.to_save(Some(&prompt), true).display(), wanted);
+        // Nothing awaiting an answer.
+        assert_eq!(video.to_save(None, false).display(), wanted);
     }
 
     #[test]

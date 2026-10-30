@@ -616,6 +616,9 @@ struct FlashOverlay;
 #[derive(Component)]
 struct SmokeOverlay;
 
+/// The screen-wide flash and smoke tints. They sit above every menu (`GlobalZIndex` 10), and a UI
+/// node blocks the pointer from everything below it unless it is `Pickable::IGNORE`: without it
+/// the menus in a game (pause, loadout, class editor) got no hover or clicks at all.
 fn spawn_overlays(mut commands: Commands) {
     let full = Node {
         position_type: PositionType::Absolute,
@@ -629,6 +632,7 @@ fn spawn_overlays(mut commands: Commands) {
         FlashOverlay,
         full.clone(),
         GlobalZIndex(18),
+        Pickable::IGNORE,
         BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.0)),
     ));
     commands.spawn((
@@ -637,6 +641,7 @@ fn spawn_overlays(mut commands: Commands) {
         SmokeOverlay,
         full,
         GlobalZIndex(17),
+        Pickable::IGNORE,
         BackgroundColor(Color::srgba(0.66, 0.67, 0.69, 0.0)),
     ));
     // The equipment HUD lives in the ammo cluster (`weapon::EquipmentRows`, rebuilt by `update_hud`).
