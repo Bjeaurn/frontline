@@ -160,12 +160,9 @@ struct ArmEntities {
     grenades: [(GrenadeKind, Entity); 3],
 }
 
-/// The gloves, one mesh per `rig::GLOVE_CURLS` step and hand.
+/// The gloves, one mesh per `rig::glove_index`.
 #[derive(Resource)]
-struct GloveMeshes {
-    right: [Handle<Mesh>; rig::GLOVE_CURLS.len()],
-    left: [Handle<Mesh>; rig::GLOVE_CURLS.len()],
-}
+struct GloveMeshes(Vec<Handle<Mesh>>);
 
 /// The gun root under the viewmodel camera, with its procedural animation state.
 #[derive(Component, Debug)]
@@ -667,10 +664,19 @@ fn spawn_arms(
         .id();
     let glove = materials.add(Furniture::Glove.material(false));
     let sleeve = materials.add(Furniture::Sleeve.material(false));
-    let gloves = GloveMeshes {
-        right: rig::GLOVE_CURLS.map(|curl| meshes.add(rig::glove_mesh(curl, false))),
-        left: rig::GLOVE_CURLS.map(|curl| meshes.add(rig::glove_mesh(curl, true))),
-    };
+    let gloves = GloveMeshes(
+        [false, true]
+            .into_iter()
+            .flat_map(|trigger| {
+                [false, true].into_iter().flat_map(move |left| {
+                    rig::GLOVE_CURLS
+                        .into_iter()
+                        .map(move |curl| (curl, left, trigger))
+                })
+            })
+            .map(|(curl, left, trigger)| meshes.add(rig::glove_mesh(curl, left, trigger)))
+            .collect(),
+    );
     let upper_mesh = meshes.add(rig::upper_arm_mesh());
     let fore_mesh = meshes.add(rig::forearm_mesh());
     let elbow_mesh = meshes.add(rig::elbow_mesh());
@@ -690,7 +696,7 @@ fn spawn_arms(
                     .id()
             };
         LimbEntities {
-            hand: part("Hand", gloves.right[0].clone(), &glove),
+            hand: part("Hand", gloves.0[0].clone(), &glove),
             upper: part("UpperArm", upper_mesh.clone(), &sleeve),
             fore: part("Forearm", fore_mesh.clone(), &sleeve),
             elbow: part("Elbow", elbow_mesh.clone(), &sleeve),
@@ -1082,6 +1088,7 @@ fn blend_pose(a: HandPose, b: HandPose, weight: f32) -> HandPose {
         rotation: a.rotation.slerp(b.rotation, weight),
         left: if weight < 0.5 { a.left } else { b.left },
         curl: a.curl.lerp(b.curl, weight),
+        trigger: if weight < 0.5 { a.trigger } else { b.trigger },
     }
 }
 
@@ -1317,12 +1324,15 @@ fn animate_viewmodel(
             point
         }
     };
-    for (limb, hand, curl, left, arm) in [
+    // A hand that throws lets go of the trigger.
+    let strong_trigger = strong_pose.trigger && throw_weight < 0.5;
+    for (limb, hand, curl, left, trigger, arm) in [
         (
             arms.strong,
             strong,
             strong_curl,
             strong_pose.left,
+            strong_trigger,
             rig::RIGHT_ARM,
         ),
         (
@@ -1330,6 +1340,7 @@ fn animate_viewmodel(
             support,
             support_pose.curl,
             support_pose.left,
+            support_pose.trigger,
             rig::left_arm(),
         ),
     ] {
@@ -1344,13 +1355,8 @@ fn animate_viewmodel(
             *transform = hand_on_screen;
         }
         // The other hand's glove when mirrored.
-        let gloves = if left != mirrored {
-            &gloves.left
-        } else {
-            &gloves.right
-        };
         if let Ok(mut mesh) = glove_meshes.get_mut(limb.hand) {
-            let wanted = &gloves[rig::nearest_curl(curl)];
+            let wanted = &gloves.0[rig::glove_index(curl, left != mirrored, trigger)];
             if mesh.0 != *wanted {
                 mesh.0 = wanted.clone();
             }

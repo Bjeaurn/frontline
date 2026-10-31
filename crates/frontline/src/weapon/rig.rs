@@ -48,13 +48,15 @@ pub fn mirror_solid(transform: Transform) -> Transform {
 /// Where a hand sits in gun space and how it is turned. A hand's own frame: -Z the way the
 /// fingers point, +Y the back of the hand, the thumb on -X for a right hand (a `left` glove is
 /// the mirror image, its thumb on +X). `curl` is how far the fingers close: 0 flat, 1 a fist
-/// round a grip.
+/// round a grip. `trigger`: the index finger is held out along the side of the gun, its pad on
+/// the trigger, and the thumb lies along the side of the receiver.
 #[derive(Clone, Copy, Debug)]
 pub struct HandPose {
     pub position: Vec3,
     pub rotation: Quat,
     pub left: bool,
     pub curl: f32,
+    pub trigger: bool,
 }
 
 impl HandPose {
@@ -73,6 +75,7 @@ impl HandPose {
             rotation: mirror_rotation(self.rotation),
             left: !self.left,
             curl: self.curl,
+            trigger: self.trigger,
         }
     }
 }
@@ -85,6 +88,7 @@ fn right_on_grip(position: Vec3) -> HandPose {
         rotation: Quat::from_rotation_z(-FRAC_PI_2),
         left: false,
         curl: 0.9,
+        trigger: true,
     }
 }
 
@@ -93,16 +97,23 @@ fn left_under(position: Vec3) -> HandPose {
     HandPose {
         position,
         // Tilted so the back of the hand turns down and to the left, into the player's view.
-        rotation: Quat::from_rotation_z(-0.6)
+        // Turned about the vertical so the fingers point forward as well as right and the wrist
+        // runs back to the forearm instead of straight out to the left.
+        rotation: Quat::from_rotation_y(0.6)
+            * Quat::from_rotation_z(-0.6)
             * Quat::from_mat3(&Mat3::from_cols(Vec3::NEG_Z, Vec3::NEG_Y, Vec3::NEG_X)),
         left: true,
         curl: 0.6,
+        trigger: false,
     }
 }
 
 /// Left hand round something vertical (a magazine, a foregrip), its palm to the right.
 fn left_on_grip(position: Vec3) -> HandPose {
-    right_on_grip(mirror_point(position)).mirrored()
+    HandPose {
+        trigger: false,
+        ..right_on_grip(mirror_point(position)).mirrored()
+    }
 }
 
 /// The right hand gripping the knob of a bolt handle at `knob` in gun space, its palm on the
@@ -112,6 +123,7 @@ pub fn bolt_grip(knob: Vec3) -> HandPose {
     let knob = if on_right { knob } else { mirror_point(knob) };
     let mut grip = right_on_grip(knob + Vec3::new(0.028, 0.0, 0.0));
     grip.curl = 0.8;
+    grip.trigger = false;
     if on_right { grip } else { grip.mirrored() }
 }
 
@@ -246,7 +258,7 @@ pub fn gun_rig(model: GunModel) -> GunRig {
             body_top: 0.057,
             barrel_radius: 0.0075,
             bolt: Some(Vec3::new(0.02, 0.045, 0.07)),
-            right: right_on_grip(Vec3::new(0.034, -0.015, 0.105)),
+            right: right_on_grip(Vec3::new(0.033, -0.022, 0.118)),
             left: left_under(Vec3::new(-0.02, 0.012, -0.26)),
             left_mag: left_on_grip(Vec3::new(-0.031, -0.004, -0.021)),
             left_grip: left_on_grip(Vec3::new(-0.03, 0.0, -0.26)),
@@ -300,7 +312,7 @@ pub const RIGHT_ARM: Arm = Arm {
     shoulder: Vec3::new(0.21, -0.27, 0.10),
     upper: 0.34,
     fore: 0.36,
-    pole: Vec3::new(0.6, -1.0, 0.0),
+    pole: Vec3::new(0.7, -0.8, 0.0),
 };
 
 pub fn left_arm() -> Arm {
@@ -380,6 +392,11 @@ pub fn sleeve_end(hand: &Transform) -> Vec3 {
 /// is drawn.
 pub const GLOVE_CURLS: [f32; 4] = [0.35, 0.6, 0.8, 0.95];
 
+/// Index into the glove meshes (`GLOVE_CURLS.len()` per hand and trigger finger).
+pub fn glove_index(curl: f32, left: bool, trigger: bool) -> usize {
+    (usize::from(trigger) * 2 + usize::from(left)) * GLOVE_CURLS.len() + nearest_curl(curl)
+}
+
 pub fn nearest_curl(curl: f32) -> usize {
     (0..GLOVE_CURLS.len())
         .min_by(|a, b| {
@@ -405,7 +422,7 @@ fn block(size: Vec3, centre: Vec3, direction: Vec3) -> Mesh {
 /// A glove: the palm, four fingers of three blocks each, a thumb of two and a cuff at the
 /// wrist (+Z), the fingers curled by `curl` (0 flat, 1 a fist round a grip), in the hand's own
 /// frame (see `HandPose`). `left` mirrors it into a left hand.
-pub fn glove_mesh(curl: f32, left: bool) -> Mesh {
+pub fn glove_mesh(curl: f32, left: bool, trigger: bool) -> Mesh {
     // The palm, a little narrower at the wrist end.
     let mut mesh = block(
         Vec3::new(0.078, 0.031, 0.05),
@@ -446,6 +463,8 @@ pub fn glove_mesh(curl: f32, left: bool) -> Mesh {
             (0.0165, 0.016)
         };
         let mut from = Vec3::new(x, 0.0, -PALM_HALF_LENGTH + 0.002);
+        // A trigger finger stays nearly straight.
+        let curl = if trigger && finger == 0 { 0.15 } else { curl };
         for (&length, bend) in lengths.iter().zip(bends) {
             let angle = bend * curl;
             let direction = Vec3::new(0.0, -angle.sin(), -angle.cos());
@@ -455,8 +474,16 @@ pub fn glove_mesh(curl: f32, left: bool) -> Mesh {
     }
     // Thumb: from the index side of the palm, forward and across.
     let mut from = Vec3::new(-0.036, -0.002, 0.014);
-    let first = Vec3::new(-0.35, -0.2 - 0.25 * curl, -0.9).normalize();
-    let second = Vec3::new(0.1 + 0.2 * curl, -0.3 - 0.5 * curl, -0.9).normalize();
+    let (first, second) = if trigger {
+        // Along the side of the receiver, above the index finger.
+        (Vec3::new(-0.3, 0.05, -0.95), Vec3::new(-0.1, 0.0, -1.0))
+    } else {
+        (
+            Vec3::new(-0.35, -0.2 - 0.25 * curl, -0.9),
+            Vec3::new(0.1 + 0.2 * curl, -0.3 - 0.5 * curl, -0.9),
+        )
+    };
+    let (first, second) = (first.normalize(), second.normalize());
     for (direction, length) in [(first, 0.04), (second, 0.032)] {
         add(bone(from, direction, length, 0.021, 0.019));
         from += direction * length;
@@ -572,7 +599,10 @@ mod tests {
                 let twice = pose.mirrored().mirrored();
                 assert!((twice.position - pose.position).length() < 1e-6);
                 assert!(twice.rotation.dot(pose.rotation).abs() > 0.999_999);
-                assert_eq!((twice.left, twice.curl), (pose.left, pose.curl));
+                assert_eq!(
+                    (twice.left, twice.curl, twice.trigger),
+                    (pose.left, pose.curl, pose.trigger)
+                );
             }
         }
     }
@@ -626,29 +656,47 @@ mod tests {
     fn a_left_glove_is_the_mirror_of_the_right_one_and_still_faces_outwards() {
         use bevy::mesh::VertexAttributeValues;
         for curl in GLOVE_CURLS {
-            let right = glove_mesh(curl, false);
-            let left = glove_mesh(curl, true);
-            assert!(right.count_vertices() > 100);
-            // A mirror reverses the winding: unless it is put right again, a left hand would be
-            // drawn inside out.
-            assert!(winding_agrees_with_normals(&right), "right, curl {curl}");
-            assert!(winding_agrees_with_normals(&left), "left, curl {curl}");
-            let (
-                Some(VertexAttributeValues::Float32x3(r)),
-                Some(VertexAttributeValues::Float32x3(l)),
-            ) = (
-                right.attribute(Mesh::ATTRIBUTE_POSITION),
-                left.attribute(Mesh::ATTRIBUTE_POSITION),
-            )
-            else {
-                panic!("positions");
-            };
-            assert!(
-                r.iter()
-                    .zip(l)
-                    .all(|(r, l)| (Vec3::from(*r) - mirror_point(Vec3::from(*l))).length() < 1e-6)
-            );
+            for trigger in [false, true] {
+                let right = glove_mesh(curl, false, trigger);
+                let left = glove_mesh(curl, true, trigger);
+                assert!(right.count_vertices() > 100);
+                // A mirror reverses the winding: unless it is put right again, a left hand would be
+                // drawn inside out.
+                assert!(winding_agrees_with_normals(&right), "right, curl {curl}");
+                assert!(winding_agrees_with_normals(&left), "left, curl {curl}");
+                let (
+                    Some(VertexAttributeValues::Float32x3(r)),
+                    Some(VertexAttributeValues::Float32x3(l)),
+                ) = (
+                    right.attribute(Mesh::ATTRIBUTE_POSITION),
+                    left.attribute(Mesh::ATTRIBUTE_POSITION),
+                )
+                else {
+                    panic!("positions");
+                };
+                assert!(
+                    r.iter()
+                        .zip(l)
+                        .all(
+                            |(r, l)| (Vec3::from(*r) - mirror_point(Vec3::from(*l))).length()
+                                < 1e-6
+                        )
+                );
+            }
         }
+    }
+
+    #[test]
+    fn every_hand_curl_and_trigger_finger_has_its_own_glove() {
+        let mut seen = std::collections::HashSet::new();
+        for left in [false, true] {
+            for trigger in [false, true] {
+                for curl in GLOVE_CURLS {
+                    assert!(seen.insert(glove_index(curl, left, trigger)));
+                }
+            }
+        }
+        assert_eq!(seen.iter().max(), Some(&(4 * GLOVE_CURLS.len() - 1)));
     }
 
     #[test]
