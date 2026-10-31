@@ -37,7 +37,7 @@ Settings are saved to `<config dir>/frontline/settings.ron`: `~/Library/Applicat
 
 `--map <id>` picks the Map a server (Dedicated, or Host) starts on: `arena` unless given. It's also the Map behind the main menu. An unknown id stops it at startup with the list of Maps. Clients load whatever Map the server names, so they need the same Map files (a client without a Homage Map leaves with an explanation).
 
-`--look <preset>` (dev/test) replaces the Map's own look with a preset from `data/looks.ron` for that run: `overcast_urban`, `desert_dust`, `dawn_cold`, `jungle_humid` or `night_ops`. It applies to the window of a Host; a Dedicated Server accepts it but has nothing to render, and it can't be combined with `--connect`. An unknown preset stops a windowed run at startup with the list.
+`--look <preset>` (dev/test) replaces the Map's own look with a preset from `data/looks.ron` for that run: `overcast_urban`, `desert_dust`, `dawn_cold`, `jungle_humid`, `golden_hour` or `night_ops`. It applies to the window of a Host; a Dedicated Server accepts it but has nothing to render, and it can't be combined with `--connect`. An unknown preset stops a windowed run at startup with the list.
 
 A shipped build needs its `assets/` folder (maps, models, fonts) next to the executable; only the surface textures, faction emblems and rank insignia are compiled in. Under `cargo run` the assets come from `crates/frontline/assets/`.
 

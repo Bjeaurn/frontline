@@ -103,6 +103,27 @@
         sky_clouds: 0.55,
         vignette: 0.5,
     ),
+    // Warm late-afternoon farmland: low gold sun, long shadows, green-tinted fill from the fields,
+    // soft honey haze that thins the far tree lines. Sized to Overgrown (212 m: fog about 1.4x).
+    "golden_hour": (
+        exposure: -0.05,
+        temperature: 0.04,
+        tint: -0.03,
+        saturation: 0.84,
+        contrast: 1.14,
+        fog_color: (0.72, 0.72, 0.58),
+        fog_visibility: 300.0,
+        fog_sun_color: (1.0, 0.80, 0.48, 0.38),
+        sun_color: (1.0, 0.84, 0.60),
+        sun_illuminance: 13500.0,
+        sun_direction: (0.62, -0.46, 0.30),
+        ambient_color: (0.60, 0.72, 0.80),
+        ambient_ground: (0.40, 0.42, 0.22),
+        ambient_brightness: 520.0,
+        sky_zenith: (0.32, 0.54, 0.78),
+        sky_clouds: 0.3,
+        vignette: 0.5,
+    ),
     // Moonlit night: a clear blue cast throughout (cold moon, blue fog and sky), lifted enough that
     // players read against the ground at ~30 m, with the Map's warm practical lights on.
     "night_ops": (
