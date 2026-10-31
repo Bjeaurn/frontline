@@ -18,7 +18,7 @@ import math
 import sys
 from pathlib import Path
 
-from kit import MAPS_DIR, Level, door, window
+from kit import BUILDINGS, MAPS_DIR, Level, door, window
 
 OUT = MAPS_DIR / "crossroads.map"
 
@@ -33,6 +33,7 @@ ROOF = 2 * STOREY  # top of the central building's roof slab
 BX = 8.0
 DZ = 10.0  # how much further out the streets and plazas sit than the lanes' ends
 HX, HZ = 46.0, 62.0  # half extents of the playfield
+PLAZA_FENCE = 38.0  # the fence in front of each Team's plaza stands this far from the centre line (z)
 
 
 def central_building(L: Level) -> None:
@@ -60,8 +61,8 @@ def central_building(L: Level) -> None:
         L.wall(wall, "x", -3.2, inner_z0, inner_z1, 0.0, WALL_TOP, 0.3, [door(-5.3, -3.7)])
         L.wall(wall, "x", -3.2, inner_z0, inner_z1, STOREY, ROOF - SLAB, 0.3, [door(-5.3, -3.7)])
         # Divider of each side room, a doorway between its halves.
-        L.wall(wall, "z", 0.0, inner_x0, -3.05, 0.0, WALL_TOP, 0.3, [door(-7.2, -5.6)])
-        L.wall(wall, "z", 0.0, inner_x0, -3.05, STOREY, ROOF - SLAB, 0.3, [door(-7.2, -5.6)])
+        L.wall(wall, "z", 0.0, inner_x0, -3.2, 0.0, WALL_TOP, 0.3, [door(-7.2, -5.6)])
+        L.wall(wall, "z", 0.0, inner_x0, -3.2, STOREY, ROOF - SLAB, 0.3, [door(-7.2, -5.6)])
 
         # Stair ramp up the hall's west side, rising north to the upper floor.
         L.ramp("wood", -3.05, -1.0, 0.4, 6.4, 0.0, STOREY, "-z")
@@ -84,7 +85,7 @@ def central_building(L: Level) -> None:
         # back north up to the roof.
         L.slab_ramp("metal", (11.5, 0.0, -2.0), (11.5, STOREY, 5.0), 1.6)
         L.block("metal", 10.2, 13.9, STOREY - 0.25, STOREY, 5.0, 8.0)
-        L.slab_ramp("metal", (13.3, STOREY, 5.0), (13.3, ROOF, -1.5), 1.6)
+        L.slab_ramp("metal", (13.3, STOREY, 5.0), (13.3, ROOF, -1.5), 1.5)
         L.block("metal", 10.0, 14.1, ROOF - 0.25, ROOF, -4.0, -1.5)
         for px, pz in ((13.7, 7.7), (10.4, 7.7), (13.7, 5.2)):
             L.block("metal", px - 0.1, px + 0.1, 0.0, STOREY - 0.25, pz - 0.1, pz + 0.1)
@@ -92,9 +93,9 @@ def central_building(L: Level) -> None:
 
         # Rails on the landing and the roof landing's open sides.
         L.block("metal", 10.2, 13.9, STOREY, STOREY + 1.0, 7.75, 8.0)
-        L.block("metal", 13.65, 13.9, STOREY, STOREY + 1.0, 5.1, 7.9)
+        L.block("metal", 13.65, 13.9, STOREY, STOREY + 1.0, 5.1, 7.75)
         L.block("metal", 13.9, 14.15, ROOF, ROOF + 1.0, -4.0, -1.5)
-        L.block("metal", 10.0, 14.15, ROOF, ROOF + 1.0, -4.2, -3.95)
+        L.block("metal", 10.0, 14.15, ROOF, ROOF + 1.0, -4.2, -4.0)
 
         # Furniture: counters and desks, rooftop vents.
         L.block("wood", -9.6, -8.2, 0.0, 0.9, -7.6, -5.8)  # counter, NW room
@@ -153,37 +154,56 @@ def blocks(L: Level) -> None:
         L.light(34.5, 3.0, -6.0, intensity=200000.0, reach=9.0)
 
 
+# The perimeter wall stands this far outside the playfield, so the skyline buildings' fronts (at
+# the playfield's edge) are in front of it, never in the same plane: a wall face flush with a
+# model's facade flickers. The floor reaches the wall.
+RECESS = 0.5
+# Where the skyline buildings stand along the north wall (x of the building's origin) and the
+# west wall (z), from `kit.BUILDINGS`; the mirror gives the south and east walls.
+SKYLINE_NORTH = [("Building_Large_2", -34.0), ("Building_Medium_2_001", -12.0), ("Building_Small_1", 8.0), ("Building_Large_2", 32.0)]
+SKYLINE_WEST = [("Building_Small_1", -44.0), ("Building_Large_2", -14.0), ("Building_Medium_2_001", 14.0), ("Building_Medium_2_001", 40.0)]
+
+
+def wall_run(L: Level, axis: str, near: float, far: float, lo: float, hi: float, occupied: list[tuple[float, float]]) -> None:
+    """The perimeter wall between `near` (its playfield face) and `far` along `axis` ("z": a wall
+    running along x), from `lo` to `hi`, except where a skyline building's collision body stands
+    (`occupied` intervals along the wall, which the wall's ends touch)."""
+    cursor = lo
+    for a, b in sorted(occupied) + [(hi, hi)]:
+        if a > cursor:
+            if axis == "z":
+                L.block("brick", cursor, a, 0.0, 14.0, far, near)
+            else:
+                L.block("brick", far, near, 0.0, 14.0, cursor, a)
+        cursor = max(cursor, b)
+
+
 def perimeter(L: Level) -> None:
-    """Tall walls closing the Map, with complete MegaKit buildings on the skyline."""
-    wall = "brick"
-    L.block(wall, -HX - 3, HX + 3, 0.0, 14.0, -HZ - 3, -HZ)  # north
-    L.block(wall, -HX - 3, HX + 3, 0.0, 14.0, HZ, HZ + 3)  # south
-    L.block(wall, -HX - 3, -HX, 0.0, 14.0, -HZ, HZ)  # west
-    L.block(wall, HX, HX + 3, 0.0, 14.0, -HZ, HZ)  # east
-    # Skyline: complete buildings along the north and west edges (the mirror gives the south
-    # and east), fronts on the playable side.
+    """Tall walls closing the Map, with complete MegaKit buildings on the skyline: the walls only
+    fill the gaps between the buildings, whose own bodies (and collision bodies) close the rest."""
+    span = lambda name, c, facing: [c + BUILDINGS[name][0] + 0.25, c + BUILDINGS[name][1] - 0.25] if facing == 0 else [c - BUILDINGS[name][1] + 0.25, c - BUILDINGS[name][0] - 0.25]
+    north = [tuple(span(name, x, 0)) for name, x in SKYLINE_NORTH]
+    west = [tuple(span(name, z, 90)) for name, z in SKYLINE_WEST]
     with L.mirrored():
-        L.building("Building_Large_2", -34.0, -HZ, 0.0)
-        L.building("Building_Medium_2_001", -12.0, -HZ, 0.0)
-        L.building("Building_Small_1", 8.0, -HZ, 0.0)
-        L.building("Building_Large_2", 32.0, -HZ, 0.0)
-        L.building("Building_Small_1", -HX, -44.0, 90.0)
-        L.building("Building_Large_2", -HX, -14.0, 90.0)
-        L.building("Building_Medium_2_001", -HX, 14.0, 90.0)
-        L.building("Building_Medium_2_001", -HX, 40.0, 90.0)
+        wall_run(L, "z", -HZ - RECESS, -HZ - RECESS - 3.0, -HX - RECESS - 3.0, HX + RECESS + 3.0, north)
+        wall_run(L, "x", -HX - RECESS, -HX - RECESS - 3.0, -HZ - RECESS, HZ + RECESS, west)
+        for name, x in SKYLINE_NORTH:
+            L.building(name, x, -HZ, 0.0)
+        for name, z in SKYLINE_WEST:
+            L.building(name, -HX, z, 90.0)
 
 
 def street(L: Level) -> None:
     """Ground, asphalt tiles, road markings and street furniture."""
-    L.floor("concrete", -HX, HX, -HZ, HZ, 0.0)
+    L.floor("concrete", -HX - RECESS, HX + RECESS, -HZ - RECESS, HZ + RECESS, 0.0)
     asphalt = "Street_Asphalt_6x6"
     # The tile's base is its surface: 1 cm over the floor, decals 1 cm over the tile.
     for i in range(15):  # the north and south streets
         for z in (-40.0 - DZ, -34.0 - DZ, 34.0 + DZ, 40.0 + DZ):
             L.prop(asphalt, -42.0 + 6.0 * i, z, 0.0, 0.01)
-    for x in (-27.0, -21.0, -15.0, 15.0, 21.0, 27.0):  # the lanes
-        for j in range(14):
-            L.prop(asphalt, x, -39.0 + 6.0 * j, 0.0, 0.01)
+    for x in (-27.0, -21.0, -15.0, 15.0, 21.0, 27.0):  # the lanes, a 2 m kerb short of the streets' tiles
+        for j in range(13):
+            L.prop(asphalt, x, -36.0 + 6.0 * j, 0.0, 0.01)
     with L.mirrored():
         for i in range(15):
             L.prop("Decal_DoubleYellow_Straight", -42.0 + 6.0 * i, -37.0 - DZ, 0.0, 0.02)
@@ -202,9 +222,56 @@ def street(L: Level) -> None:
             L.prop("Prop_Bollard", x, -12.5, 0.0, 0.0, "box")
 
 
+def fences(L: Level) -> None:
+    """Open chain-link lattices (sight and shots pass through, bodies do not) that funnel play:
+    a line across the Map in front of each Team's plaza with a gate to each lane and one to the
+    centre, and a fence round the hall's yard. Gates are 3 m or wider; the 1 m low sections can
+    be vaulted. Point-symmetric, like everything else."""
+    with L.mirrored():
+        L.fence(
+            "z", -PLAZA_FENCE, -HX - 0.25, HX + 0.25, "link",
+            gaps=[(-23.0, -18.0), (-4.0, 4.0), (18.0, 23.0)],
+            lows=[(-37.0, -34.0), (-13.0, -10.0), (10.0, 13.0), (34.0, 37.0)],
+        )
+    # The hall's yard.
+    L.fence_rect(
+        -17.0, 17.0, -15.0, 15.0, "link",
+        north=[(-13.0, -9.0), (9.0, 13.0)],
+        south=[(-13.0, -9.0), (9.0, 13.0)],
+        west=[(-10.0, -6.0), (6.0, 10.0)],
+        east=[(-10.0, -6.0), (6.0, 10.0)],
+        lows={"north": [(-2.0, 2.0)], "south": [(-2.0, 2.0)], "west": [(-3.0, 0.0)], "east": [(0.0, 3.0)]},
+    )
+
+
+def shops(L: Level) -> None:
+    """A one-storey shop at the north end of the west lane (and, turned about, one at the south
+    end of the east lane): a door and windows on every side but the west, a flat roof reached by
+    a two-crate stack at the west wall (1.2 m, then 1.0 m, then 1.4 m up to the roof: each step
+    within the 1.6 m mantle), and a parapet on its north and east edges."""
+    wall = "brick"
+    x0, x1, z0, z1 = -29.0, -19.0, -29.0, -22.0
+    t = 0.4
+    with L.mirrored():
+        L.wall(wall, "z", z0 + t / 2, x0, x1, 0.0, WALL_TOP, t, [window(-27.6, -26.1), door(-23.8, -22.0), window(-20.8, -19.8)])
+        L.wall(wall, "z", z1 - t / 2, x0, x1, 0.0, WALL_TOP, t, [door(-27.4, -25.6), window(-23.0, -21.4)])
+        L.wall(wall, "x", x0 + t / 2, z0 + t, z1 - t, 0.0, WALL_TOP, t)
+        L.wall(wall, "x", x1 - t / 2, z0 + t, z1 - t, 0.0, WALL_TOP, t, [door(-26.7, -24.9), window(-24.0, -22.9)])
+        L.block("concrete", x0, x1, WALL_TOP, STOREY, z0, z1)
+        L.wall("concrete", "z", z0 + 0.15, x0, x1, STOREY, STOREY + 0.9, 0.3)
+        L.wall("concrete", "x", x1 - 0.15, z0 + 0.3, z1, STOREY, STOREY + 0.9, 0.3)
+        L.block("wood", -28.6, -26.4, 0.0, 0.9, -26.4, -25.6)  # counter
+        L.block("metal", -21.2, -19.6, 0.0, 1.8, -27.4, -26.4)  # shelving
+        L.light(-24.0, 2.8, -25.5, intensity=200000.0, reach=9.0)
+        # The stack that makes the roof a trick-jump route.
+        L.crate(-29.6, -26.5, 1.2)
+        L.crate(-29.6, -26.5, 1.0, y=1.2)
+
+
 def cover(L: Level) -> None:
-    """Vehicles and barriers: the cover that breaks the long sightlines. Everything here is the
-    north half (the mirror makes the south half)."""
+    """Vehicles, containers and barriers: the cover that breaks the long sightlines, kept clear
+    of the fences, the shops and the gates. Everything here is the north half (the mirror makes
+    the south half)."""
     with L.mirrored():
         # North street and Alpha's plaza, DZ further out than the lanes' ends.
         with L.shifted(0.0, -DZ):
@@ -230,50 +297,51 @@ def cover(L: Level) -> None:
             L.crate(-38.0, -48.0, 1.2)
             L.jersey(-6.0, -30.0, 0.0, 3.0)
             L.jersey(6.0, -29.0, 0.0, 3.0)
-        # The lanes' far ends and the central plaza in front of the hall (z -42..-30).
-        L.van(-22.0, -36.0, math.pi / 2)
-        L.jersey(-28.0, -40.0, 0.0, 3.0)
-        L.car(-14.0, -38.0, 0.4, "corrugated")
-        L.crate(-30.0, -34.0, 1.2)
-        L.crate(-28.7, -34.2, 1.0)
-        L.car(24.0, -37.0, math.pi / 2)
-        L.jersey(16.0, -34.0, 0.0, 3.0)
-        L.dumpster(30.0, -40.0, 0.0)
+        # In front of the plaza fence's gates: screens, so a gate is not a shooting gallery.
+        L.jersey(-28.0, -40.5, 0.0, 3.0)
+        L.dumpster(-14.0, -41.0, 0.0)
         L.van(20.0, -42.0, 0.0, "metal")
-        L.jersey(-4.0, -36.0, 0.0, 3.0)
+        L.dumpster(30.0, -40.0, 0.0)
         L.jersey(5.0, -41.0, 0.0, 3.0)
-        L.crate(0.0, -32.0, 1.2)
-        # North half of the central plaza, in front of the hall.
+        L.jersey(-5.0, -41.0, 0.0, 3.0)
+        # Between the plaza fence and the hall: a container wall on each side of the centre
+        # corridor (a 4 m crossing in the middle of each), and the crates and van in it.
+        for x in (-13.0, 13.0):
+            L.container(x, -31.0, math.pi / 2)
+            L.container(x, -21.0, math.pi / 2)
+        L.crate(-14.8, -31.0, 1.2)  # against a container: crate, then container (a trick-jump route)
+        L.crate(14.8, -21.0, 1.2)
         L.van(-5.0, -22.0, 0.0)
-        L.car(7.5, -15.5, 0.0)
+        L.car(7.0, -22.0, 0.0)
+        L.crate(0.0, -32.0, 1.2)
         L.crate(0.0, -26.0, 1.2)
         L.crate(1.3, -26.2, 1.0)
-        # West lane, north end: a van across the lane, barriers at its mouth, crates and a car.
+        L.jersey(-4.0, -35.5, 0.0, 3.0)
+        # The hall's yard: low cover by the fence's gates.
+        L.crate(-8.0, -11.5, 1.2)
+        L.crate(6.0, -11.5, 1.0)
+        # West lane, north end.
+        L.crate(-30.0, -34.0, 1.2)
+        L.crate(-28.7, -34.2, 1.0)
         L.van(-18.0, -19.0, math.pi / 2)
-        L.jersey(-14.0, -26.0, math.pi / 2, 3.0)
         L.car(-28.0, -14.0, 0.3)
-        L.crate(-30.0, -28.0, 1.2)
-        L.crate(-28.7, -28.2, 1.0)
-        L.dumpster(-12.0, -31.0, 0.0)
         L.jersey(-24.0, -10.5, 0.0, 3.0)
         L.jersey(-27.0, -10.5, 0.0, 3.0)
         # West lane, middle: a van across its middle, barriers, crates.
-        L.van(-20.0, 2.0, 0.0)
+        L.van(-24.0, 2.0, 0.0)
         L.jersey(-26.0, 6.0, math.pi / 2, 3.0)
-        L.jersey(-14.0, -5.5, math.pi / 2, 3.0)
+        L.jersey(-20.0, -5.5, math.pi / 2, 3.0)
         L.crate(-27.0, -6.0, 1.2)
         L.crate(-27.0, -4.8, 1.0)
         # East lane, north end (and the west lane's south end by the mirror).
-        L.car(14.0, -19.0, math.pi / 2)
         L.van(26.0, -26.0, 0.0, "metal")
         L.jersey(28.0, -16.0, math.pi / 2, 3.0)
         L.dumpster(30.0, -30.0, 0.0)
         L.crate(18.0, -30.0, 1.2)
         L.crate(19.3, -30.2, 1.0)
-        L.car(14.0, -27.0, 0.2, "corrugated")
+        L.car(21.0, -33.5, 0.2, "corrugated")
         L.jersey(26.0, -9.0, 0.0, 3.0)
-        L.crate(12.0, -10.0, 1.2)
-        for x, z in ((-42.0, -41.0), (-22.0, -41.0), (-12.0, -18.0), (12.0, -26.0), (-30.0, -8.0), (30.0, -41.0), (-6.0, -57.0)):
+        for x, z in ((-42.0, -41.0), (-22.0, -41.0), (-15.0, -18.0), (9.0, -26.0), (-30.0, -8.0), (30.0, -41.0), (-6.0, -57.0)):
             L.lamp(x, z)
 
 
@@ -337,17 +405,28 @@ def build() -> Level:
     central_building(L)
     with L.shifted(BX, 0.0):
         blocks(L)
+    fences(L)
+    shops(L)
     cover(L)
     dress(L)
     entities(L)
     return L
 
 
+# The trick-jump routes: the (x, z) of each ledge in climbing order (a third number picks the
+# top below it, for a stack). Each step may rise at most the mantle height (kit.MANTLE_MAX).
+CLIMBS = {
+    "west shop: crate, crate, roof": [(-31.5, -26.5), (-29.6, -26.5, 1.3), (-29.6, -26.5, 2.3), (-28.8, -26.5)],
+    "west container wall: crate, container": [(-16.5, -31.0), (-14.8, -31.0, 1.3), (-13.0, -31.0)],
+    "east container wall: crate, container": [(16.5, -21.0), (14.8, -21.0, 1.3), (13.0, -21.0)],
+}
+
+
 if __name__ == "__main__":
     level = build()
     level.write(OUT)
     if "--check" in sys.argv:
-        from kit import check_walkability
+        from kit import check_walkability, climb_problems, fence_conflicts, placement_problems
 
         starts = [(0.0, -58.0), (0.0, 58.0)]
         goals = {
@@ -366,7 +445,12 @@ if __name__ == "__main__":
             (0.0, -58.0), goals["flag A"], goals["HQ E"], goals["bomb B"], goals["flag B"], goals["hall 2F"],
             goals["roof"], goals["HQ W"], goals["flag C"], goals["bomb A"], (0.0, 58.0),
         ]
-        check_walkability(
+        walks = check_walkability(
             level, (-HX - 1, HX + 1, -HZ - 1, HZ + 1), starts, goals, image=Path("/tmp/crossroads_nav.ppm"), tour=tour,
             route_out=Path("/tmp/crossroads.route"), walk_range=(110.0, 140.0),
         )
+        problems = placement_problems(level) + climb_problems(level, CLIMBS) + fence_conflicts(level)
+        for line in problems:
+            print("  PROBLEM: " + line)
+        print("check: " + ("ok" if walks and not problems else "FAILED"))
+        sys.exit(0 if walks and not problems else 1)

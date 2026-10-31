@@ -48,6 +48,12 @@ VAULT_SILL = 0.9
 VAULT_HEAD = 2.3
 VAULT_MIN_WIDTH = 1.0
 
+# Fences (`Level.fence`): heights per kind, the 1 m low sections a player can vault, and the
+# narrowest gate.
+FENCE_HEIGHT = {"link": 2.4, "slat": 1.9}
+LOW_FENCE = 1.0
+GATE_MIN = 3.0
+
 
 def window(a: float, b: float) -> tuple[float, float, float, float]:
     """A vaultable window gap from `a` to `b` (at least `VAULT_MIN_WIDTH` wide) along a wall,
@@ -84,6 +90,10 @@ class Level:
         self.props: list[tuple[str, float, float, float, tuple[Vec3, Vec3] | None]] = []
         self._bounds = model_bounds(models)
         self._mirror = False
+        # Indices into `solids` that are fence stand-ins: see-through (sight and shots pass).
+        self.fenced: list[int] = []
+        self.fence_bars: set[int] = set()  # the lattice's own thin bars in `solids`
+        self.fence_metres = 0.0
         self._dx = self._dz = 0.0
 
     @contextmanager
@@ -375,9 +385,113 @@ class Level:
 
     def lamp(self, x: float, z: float, height: float = 5.5) -> None:
         """A street lamp: a thin pole (it blocks movement but hardly any view) and an arm."""
-        self.block("metal", x - 0.1, x + 0.1, 0.0, height, z - 0.1, z + 0.1)
-        self.block("metal", x - 0.1, x + 0.9, height - 0.2, height, z - 0.1, z + 0.1)
+        # The pole stops where the arm begins and the arm is a hair narrower, so no two faces
+        # share a plane (they would flicker).
+        self.block("metal", x - 0.1, x + 0.1, 0.0, height - 0.2, z - 0.1, z + 0.1)
+        self.block("metal", x - 0.1, x + 0.9, height - 0.2, height, z - 0.06, z + 0.06)
         self.light(x + 0.8, height - 0.5, z, color="1 0.78 0.45", intensity=500000.0, reach=22.0, practical=True)
+
+    # ---- fences ----------------------------------------------------------------------------
+
+    def _bar(self, surface: str, axis: str, c: float, a0: float, a1: float, y0: float, y1: float, t: float) -> None:
+        """A thin brush along a fence line: `axis` "x" is a fence in the plane x = c running
+        along z, "z" one in the plane z = c running along x."""
+        if axis == "x":
+            self.block(surface, c - t / 2, c + t / 2, y0, y1, a0, a1)
+        else:
+            self.block(surface, a0, a1, y0, y1, c - t / 2, c + t / 2)
+
+    def _fence_piece(self, axis: str, c: float, a0: float, a1: float, kind: str, h: float) -> None:
+        """One open lattice run. Every bar thickness differs from the ones it crosses, so no two
+        faces share a plane (see tools/mapgen/lint.py): posts 0.14, top rail 0.12, bottom rail
+        0.10, wires 0.04, uprights 0.05, boards 0.06."""
+        length = a1 - a0
+        low = h <= LOW_FENCE + 1e-6
+        surface = "metal" if kind == "link" else "wood"
+        posts = max(1, math.ceil(length / 2.6))
+        for i in range(posts + 1):
+            a = a0 + 0.07 + (length - 0.14) * i / posts
+            self._bar(surface, axis, c, a - 0.07, a + 0.07, 0.0, h - 0.12 if low else h + 0.1, 0.14)
+        # Everything that runs between the posts stops half a post inside them, so no end face
+        # shares a plane with a post's.
+        r0, r1 = a0 + 0.07, a1 - 0.07
+        self._bar(surface, axis, c, r0, r1, h - 0.12, h, 0.12)  # the top rail, what a vault lands on
+        if kind == "link":
+            self._bar(surface, axis, c, r0, r1, 0.0, 0.06, 0.10)
+            for f in (0.5,) if low else (1 / 3, 2 / 3):
+                self._bar(surface, axis, c, r0, r1, h * f - 0.025, h * f + 0.025, 0.04)
+            count = max(1, round(length / 0.5))  # uprights every ~0.5 m: gaps of ~0.45 m
+            for i in range(count):
+                a = a0 + (i + 0.5) * length / count
+                self._bar(surface, axis, c, a - 0.025, a + 0.025, 0.06, h - 0.12, 0.05)
+        else:
+            y = 0.0
+            while y + 0.16 <= h - 0.12 + 1e-6:  # boards 0.16 high with 0.14 gaps
+                self._bar(surface, axis, c, r0, r1, y, y + 0.16, 0.06)
+                y += 0.30
+
+    def _stand_in(self, axis: str, c: float, a0: float, a1: float, h: float) -> None:
+        """The checker's stand-in for a fence run: a solid 0.4 m thick, so its 0.25 m grid always
+        sees it. It is only in `solids` (and `fenced`), never in the Map."""
+        if axis == "x":
+            x0, x1, z0, z1 = c - 0.2, c + 0.2, a0, a1
+        else:
+            x0, x1, z0, z1 = a0, a1, c - 0.2, c + 0.2
+        x0, x1, z0, z1 = x0 + self._dx, x1 + self._dx, z0 + self._dz, z1 + self._dz
+        for s in self._signs():
+            xa, xb = sorted((s * x0, s * x1))
+            za, zb = sorted((s * z0, s * z1))
+            planes = [
+                ((1.0, 0.0, 0.0), xb), ((-1.0, 0.0, 0.0), -xa),
+                ((0.0, 1.0, 0.0), h), ((0.0, -1.0, 0.0), 0.0),
+                ((0.0, 0.0, 1.0), zb), ((0.0, 0.0, -1.0), -za),
+            ]
+            self.fenced.append(len(self.solids))
+            self.solids.append(((xa, 0.0, za), (xb, h, zb), planes))
+
+    def fence(self, axis: str, c: float, a0: float, a1: float, kind: str = "link", gaps=(), lows=()) -> None:
+        """A fence line, an open lattice of thin brushes (shots and sight pass through its
+        gaps, bodies do not), in the plane x = c (`axis` "x", running along z from a0 to a1) or
+        z = c (`axis` "z", running along x). `kind` is "link" (2.4 m, chain link) or "slat" (1.9 m,
+        boards). `gaps` are open gates (at least `GATE_MIN` metres), `lows` are 1 m vaultable
+        sections (at least `VAULT_MIN_WIDTH`), both (from, to) along the line and apart."""
+        cuts = sorted([(g0, g1, "gap") for g0, g1 in gaps] + [(l0, l1, "low") for l0, l1 in lows])
+        pieces = []
+        cursor = a0
+        for g0, g1, what in cuts:
+            assert cursor <= g0 < g1 <= a1, ("bad fence gap", axis, c, g0, g1)
+            assert what == "low" or g1 - g0 >= GATE_MIN, ("gate under 3 m", axis, c, g0, g1)
+            assert what == "gap" or g1 - g0 >= VAULT_MIN_WIDTH, ("vault section under 1 m", axis, c, g0, g1)
+            if g0 > cursor:
+                pieces.append((cursor, g0, False))
+            if what == "low":
+                pieces.append((g0, g1, True))
+            cursor = g1
+        if cursor < a1:
+            pieces.append((cursor, a1, False))
+        for p0, p1, low in pieces:
+            h = LOW_FENCE if low else FENCE_HEIGHT[kind]
+            start = len(self.solids)
+            self._fence_piece(axis, c, p0, p1, kind, h)
+            self.fence_bars.update(range(start, len(self.solids)))
+            self._stand_in(axis, c, p0, p1, h)
+            self.fence_metres += (p1 - p0) * len(self._signs())
+
+    def fence_rect(self, x0: float, x1: float, z0: float, z1: float, kind: str = "link", north=(), south=(), west=(), east=(), lows=None) -> None:
+        """A fenced rectangle: each side with its gates (`north` is the side on z0, `west` the
+        one on x0). `lows` maps a side name to its vaultable sections. The east and west runs
+        stop a post's half-width short of the corners, where the north and south runs have their
+        corner posts."""
+        lows = lows or {}
+        self.fence("z", z0, x0, x1, kind, north, lows.get("north", ()))
+        self.fence("z", z1, x0, x1, kind, south, lows.get("south", ()))
+        self.fence("x", x0, z0 + 0.14, z1 - 0.14, kind, west, lows.get("west", ()))
+        self.fence("x", x1, z0 + 0.14, z1 - 0.14, kind, east, lows.get("east", ()))
+
+    def container(self, x: float, z: float, yaw: float = 0.0) -> None:
+        """A shipping container blockout, 6.0 x 2.4 m, 2.6 m tall, long axis along x at yaw 0:
+        solid cover that stops sight and shots, and a 2.6 m ledge nobody mantles from the ground."""
+        self.turned("corrugated", x, 1.3, z, 6.0, 2.6, 2.4, yaw)
 
     def dumpster(self, x: float, z: float, yaw: float = 0.0) -> None:
         self.turned("metal", x, 0.65, z, 2.0, 1.3, 1.2, yaw)
@@ -887,3 +1001,119 @@ def _write_route(nodes, by_cell, neighbours, nearest, tour, route_out: Path, x0:
         previous = node
     route_out.write_text("".join(f"{x:.2f} {y:.2f} {z:.2f}\n" for x, y, z in lines))
     print(f"  route: {len(lines)} waypoints -> {route_out}")
+
+
+# ---- placement, sight and climb checks -------------------------------------------------------
+
+MANTLE_MAX = 1.6  # the highest ledge a body mantles (data/movement.ron)
+
+
+def inside_solid(level: Level, x: float, z: float) -> bool:
+    """Whether a standing body at (x, z) on the floor would overlap a brush (fences too)."""
+    for lo, hi, planes in level.solids:
+        if not (lo[0] - 0.3 <= x <= hi[0] + 0.3 and lo[2] - 0.3 <= z <= hi[2] + 0.3 and lo[1] < 1.7 and hi[1] > 0.05):
+            continue
+        for y in (0.3, 1.0, 1.6):
+            if all(n[0] * x + n[1] * y + n[2] * z <= d + 1e-6 for n, d in planes):
+                return True
+    return False
+
+
+def sees(level: Level, a: tuple[float, float], b: tuple[float, float], eye: float) -> bool:
+    """Whether a ray at height `eye` from a to b misses every brush but the fences (which do not
+    block sight): true when the two points can see each other."""
+    fenced = set(level.fenced)
+    ax, az = a
+    dx, dz = b[0] - ax, b[1] - az
+    for index, (lo, hi, planes) in enumerate(level.solids):
+        if index in fenced or not lo[1] <= eye <= hi[1]:
+            continue
+        if max(ax, b[0]) < lo[0] or min(ax, b[0]) > hi[0] or max(az, b[1]) < lo[2] or min(az, b[1]) > hi[2]:
+            continue
+        t0, t1 = 0.0, 1.0
+        for n, d in planes:
+            num = d - (n[0] * ax + n[1] * eye + n[2] * az)
+            den = n[0] * dx + n[2] * dz
+            if abs(den) < 1e-12:
+                if num < 0:
+                    t0, t1 = 1.0, 0.0
+                    break
+            elif den > 0:
+                t1 = min(t1, num / den)
+            else:
+                t0 = max(t0, num / den)
+            if t0 >= t1:
+                break
+        if t0 < t1 - 1e-9:
+            return False
+    return True
+
+
+def top_at(level: Level, x: float, z: float, below: float = 99.0) -> float:
+    """Height of the highest brush top under (x, z) that is no higher than `below` (0 if none)."""
+    best = 0.0
+    for lo, hi, planes in level.solids:
+        if hi[1] > below + 1e-6 or hi[1] <= best or not (lo[0] <= x <= hi[0] and lo[2] <= z <= hi[2]):
+            continue
+        y = hi[1] - 1e-3
+        if all(n[0] * x + n[1] * y + n[2] * z <= d + 1e-6 for n, d in planes):
+            best = hi[1]
+    return best
+
+
+def climb_problems(level: Level, climbs: dict[str, list[tuple[float, ...]]]) -> list[str]:
+    """Trick-jump routes ({name: the (x, z) of each ledge in climbing order}; a third number
+    `below` picks the highest top no higher than it, for things stacked in one spot): prints each one's
+    tops and returns the steps above `MANTLE_MAX`. The flood-fill cannot test these, since a body
+    that stands against a ledge is never "shoulder clear" there."""
+    problems = []
+    for name, points in climbs.items():
+        heights = [top_at(level, *point) for point in points]
+        rises = [b - a for a, b in zip(heights, heights[1:])]
+        bad = [r for r in rises if r > MANTLE_MAX + 1e-6]
+        print(f"  climb {name}: tops {' -> '.join(f'{h:.2f}' for h in heights)} m" + ("" if not bad else f"  TOO HIGH: step {max(bad):.2f} m"))
+        if bad:
+            problems.append(f"climb {name}: a step of {max(bad):.2f} m is above the {MANTLE_MAX} m mantle limit")
+    return problems
+
+
+def placement_problems(level: Level) -> list[str]:
+    """Spawns and objective sites inside a brush, and spawns of the two Teams that see each other
+    (standing or crouched; fences do not block sight). Team Deathmatch's team-less "any" spawns
+    are only counted."""
+    problems = []
+    for team, _, x, z in level.spawns:
+        if inside_solid(level, x, z):
+            problems.append(f"{team} spawn ({x}, {z}) is inside a brush")
+    for classname, sites in level.sites.items():
+        for _, x, _, z in sites:
+            if inside_solid(level, x, z):
+                problems.append(f"{classname} ({x}, {z}) is inside a brush")
+    alpha = [(x, z) for team, _, x, z in level.spawns if team == "alpha"]
+    bravo = [(x, z) for team, _, x, z in level.spawns if team == "bravo"]
+    clear = 0
+    for a in alpha:
+        for b in bravo:
+            for eye in (1.6, 0.9):
+                if sees(level, a, b, eye):
+                    problems.append(f"alpha spawn {a} sees bravo spawn {b} at eye height {eye}")
+                    clear += 1
+    print(f"  spawn sightlines: {len(alpha)} x {len(bravo)} Alpha/Bravo pairs at 2 eye heights, {clear} clear")
+    if level.fence_metres:
+        print(f"  fences: {level.fence_metres:.0f} m of line")
+    return problems
+
+
+def fence_conflicts(level: Level) -> list[str]:
+    """Things standing in a fence: any other brush that overlaps a fence run's footprint (the
+    0.4 m stand-in) by more than a few centimetres. Fences meeting at a corner are fine."""
+    problems = []
+    fenced = set(level.fenced)
+    for f in level.fenced:
+        lo, hi, _ = level.solids[f]
+        for i, (lo2, hi2, _) in enumerate(level.solids):
+            if i in fenced or i in level.fence_bars:
+                continue
+            if all(min(hi[k], hi2[k]) - max(lo[k], lo2[k]) > 0.03 for k in range(3)):
+                problems.append(f"fence x {lo[0]:.1f}..{hi[0]:.1f} z {lo[2]:.1f}..{hi[2]:.1f} is overlapped by a brush x {lo2[0]:.1f}..{hi2[0]:.1f} y {lo2[1]:.1f}..{hi2[1]:.1f} z {lo2[2]:.1f}..{hi2[2]:.1f}")
+    return problems

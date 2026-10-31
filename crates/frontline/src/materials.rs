@@ -210,7 +210,59 @@ pub struct MaterialsPlugin;
 impl Plugin for MaterialsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SurfaceMaterials>()
-            .add_systems(Update, mip_surface_textures);
+            .add_systems(Update, (mip_surface_textures, mip_prop_textures));
+    }
+}
+
+/// The MegaKit's glTF props (the skyline buildings, facades, street tiles) carry JPEG textures
+/// with no mip chain too, so every facade seen from a distance minifies by 4x to 16x without
+/// filtering and sparkles when the camera moves. Each texture a material names gets a chain
+/// (and trilinear, anisotropic sampling) the first time it shows up.
+fn mip_prop_textures(
+    mut events: MessageReader<AssetEvent<StandardMaterial>>,
+    materials: Res<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    for event in events.read() {
+        let (AssetEvent::Added { id } | AssetEvent::LoadedWithDependencies { id }) = *event else {
+            continue;
+        };
+        let Some(material) = materials.get(id) else {
+            continue;
+        };
+        for handle in [
+            &material.base_color_texture,
+            &material.normal_map_texture,
+            &material.metallic_roughness_texture,
+            &material.occlusion_texture,
+            &material.emissive_texture,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let Some(mut image) = images.get_mut(handle.id()) else {
+                continue;
+            };
+            if image.texture_descriptor.mip_level_count != 1 {
+                continue;
+            }
+            generate_mips(&mut image);
+            if image.texture_descriptor.mip_level_count == 1 {
+                continue; // not a format it can mip
+            }
+            match &mut image.sampler {
+                ImageSampler::Descriptor(sampler) => {
+                    sampler.mag_filter = ImageFilterMode::Linear;
+                    sampler.min_filter = ImageFilterMode::Linear;
+                    sampler.mipmap_filter = ImageFilterMode::Linear;
+                    sampler.anisotropy_clamp = 4;
+                }
+                sampler @ ImageSampler::Default => {
+                    *sampler = ImageSampler::Descriptor(repeat_sampler());
+                }
+            }
+            image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+        }
     }
 }
 
@@ -340,5 +392,48 @@ mod tests {
         // 4x2 + 2x1 + 1x1 texels.
         assert_eq!(data.len(), (8 + 2 + 1) * 4);
         assert_eq!(&data[data.len() - 4..], &[255, 0, 128, 255]);
+    }
+
+    #[test]
+    fn prop_textures_get_mips_and_trilinear_sampling() {
+        let mut app = App::new();
+        app.add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<Image>()
+            .init_asset::<StandardMaterial>()
+            .add_systems(Update, mip_prop_textures);
+        let texture = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::new_fill(
+                bevy::render::render_resource::Extent3d {
+                    width: 8,
+                    height: 8,
+                    depth_or_array_layers: 1,
+                },
+                bevy::render::render_resource::TextureDimension::D2,
+                &[200, 100, 50, 255],
+                TextureFormat::Rgba8UnormSrgb,
+                RenderAssetUsages::default(),
+            ));
+        let _material = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial {
+                base_color_texture: Some(texture.clone()),
+                ..default()
+            });
+        // The asset events are written after `Update`, so the system reads them on the next frame.
+        app.update();
+        app.update();
+        let images = app.world().resource::<Assets<Image>>();
+        let image = images.get(&texture).unwrap();
+        assert_eq!(image.texture_descriptor.mip_level_count, 4);
+        match &image.sampler {
+            ImageSampler::Descriptor(sampler) => {
+                assert_eq!(sampler.mipmap_filter, ImageFilterMode::Linear);
+                assert_eq!(sampler.anisotropy_clamp, 4);
+            }
+            ImageSampler::Default => panic!("the sampler should be explicit"),
+        }
     }
 }
