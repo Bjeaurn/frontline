@@ -293,11 +293,13 @@ GitHub Actions (`.github/workflows/`) run on every push to `main` and every pull
 1. **Format:** `cargo fmt --all --check`.
 2. **Clippy and tests:** `cargo clippy --locked --all-targets -- -D warnings`, then `cargo test --locked`, on Linux. The Homage Maps (`content/private/`) are never there: nothing may depend on them.
 
-**Releasing:** bump `version` in `crates/frontline/Cargo.toml`, commit, then push a tag that matches it:
+**Releasing:** bump `version` in `crates/frontline/Cargo.toml`, commit and push to `main`, start the Mac runner (below), then:
 
 ```sh
-git tag v0.2.0 && git push origin v0.2.0
+tools/ci/release.sh v0.2.0
 ```
+
+It checks that the tag matches the crate version, that `main` is clean and pushed, that the Mac runner is online and that there is about 10 GB free for the macOS builds (`--check` only checks), and then tags and pushes. It refuses rather than letting a release hang: the macOS jobs wait for the runner, `timeout-minutes` (120 for a build) only counts once a job has started, and GitHub cancels a job that has waited 24 hours. A run that includes macOS also prints a "Start the Mac runner" warning on its summary page.
 
 The Release workflow runs the checks above on the tagged commit, builds Frontline in release mode for Linux (x86_64), Windows (x86_64) and macOS (Apple silicon and Intel), packs each into `frontline-<tag>-<target>.tar.gz` (`.zip` on Windows) and publishes them in a GitHub release with generated notes. A tag with a suffix (`v0.2.0-rc1`) is marked a pre-release; a tag that doesn't match the crate version fails before building. Run the workflow by hand (Actions > Release > Run workflow) to get the archives as run artifacts without releasing anything; it can build just `macos` or `linux-windows`, and skip the checks.
 
