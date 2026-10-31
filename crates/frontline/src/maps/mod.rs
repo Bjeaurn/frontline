@@ -37,7 +37,9 @@ use bevy_trenchbroom::physics::SceneCollidersReady;
 use bevy_trenchbroom::prelude::*;
 use bevy_trenchbroom::special_textures::SpecialTexturesPlugin;
 
-pub use classes::{BombSite, DomFlag, HqSite, Prop, PropCollider, SpawnPoint, SpawnTeam};
+pub use classes::{
+    AmmoCrate, BombSite, DomFlag, HqSite, Prop, PropCollider, SpawnPoint, SpawnTeam,
+};
 pub use registry::{DEFAULT_MAP, MapId, MapRegistry, private_dir, register_private_source};
 
 use crate::cli::Mode;
@@ -95,6 +97,7 @@ impl Plugin for MapsPlugin {
         .register_type::<DomFlag>()
         .register_type::<HqSite>()
         .register_type::<BombSite>()
+        .register_type::<AmmoCrate>()
         .register_type::<Prop>()
         .add_message::<ChangeMap>()
         .insert_resource(registry)
@@ -449,6 +452,7 @@ fn promote_ready(
     flags: Query<(), With<DomFlag>>,
     hq_sites: Query<(), With<HqSite>>,
     bomb_sites: Query<(), With<BombSite>>,
+    ammo_crates: Query<(), With<AmmoCrate>>,
     props: Query<(), With<Prop>>,
     worldspawns: Query<&classes::Worldspawn>,
     registry: Res<MapRegistry>,
@@ -479,13 +483,14 @@ fn promote_ready(
             .filter(|look| !look.is_empty());
         let name = info.map_or_else(|| root.id.0.clone(), |info| info.name.clone());
         info!(
-            "Map \"{}\" ready: {} spawn points, {} Flags, {} HQ sites, {} bomb sites, {} props, \
-             look {}",
+            "Map \"{}\" ready: {} spawn points, {} Flags, {} HQ sites, {} bomb sites, {} ammo crates, \
+             {} props, look {}",
             root.id,
             spawns.len(),
             count(&|e| flags.contains(e)),
             count(&|e| hq_sites.contains(e)),
             count(&|e| bomb_sites.contains(e)),
+            count(&|e| ammo_crates.contains(e)),
             count(&|e| props.contains(e)),
             look.as_deref().unwrap_or("(default)"),
         );

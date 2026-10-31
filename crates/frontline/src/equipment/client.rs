@@ -1,13 +1,17 @@
-//! Equipment on the client: G throws the lethal, Q the tactical and V fires the underslung
-//! launcher (each a `ThrowGrenade` to the server), the carried count on the HUD, Grenades drawn
-//! where the server says they are, and what a detonation shows: a fireball and bang, a flashbang
-//! that whites out a viewer facing it and deafens, a smoke cloud that greys the view.
+//! Equipment on the client: G throws the lethal and Q the tactical when the key is let go (a
+//! `ThrowGrenade` to the server; the press only readies it), the carried count on the HUD,
+//! Grenades drawn where the server says they are, and what a detonation shows: a fireball and
+//! bang, a flashbang that whites out a viewer facing it and deafens, a smoke cloud that greys
+//! the view. The underslung launcher is a mode of the Primary (`weapon`).
 
 use bevy::asset::AssetPath;
 use bevy::audio::{AudioPlayer, AudioSource, GlobalVolume, PlaybackSettings, Volume};
 use bevy::prelude::*;
 
-use super::{Carried, Effect, Grenade, PouchSlot, depth_in_cloud, flash_alpha, smoke_density};
+use super::{
+    Carried, Effect, Grenade, KeyState, PouchSlot, ReadiedThrow, ThrowFeed, depth_in_cloud,
+    flash_alpha, smoke_density, throw_request,
+};
 use crate::assets::EMBEDDED_ROOT;
 use crate::atmosphere::ActiveLook;
 use crate::data::GameData;
@@ -16,7 +20,7 @@ use crate::net::protocol::{Flashed, GrenadeDetonated, ThrowGrenade};
 use crate::particles::{
     Detail, Fade, ParticleAssets, PuffSpec, Shape, random_unit, spawn_puff, spawn_spark,
 };
-use crate::player::input::{Action, Bindings};
+use crate::player::input::{Action, Binding, Bindings};
 use crate::player::{EyeCamera, LocalLife, MouseCaptured};
 use crate::rear_cue::RearCue;
 use crate::shared::{FromServer, LocalPlayer, PlayerPose, ToServer};
@@ -25,10 +29,6 @@ use crate::video::ActiveVideo;
 use crate::weapon::WeaponRng;
 use crate::weapon::{EquipmentRows, HeldWeapon};
 
-/// A thrown Grenade leaves the hand a little above the aim, so the throw lobs.
-const LOB_PITCH: f32 = 0.14;
-/// How far in front of the eye a Grenade starts, metres.
-const THROW_REACH: f32 = 0.45;
 const BURST_SECS: f32 = 0.55;
 const BURST_SOUND: &str = "sounds/impact.ogg";
 const BANG_SOUND: &str = "sounds/shot_sniper.ogg";
@@ -41,6 +41,7 @@ pub struct EquipmentClientPlugin;
 impl Plugin for EquipmentClientPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FlashState>()
+            .init_resource::<ReadiedThrow>()
             .add_systems(Startup, load_assets)
             .add_observer(show_grenade)
             .add_systems(OnEnter(AppState::InGame), spawn_overlays)
@@ -76,7 +77,8 @@ fn load_assets(mut commands: Commands, assets: Res<AssetServer>) {
     });
 }
 
-/// G / Q / V: throws or launches a Grenade along the aim.
+/// G / Q: pressing readies the lethal / tactical Grenade, letting go throws it along the aim
+/// (`ReadiedThrow`). Dying, opening a menu, switching Weapon or running out cancels it.
 #[allow(clippy::too_many_arguments)]
 fn throw(
     time: Res<Time>,
@@ -85,46 +87,54 @@ fn throw(
     captured: Res<MouseCaptured>,
     life: Res<LocalLife>,
     data: Res<GameData>,
+    mut readied: ResMut<ReadiedThrow>,
     eye: Query<&EyeCamera>,
     mut player: Query<(&PlayerPose, &HeldWeapon, &mut Carried), With<LocalPlayer>>,
     mut throws: MessageWriter<ToServer<ThrowGrenade>>,
 ) {
     let Ok((pose, weapon, mut carried)) = player.single_mut() else {
+        readied.set_if_neq(ReadiedThrow::default());
         return;
     };
     carried.tick(time.delta_secs());
-    if life.is_dead() || !captured.active() || !weapon.can_throw() {
+    let key = |binding: &Binding| KeyState {
+        pressed: binding.just_pressed(&keys),
+        held: binding.pressed(&keys),
+    };
+    let feed = ThrowFeed {
+        lethal: key(&bindings.lethal),
+        tactical: key(&bindings.tactical),
+        lethal_ready: carried.lethal.is_some_and(|pouch| pouch.can_take()),
+        tactical_ready: carried.tactical.is_some_and(|pouch| pouch.can_take()),
+        allowed: !life.is_dead() && captured.active() && weapon.can_throw(),
+    };
+    let Some(slot) = readied.step(&feed) else {
+        return;
+    };
+    let Some(pouch) = carried.pouch_mut(slot) else {
+        return;
+    };
+    let kind = pouch.kind;
+    let tuning = data.grenade(kind);
+    if !pouch.take(tuning) {
         return;
     }
-    let wanted = [
-        (PouchSlot::Lethal, &bindings.lethal, LOB_PITCH),
-        (PouchSlot::Tactical, &bindings.tactical, LOB_PITCH),
-        (PouchSlot::Launcher, &bindings.launcher, 0.0),
-    ];
-    for (slot, binding, lob) in wanted {
-        if !binding.just_pressed(&keys) || (slot == PouchSlot::Launcher && !weapon.is_primary()) {
-            continue;
-        }
-        let Some(pouch) = carried.pouch_mut(slot) else {
-            continue;
-        };
-        let kind = pouch.kind;
-        if !pouch.take(data.grenade(kind)) {
-            continue;
-        }
-        let aim = Quat::from_rotation_y(pose.yaw) * Quat::from_rotation_x(pose.pitch + lob);
-        let direction = aim * Vec3::NEG_Z;
-        let eye_height = eye
-            .single()
-            .map_or(pose.stance.eye_height(), EyeCamera::height);
-        let origin = pose.position + Vec3::Y * eye_height + direction * THROW_REACH;
-        info!("Throwing {kind:?}");
-        throws.write(ToServer(ThrowGrenade {
-            kind,
-            origin,
-            direction,
-        }));
-    }
+    let eye_height = eye
+        .single()
+        .map_or(pose.stance.eye_height(), EyeCamera::height);
+    let request = throw_request(
+        kind,
+        tuning,
+        pose.yaw,
+        pose.pitch,
+        pose.position + Vec3::Y * eye_height,
+    );
+    info!(
+        "Throwing {kind:?} at {:.1} m/s, pitch {:.0} deg",
+        request.speed,
+        pose.pitch.to_degrees()
+    );
+    throws.write(ToServer(request));
 }
 
 /// Dresses a Grenade the server made (or replicated to this client) with its model.
@@ -698,32 +708,43 @@ fn update_screen_effects(
 }
 
 /// The carried equipment as rows above the ammo: a key plate, the name and the count, e.g.
-/// `[G] FRAG GRENADE  x1`.
+/// `[G] FRAG GRENADE  x1`. The Grenade being held ready, or the launcher while it is the mode
+/// the Primary is in, shows its plate lit.
 fn update_hud(
     data: Res<GameData>,
     bindings: Res<Bindings>,
     fonts: Res<UiFonts>,
-    player: Query<&Carried, With<LocalPlayer>>,
+    readied: Res<ReadiedThrow>,
+    player: Query<(&Carried, &HeldWeapon), With<LocalPlayer>>,
     rows: Single<(Entity, Option<&Children>), With<EquipmentRows>>,
-    mut shown: Local<Vec<(String, String, u32)>>,
+    mut shown: Local<Vec<(String, String, u32, bool)>>,
     mut commands: Commands,
 ) {
-    let Ok(carried) = player.single() else {
+    let Ok((carried, weapon)) = player.single() else {
         return;
     };
-    let entry = |action: Action, pouch: Option<super::Pouch>| {
+    let entry = |action: Action, pouch: Option<super::Pouch>, lit: bool| {
         pouch.map(|pouch| {
             (
                 bindings.describe(action).to_uppercase(),
                 data.grenade(pouch.kind).name.to_uppercase(),
                 pouch.left,
+                lit,
             )
         })
     };
-    let now: Vec<(String, String, u32)> = [
-        entry(Action::Lethal, carried.lethal),
-        entry(Action::Tactical, carried.tactical),
-        entry(Action::Launcher, carried.launcher),
+    let now: Vec<(String, String, u32, bool)> = [
+        entry(
+            Action::Lethal,
+            carried.lethal,
+            readied.0 == Some(PouchSlot::Lethal),
+        ),
+        entry(
+            Action::Tactical,
+            carried.tactical,
+            readied.0 == Some(PouchSlot::Tactical),
+        ),
+        entry(Action::Launcher, carried.launcher, weapon.launcher_mode()),
     ]
     .into_iter()
     .flatten()
@@ -736,7 +757,12 @@ fn update_hud(
     for child in children.into_iter().flatten() {
         commands.entity(*child).despawn();
     }
-    for (key, name, left) in &now {
+    for (key, name, left, lit) in &now {
+        let (plate, key_color, name_color) = if *lit {
+            (AMBER, Color::BLACK, AMBER)
+        } else {
+            (Color::srgba(0.0, 0.0, 0.0, 0.4), AMBER, TEXT)
+        };
         commands.spawn((
             ChildOf(root),
             Node {
@@ -754,10 +780,10 @@ fn update_hud(
                         ..default()
                     },
                     BorderColor::all(AMBER),
-                    BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.4)),
-                    children![hud_text(&fonts.bold, key, 14.0, AMBER)],
+                    BackgroundColor(plate),
+                    children![hud_text(&fonts.bold, key, 14.0, key_color)],
                 ),
-                hud_text(&fonts.bold, name, 17.0, TEXT),
+                hud_text(&fonts.bold, name, 17.0, name_color),
                 hud_text(&fonts.display, &format!("{left}"), 20.0, Color::WHITE),
             ],
         ));

@@ -64,13 +64,15 @@ pub struct BombExploded {
 }
 
 /// Client -> server (`ControlChannel`): throw a Grenade of `kind` from `origin` along
-/// `direction` (unit; clients are trusted, docs/adr/0002). The server flies it and applies what
-/// it does where it goes off.
+/// `direction` (unit) at `speed` m/s (clients are trusted, docs/adr/0002, but the server keeps
+/// the speed under the kind's tuning, `GrenadeTuning::speed`). The server flies it and applies
+/// what it does where it goes off.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ThrowGrenade {
     pub kind: GrenadeKind,
     pub origin: Vec3,
     pub direction: Vec3,
+    pub speed: f32,
 }
 
 /// Server -> all clients (`EventChannel`): a Grenade went off at `position`. `radius` and
@@ -221,9 +223,25 @@ pub struct Respawn {
     pub yaw: f32,
 }
 
-/// Server -> the player who walked over an ammo pack with Scavenger: refill your ammo.
+/// Where a refill came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AmmoSource {
+    /// A dead player's ammo pack.
+    Pack,
+    /// The crate at a Domination Flag the player's Team holds.
+    Flag,
+    /// A fixed ammo crate of Team Deathmatch.
+    Crate,
+}
+
+/// Server -> the player who took ammo (`EventChannel`): add `share` of every Weapon's maximum
+/// Reserve. A `share` of 1 or more is the full refill, magazines included. The client keeps the
+/// counts (docs/adr/0002); the server decides who gets what.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AmmoRefill;
+pub struct AmmoRefill {
+    pub share: f32,
+    pub source: AmmoSource,
+}
 
 /// Client -> server (`ControlChannel`): the account Level of the sender's Profile, sent on
 /// joining and on every level-up. The server clamps it into the valid range and keeps it as the

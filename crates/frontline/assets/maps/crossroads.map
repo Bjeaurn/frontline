@@ -6747,3 +6747,33 @@
 "origin" "-196.8504 -1535.4331 0"
 "label" "B"
 }
+// entity 325
+{
+"classname" "ammo_crate"
+"origin" "78.7402 866.1418 0"
+}
+// entity 326
+{
+"classname" "ammo_crate"
+"origin" "-78.7402 -866.1418 0"
+}
+// entity 327
+{
+"classname" "ammo_crate"
+"origin" "787.4016 1181.1024 0"
+}
+// entity 328
+{
+"classname" "ammo_crate"
+"origin" "-787.4016 -1181.1024 0"
+}
+// entity 329
+{
+"classname" "ammo_crate"
+"origin" "-708.6614 -236.2205 0"
+}
+// entity 330
+{
+"classname" "ammo_crate"
+"origin" "708.6614 236.2205 0"
+}

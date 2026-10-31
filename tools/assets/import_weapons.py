@@ -8,6 +8,7 @@ One self-contained `.glb` per piece (textures embedded): the colour map is grade
 darker military palette (the pack's own colours are cartoon bright), every texture is at most
 --max-texture px and re-encoded as JPEG, and the material gets a little metal and gloss (the pack's
 own glTF has none). The pack ships no licence we could verify (docs: assets/models/CREDITS.md).
+The M4 and M16A4 are not from the pack (it has no AR-15): tools/assets/build_rifles.py builds them.
 Reuses tools/assets/import_props.py; needs ImageMagick (`magick`). Python 3 standard library only.
 """
 
@@ -23,7 +24,6 @@ import import_props as ip  # noqa: E402
 
 # (brightness %, saturation %, hue %) for ImageMagick `-modulate`, and (metallic, roughness).
 PIECES = {
-    "ak47": ((105, 60, 100), (0.45, 0.55)),
     "awp": ((70, 40, 100), (0.35, 0.6)),
     "mac10": ((70, 100, 100), (0.6, 0.45)),
     "pew": ((68, 12, 100), (0.2, 0.6)),

@@ -239,9 +239,11 @@ pub struct Bindings {
     pub reload: Binding,
     /// Switch to the Weapon's next fire mode.
     pub fire_mode: Binding,
-    /// Throw the lethal / the tactical equipment, and fire the underslung grenade launcher.
+    /// Hold to ready the lethal / the tactical equipment, let go to throw it.
     pub lethal: Binding,
     pub tactical: Binding,
+    /// Switch the Primary into and out of the underslung grenade launcher (fire it with the
+    /// fire button).
     pub launcher: Binding,
     /// Take the Primary / the Secondary (the mouse wheel switches to the other Weapon).
     pub primary_weapon: Binding,

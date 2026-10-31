@@ -250,7 +250,7 @@ pub struct PerkEffects {
     pub sprint_stamina_mul: f32,
     /// Other players don't hear this player's footsteps.
     pub silent_footsteps: bool,
-    /// Walking over a dead player's ammo pack refills ammo.
+    /// A dead player's ammo pack gives the full refill instead of a share of the Reserve.
     pub scavenger: bool,
 }
 
@@ -291,13 +291,23 @@ pub struct Perk {
     pub effects: PerkEffects,
 }
 
-/// Dropped ammo packs (the Scavenger Perk's pickups).
+/// Dropped ammo packs: anyone walking over one takes a share of their Reserve, a Scavenger the lot.
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 pub struct AmmoPackTuning {
-    /// A Scavenger within this many metres picks a pack up.
+    /// A player within this many metres picks a pack up.
     pub pickup_radius: f32,
     /// Seconds before an untouched pack disappears.
     pub lifetime_secs: f32,
+    /// Fraction of each Weapon's maximum Reserve a pack gives, 0 to 1.
+    pub share: f32,
+}
+
+impl AmmoPackTuning {
+    /// What taking a pack gives (an `AmmoRefill::share`): `share` of every Weapon's maximum Reserve,
+    /// or with Scavenger the full refill (1).
+    pub fn share_for(&self, scavenger: bool) -> f32 {
+        if scavenger { 1.0 } else { self.share }
+    }
 }
 
 /// The Perks a player has equipped. Sent by the client with its Loadout, kept and replicated by
@@ -782,5 +792,32 @@ mod tests {
                 loadout.name
             );
         }
+    }
+
+    #[test]
+    fn an_ammo_pack_gives_everyone_a_share_and_a_scavenger_the_full_refill() {
+        let data = data();
+        let pack = data.ammo_pack;
+        assert_eq!(pack.share_for(false), pack.share);
+        assert_eq!(pack.share_for(true), 1.0);
+        assert!(pack.share < 1.0, "a share is only part of a Reserve");
+
+        // For the M4 a share is about one spare magazine; the full refill is the whole Reserve.
+        let m4 = data.weapon(WeaponId::AssaultRifle);
+        assert_eq!(m4.reserve_share(pack.share_for(false)), m4.magazine);
+        assert_eq!(m4.reserve_share(pack.share_for(true)), m4.reserve_max());
+
+        // Only the Scavenger Perk makes the difference (Perk Greed included).
+        let scavenger = |perks: Perks| data.perk_effects(perks.iter()).scavenger;
+        assert!(scavenger(picks(
+            PerkId::Scavenger,
+            PerkId::StoppingPower,
+            PerkId::Marathon
+        )));
+        assert!(!scavenger(picks(
+            PerkId::SleightOfHand,
+            PerkId::StoppingPower,
+            PerkId::Marathon
+        )));
     }
 }

@@ -15,6 +15,10 @@
 // (a bolt-action, listed alone) fires one round and then needs a rack: `rack_secs_scoped` is the
 // click-to-rack time while aimed (with a `rack_kick_deg` sway kick), `rack_secs_unscoped` the
 // automatic rack once the sights are released.
+// Ammo: besides the magazine in the gun a Weapon carries `reserve_mags` spare magazines (the Reserve,
+// `reserve_mags * magazine` rounds, shown as `30 / 120`); a reload moves rounds from it into the
+// magazine and with the Reserve empty does nothing. Dead players' ammo packs, Domination Flags and
+// Team Deathmatch crates refill it (perks.ron, game_modes.ron); a respawn restores it in full.
 {
     AssaultRifle: (
         name: "M4 (AR)",
@@ -31,6 +35,7 @@
         zone_multipliers: (head: 1.4, upper_torso: 1.0, lower_torso: 1.0, limbs: 0.8),
         range: 300.0,
         magazine: 30,
+        reserve_mags: 4,
         reload_secs: 2.5,
         empty_reload_secs: 3.1,
         hip_spread_deg: 3.0,
@@ -48,16 +53,16 @@
         prone_accuracy_scale: 0.5,
         sprint_out_secs: 0.2,
         move_scale: 1.0,
-        model: Rifle,
+        model: Carbine,
         shot_sound: "embedded://frontline/sounds/shot_ar.ogg",
         // Gun-space points (metres, -Z forward); see WeaponStats. `sight_point` and
         // `sight_eye_relief` are where an Optic sits; `iron_*` are the iron sights.
-        muzzle_offset: (0.0, 0.027, -0.477),
+        muzzle_offset: (0.0, 0.033, -0.500),
         sight_point: (0.0, 0.088, -0.07),
         sight_eye_relief: 0.16,
         scope: false,
         class: Primary,
-        iron_point: (0.0, 0.066, -0.14),
+        iron_point: (0.0, 0.078, 0.045),
         iron_eye_relief: 0.3,
         iron_magnification: 1.0,
         iron_sway_scale: 0.8,
@@ -81,6 +86,7 @@
         zone_multipliers: (head: 1.4, upper_torso: 1.0, lower_torso: 1.0, limbs: 0.8),
         range: 320.0,
         magazine: 30,
+        reserve_mags: 4,
         reload_secs: 2.6,
         empty_reload_secs: 3.2,
         hip_spread_deg: 2.8,
@@ -100,12 +106,12 @@
         move_scale: 0.98,
         model: Rifle,
         shot_sound: "embedded://frontline/sounds/shot_ar.ogg",
-        muzzle_offset: (0.0, 0.027, -0.477),
+        muzzle_offset: (0.0, 0.033, -0.580),
         sight_point: (0.0, 0.088, -0.07),
         sight_eye_relief: 0.16,
         scope: false,
         class: Primary,
-        iron_point: (0.0, 0.066, -0.14),
+        iron_point: (0.0, 0.092, 0.089),
         iron_eye_relief: 0.3,
         iron_magnification: 1.0,
         iron_sway_scale: 0.8,
@@ -127,6 +133,7 @@
         zone_multipliers: (head: 1.4, upper_torso: 1.0, lower_torso: 0.9, limbs: 0.8),
         range: 200.0,
         magazine: 30,
+        reserve_mags: 4,
         reload_secs: 2.4,
         empty_reload_secs: 2.9,
         hip_spread_deg: 2.5,
@@ -172,6 +179,7 @@
         zone_multipliers: (head: 1.5, upper_torso: 1.2, lower_torso: 1.0, limbs: 0.75),
         range: 400.0,
         magazine: 5,
+        reserve_mags: 4,         // 20 rounds in reserve for the 5-round magazine
         reload_secs: 3.5,
         empty_reload_secs: 4.0,
         hip_spread_deg: 8.0,
@@ -223,6 +231,7 @@
         zone_multipliers: (head: 1.4, upper_torso: 1.0, lower_torso: 0.9, limbs: 0.8),
         range: 150.0,
         magazine: 15,
+        reserve_mags: 3,
         reload_secs: 1.7,
         empty_reload_secs: 2.1,
         hip_spread_deg: 1.6,

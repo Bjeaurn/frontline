@@ -148,6 +148,7 @@ fn main() -> AppExit {
             progression::ProgressionPlugin,
         ));
         app.add_plugins(equipment::client::EquipmentClientPlugin);
+        app.add_plugins(modes::AmmoCrateVisualsPlugin);
         app.add_plugins(particles::ParticlesPlugin);
     }
     app.add_plugins((combat::CombatServerPlugin, net::NetPlugin));

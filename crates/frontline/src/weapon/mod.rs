@@ -2,6 +2,7 @@
 //! its viewmodel, effects and HUD. Client and Host only; the server decides what shots hit.
 
 mod aim;
+mod ammo;
 mod audio;
 mod bolt;
 mod effects;
@@ -24,14 +25,14 @@ use bevy::prelude::*;
 
 use aim::Breath;
 use bolt::{Bolt, BoltEvent};
-use trigger::{Feed, Outcome, Trigger};
+use trigger::{Feed, LauncherFeed, LauncherMode, Outcome, Trigger, launcher_step};
 
 use crate::data::{FireMode, GameData, WeaponId, WeaponStats};
-use crate::equipment::Carried;
+use crate::equipment::{Carried, GrenadeKind, throw_request};
 use crate::flow::Settings;
 use crate::gear::{Attachments, Loadout, PerkEffects, Perks};
 use crate::loadout::SpawnClock;
-use crate::net::protocol::{AmmoRefill, Damaged, FireShot, Respawn};
+use crate::net::protocol::{AmmoRefill, Damaged, FireShot, Respawn, ThrowGrenade};
 use crate::player::input::Bindings;
 use crate::player::{
     ControllerModifiers, ControllerSystems, EyeCamera, LocalLife, Motor, MouseCaptured, PITCH_LIMIT,
@@ -75,6 +76,7 @@ impl Plugin for WeaponClientPlugin {
                     flinch,
                     reload,
                     cycle_fire_mode,
+                    launcher,
                     fire,
                     recover_recoil,
                 )
@@ -98,7 +100,10 @@ pub struct HeldWeapon {
     attachments: Attachments,
     /// With the Attachments and the carrier's Perks applied.
     stats: Arc<WeaponStats>,
+    /// Rounds in the magazine.
     rounds: u32,
+    /// Spare rounds behind the magazine (the Reserve); a reload draws on it.
+    reserve: u32,
     /// Seconds left of the reload in progress.
     reload_left: Option<f32>,
     /// Full length of the reload in progress (tactical or empty).
@@ -143,6 +148,8 @@ pub struct HeldWeapon {
     /// Which of the class's two Weapon slots this Weapon came from: a Primary-class Weapon in
     /// the Secondary slot (Overkill) switches like the pistol does.
     slot: Slot,
+    /// The underslung launcher is selected in place of the rifle's fire mode (V).
+    launcher: LauncherMode,
 }
 
 /// One of a class's two Weapon slots.
@@ -181,6 +188,7 @@ pub struct Stowed {
     attachments: Attachments,
     stats: Arc<WeaponStats>,
     rounds: u32,
+    reserve: u32,
     mode: FireMode,
 }
 
@@ -191,6 +199,7 @@ impl Stowed {
             slot: Slot::Secondary,
             attachments: Attachments::default(),
             rounds: stats.magazine,
+            reserve: stats.reserve_max(),
             mode,
             stats,
         }
@@ -221,6 +230,7 @@ impl HeldWeapon {
             id,
             attachments,
             rounds: stats.magazine,
+            reserve: stats.reserve_max(),
             mode: stats.default_fire_mode(),
             stats,
             reload_left: None,
@@ -243,13 +253,19 @@ impl HeldWeapon {
             accuracy: 1.0,
             switch: None,
             slot: Slot::Primary,
+            launcher: LauncherMode::default(),
         }
     }
 
+    /// Starts a reload if it would do anything: not while one is under way, and not with a full
+    /// magazine or an empty Reserve.
     fn start_reload(&mut self, stats: &WeaponStats) {
-        if self.reload_left.is_none() && self.rounds < stats.magazine {
+        if self.reload_left.is_none() && ammo::can_reload(self.rounds, self.reserve, stats) {
             let secs = stats.reload_secs_for(self.rounds);
-            info!("Reloading ({} rounds left, {:.2} s)", self.rounds, secs);
+            info!(
+                "Reloading ({} rounds left, {} in reserve, {:.2} s)",
+                self.rounds, self.reserve, secs
+            );
             self.reload_total = secs;
             self.reload_left = Some(secs);
             self.bolt = Bolt::Closed;
@@ -262,7 +278,8 @@ impl HeldWeapon {
             .map(|left| 1.0 - left / self.reload_total.max(f32::EPSILON))
     }
 
-    /// Advances a reload in progress by `dt` seconds; sprinting cancels it.
+    /// Advances a reload in progress by `dt` seconds; sprinting cancels it. A finished reload moves
+    /// the missing rounds from the Reserve into the magazine.
     fn tick_reload(&mut self, stats: &WeaponStats, dt: f32, sprinting: bool) {
         let Some(left) = self.reload_left else {
             return;
@@ -271,9 +288,14 @@ impl HeldWeapon {
             info!("Reload cancelled by sprinting");
             self.reload_left = None;
         } else if left <= dt {
-            self.rounds = stats.magazine;
+            let moved = ammo::reload_amount(self.rounds, self.reserve, stats);
+            self.rounds += moved;
+            self.reserve -= moved;
             self.reload_left = None;
-            info!("Reloaded ({} rounds)", self.rounds);
+            info!(
+                "Reloaded ({} rounds, {} in reserve)",
+                self.rounds, self.reserve
+            );
         } else {
             self.reload_left = Some(left - dt);
         }
@@ -287,6 +309,11 @@ impl HeldWeapon {
     /// The Primary is in hand (the underslung launcher is on it).
     pub fn is_primary(&self) -> bool {
         self.slot == Slot::Primary
+    }
+
+    /// The underslung launcher is selected: the HUD shows `40MM` and a click fires a round.
+    pub fn launcher_mode(&self) -> bool {
+        self.launcher.on
     }
 
     /// Whether the weapon is up: not lowered for a sprint, mantle or dive, nor still raising.
@@ -308,6 +335,7 @@ impl HeldWeapon {
         std::mem::swap(&mut self.attachments, &mut stowed.attachments);
         std::mem::swap(&mut self.stats, &mut stowed.stats);
         std::mem::swap(&mut self.rounds, &mut stowed.rounds);
+        std::mem::swap(&mut self.reserve, &mut stowed.reserve);
         std::mem::swap(&mut self.mode, &mut stowed.mode);
         self.reload_left = None;
         self.firing = Trigger::default();
@@ -324,6 +352,7 @@ impl HeldWeapon {
         let feed = Feed {
             held: self.trigger,
             can_fire: self.ready()
+                && self.launcher.rifle_may_fire()
                 && self.reload_left.is_none()
                 && (!stats.bolt_action() || self.bolt.can_fire()),
             rounds: self.rounds,
@@ -332,7 +361,8 @@ impl HeldWeapon {
             burst_shot_secs: stats.seconds_per_burst_shot(),
             burst_delay_secs: stats.burst_delay_secs,
             semi_secs: stats.semi_interval_secs,
-            auto_reload,
+            // With nothing left in the Reserve an empty pull only clicks: there is nothing to reload.
+            auto_reload: auto_reload && self.reserve > 0,
         };
         let outcome = trigger::step(&mut self.firing, &feed, dt);
         self.rounds -= outcome.fired;
@@ -628,20 +658,48 @@ fn swap_loadout(
     }
 }
 
-/// An ammo pack picked up with Scavenger refills both magazines.
+/// The server announced ammo for the local player (an ammo pack, a Flag crate or a Team
+/// Deathmatch crate): `share` of each Weapon's maximum Reserve goes to both Weapons, held and
+/// stowed, and a full refill tops the magazines up as well (`ammo::refill`).
 fn refill_ammo(
     mut refills: MessageReader<FromServer<AmmoRefill>>,
     mut player: Query<(&mut HeldWeapon, Option<&mut Stowed>), With<LocalPlayer>>,
 ) {
-    if refills.read().count() == 0 {
-        return;
-    }
-    for (mut weapon, stowed) in &mut player {
-        weapon.rounds = weapon.stats.magazine;
-        if let Some(mut stowed) = stowed {
-            stowed.rounds = stowed.stats.magazine;
+    for FromServer(refill) in refills.read() {
+        for (mut weapon, stowed) in &mut player {
+            let weapon = &mut *weapon;
+            ammo::refill(
+                &mut weapon.rounds,
+                &mut weapon.reserve,
+                &weapon.stats,
+                refill.share,
+            );
+            let mut report = format!(
+                "{} {} / {}",
+                weapon.stats.short_name(),
+                weapon.rounds,
+                weapon.reserve
+            );
+            if let Some(mut stowed) = stowed {
+                let stowed = &mut *stowed;
+                ammo::refill(
+                    &mut stowed.rounds,
+                    &mut stowed.reserve,
+                    &stowed.stats,
+                    refill.share,
+                );
+                report += &format!(
+                    ", {} {} / {}",
+                    stowed.stats.short_name(),
+                    stowed.rounds,
+                    stowed.reserve
+                );
+            }
+            info!(
+                "Ammo from {:?} (share {:.2}): {report}",
+                refill.source, refill.share
+            );
         }
-        info!("Ammo refilled from a pack");
     }
 }
 
@@ -793,7 +851,8 @@ fn reload(
 }
 
 /// X switches to the Weapon's next fire mode (a click, remembered per Weapon in the Profile).
-/// Not while a Weapon switch is under way or the body mantles.
+/// Not while a Weapon switch is under way, the body mantles or the launcher is selected (V
+/// switches that back first).
 fn cycle_fire_mode(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<Bindings>,
@@ -810,6 +869,7 @@ fn cycle_fire_mode(
         || !captured.active()
         || weapon.switch.is_some()
         || weapon.mantling
+        || weapon.launcher.on
         || !bindings.fire_mode.just_pressed(&keys)
     {
         return;
@@ -821,6 +881,86 @@ fn cycle_fire_mode(
     info!("{}: fire mode {}", stats.name, mode.label());
     profile.fire_modes.insert(weapon.id, mode);
     switched.write(ModeSwitched);
+}
+
+/// V switches the Primary between the rifle's fire mode and the underslung launcher (a click);
+/// in launcher mode a click fires one 40mm round (`trigger::launcher_step`): the same wait
+/// between rounds and rounds per life as ever. With no rounds left the click is dry, and V
+/// still switches back. Dying, switching Weapon or opening a menu returns to the rifle.
+#[allow(clippy::too_many_arguments)]
+fn launcher(
+    keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    bindings: Res<Bindings>,
+    captured: Res<MouseCaptured>,
+    life: Res<LocalLife>,
+    data: Res<GameData>,
+    mut player: Query<(&PlayerPose, &mut HeldWeapon, &mut Carried), With<LocalPlayer>>,
+    eye: Query<&EyeCamera>,
+    mut throws: MessageWriter<ToServer<ThrowGrenade>>,
+    mut dry: MessageWriter<DryFire>,
+    mut switched: MessageWriter<ModeSwitched>,
+) {
+    let Ok((pose, mut weapon, mut carried)) = player.single_mut() else {
+        return;
+    };
+    let weapon = &mut *weapon;
+    let pouch = carried.launcher;
+    let feed = LauncherFeed {
+        available: pouch.is_some()
+            && !life.is_dead()
+            && captured.active()
+            && weapon.is_primary()
+            && weapon.can_throw(),
+        up: weapon.ready(),
+        toggle: bindings.launcher.just_pressed(&keys),
+        click: bindings.fire.just_pressed(&mouse) && !captured.is_changed(),
+        rounds: pouch.map_or(0, |pouch| pouch.left),
+        cooldown: pouch.map_or(0.0, |pouch| pouch.cooldown),
+    };
+    let was = weapon.launcher;
+    let outcome = launcher_step(&mut weapon.launcher, &feed);
+    if weapon.launcher != was {
+        // A burst under way ends with the switch; a pull that is held counts as spent, so it
+        // doesn't fire the rifle when it comes back.
+        weapon.firing.burst_left = 0;
+        weapon.firing.pull_spent = weapon.trigger;
+        info!(
+            "{}: {}",
+            weapon.stats.name,
+            if weapon.launcher.on {
+                "launcher mode (40MM)"
+            } else {
+                "rifle mode"
+            }
+        );
+    }
+    if outcome.switched {
+        switched.write(ModeSwitched);
+    }
+    if outcome.dry_click {
+        dry.write(DryFire);
+        info!("Dry fire: the launcher is empty");
+    }
+    if outcome.fire {
+        let tuning = data.grenade(GrenadeKind::Launcher);
+        if let Some(pouch) = carried.launcher.as_mut()
+            && pouch.take(tuning)
+        {
+            let eye_height = eye
+                .single()
+                .map_or(pose.stance.eye_height(), EyeCamera::height);
+            let request = throw_request(
+                GrenadeKind::Launcher,
+                tuning,
+                pose.yaw,
+                pose.pitch,
+                pose.position + Vec3::Y * eye_height,
+            );
+            info!("Launcher fired ({} rounds left)", pouch.left);
+            throws.write(ToServer(request));
+        }
+    }
 }
 
 /// Fires the Weapon in its fire mode (blending to its ADS rpm with the sights) once it is up:
@@ -1151,10 +1291,19 @@ mod tests {
         weapon.reload_left = Some(0.5);
         let mut stowed = Stowed::new(WeaponId::Pistol, Arc::new(pistol), FireMode::Semi);
         stowed.rounds = 11;
+        weapon.reserve = 50;
+        stowed.reserve = 7;
 
         weapon.exchange(&mut stowed);
-        assert_eq!((weapon.id, weapon.rounds), (WeaponId::Pistol, 11));
-        assert_eq!((stowed.id, stowed.rounds), (WeaponId::AssaultRifle, 7));
+        assert_eq!(
+            (weapon.id, weapon.rounds, weapon.reserve),
+            (WeaponId::Pistol, 11, 7)
+        );
+        assert_eq!(
+            (stowed.id, stowed.rounds, stowed.reserve),
+            (WeaponId::AssaultRifle, 7, 50),
+            "each Weapon keeps its own magazine and Reserve across a switch"
+        );
         assert_eq!(weapon.stats.class, WeaponClass::Secondary);
         assert_eq!((weapon.ads, weapon.reload_left), (0.0, None));
     }
@@ -1468,5 +1617,92 @@ mod tests {
         );
         empty.tick_reload(&stats, 1.0, false);
         assert_eq!((empty.rounds, empty.reload_left), (stats.magazine, None));
+    }
+
+    #[test]
+    fn a_reload_moves_rounds_from_the_reserve_and_keeps_the_rest() {
+        let stats = WeaponStats {
+            reserve_mags: 2,
+            ..WeaponStats::fixture()
+        };
+        let mut weapon = held(WeaponId::AssaultRifle, &stats);
+        assert_eq!((weapon.rounds, weapon.reserve), (30, 60));
+        weapon.rounds = 12;
+        weapon.start_reload(&stats);
+        weapon.tick_reload(&stats, 10.0, false);
+        assert_eq!(
+            (weapon.rounds, weapon.reserve),
+            (30, 42),
+            "a partial magazine takes only the 18 it was missing"
+        );
+
+        weapon.rounds = 0;
+        weapon.reserve = 10;
+        weapon.start_reload(&stats);
+        weapon.tick_reload(&stats, 10.0, false);
+        assert_eq!((weapon.rounds, weapon.reserve), (10, 0), "the last rounds");
+    }
+
+    #[test]
+    fn with_an_empty_reserve_reloading_does_nothing_and_a_pull_only_clicks() {
+        let stats = WeaponStats {
+            magazine: 3,
+            ..WeaponStats::fixture()
+        };
+        let mut weapon = held(WeaponId::AssaultRifle, &stats);
+        weapon.reserve = 0;
+        weapon.trigger = true;
+        assert_eq!(frame_with(&mut weapon, &stats, 1.0, true).fired, 3);
+        assert_eq!(
+            (weapon.rounds, weapon.reload_left),
+            (0, None),
+            "Auto reload has nothing to load"
+        );
+
+        weapon.start_reload(&stats);
+        assert_eq!(weapon.reload_left, None, "R does nothing either");
+
+        weapon.trigger = false;
+        frame_with(&mut weapon, &stats, 0.1, true);
+        weapon.trigger = true;
+        let outcome = frame_with(&mut weapon, &stats, 0.1, true);
+        assert!(outcome.dry_click && !outcome.reload, "a new pull clicks");
+        assert_eq!(weapon.reload_left, None);
+        let clicks: u32 = (0..10)
+            .map(|_| frame_with(&mut weapon, &stats, 0.2, true).dry_click as u32)
+            .sum();
+        assert_eq!(clicks, 0, "a held pull clicks once, not over and over");
+    }
+
+    #[test]
+    fn a_respawn_hands_out_the_full_reserve_of_both_weapons() {
+        let data = GameData::load();
+        let class = Loadout {
+            primary: WeaponId::SniperRifle,
+            secondary: Some(WeaponId::Pistol),
+            ..data.default_loadouts[0].clone()
+        };
+        let (mut weapon, stowed, _) = equip(&class, &data, &HashMap::new());
+        let stowed = stowed.expect("the pistol is stowed");
+        assert_eq!(
+            (weapon.rounds, weapon.reserve),
+            (5, 20),
+            "the M40: 5 and 20 spare"
+        );
+        assert_eq!(
+            (stowed.rounds, stowed.reserve),
+            (15, 45),
+            "the M9: three spare magazines"
+        );
+
+        weapon.rounds = 0;
+        weapon.reserve = 0;
+        let (fresh, ..) = equip(&class, &data, &HashMap::new());
+        assert_eq!((fresh.rounds, fresh.reserve), (5, 20));
+
+        for id in [WeaponId::AssaultRifle, WeaponId::Smg] {
+            let stats = data.weapon(id);
+            assert_eq!(stats.reserve_max(), 4 * stats.magazine, "{id:?}");
+        }
     }
 }

@@ -110,6 +110,72 @@ pub(super) fn step(trigger: &mut Trigger, feed: &Feed, dt: f32) -> Outcome {
     outcome
 }
 
+/// Whether the underslung grenade launcher is selected in place of the rifle's fire mode:
+/// V switches it on and off, a click fires a round only while it is on, and the rifle cannot
+/// fire while it is on. Dying, switching Weapon or opening a menu switches it off.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct LauncherMode {
+    pub on: bool,
+}
+
+impl LauncherMode {
+    /// The rifle's trigger works: not while the launcher is selected.
+    pub fn rifle_may_fire(&self) -> bool {
+        !self.on
+    }
+}
+
+/// What the player and the Weapon tell the launcher this frame.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct LauncherFeed {
+    /// The launcher is fitted to the Weapon in hand and the player can use it: alive, cursor
+    /// grabbed (no menu), the Primary in hand and not switching, not mantling.
+    pub available: bool,
+    /// The Weapon is up and can fire: not sprinting or still raising it.
+    pub up: bool,
+    /// V went down this frame.
+    pub toggle: bool,
+    /// The fire button went down this frame (a fresh click: holding it does not repeat).
+    pub click: bool,
+    /// Rounds left, and seconds until the next may leave (the gap between rounds).
+    pub rounds: u32,
+    pub cooldown: f32,
+}
+
+/// What the frame did to the launcher.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct LauncherOutcome {
+    /// V changed the mode: the switch click.
+    pub switched: bool,
+    /// A round leaves the launcher; the caller takes it from the rounds.
+    pub fire: bool,
+    /// A click with no rounds left: the dry click.
+    pub dry_click: bool,
+}
+
+/// Runs the launcher mode for a frame. V toggles the mode (even with no rounds left, and with
+/// the Weapon lowered); a click fires one round when the mode is on and the Weapon is up, or
+/// clicks dry with no rounds left, and does nothing inside the gap between rounds. When the
+/// launcher isn't `available` the mode is switched off and nothing else happens.
+pub(super) fn launcher_step(mode: &mut LauncherMode, feed: &LauncherFeed) -> LauncherOutcome {
+    let mut outcome = LauncherOutcome::default();
+    if !feed.available {
+        mode.on = false;
+        return outcome;
+    }
+    if feed.toggle {
+        mode.on = !mode.on;
+        outcome.switched = true;
+    } else if mode.on && feed.click && feed.up {
+        if feed.rounds == 0 {
+            outcome.dry_click = true;
+        } else if feed.cooldown <= 0.0 {
+            outcome.fire = true;
+        }
+    }
+    outcome
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,5 +503,164 @@ mod tests {
             (9..=10).contains(&clicks),
             "2 s of mashing at 0.2 s: {clicks}"
         );
+    }
+
+    fn launcher_feed() -> LauncherFeed {
+        LauncherFeed {
+            available: true,
+            up: true,
+            toggle: false,
+            click: false,
+            rounds: 3,
+            cooldown: 0.0,
+        }
+    }
+
+    fn toggled(mode: &mut LauncherMode) -> LauncherOutcome {
+        launcher_step(
+            mode,
+            &LauncherFeed {
+                toggle: true,
+                ..launcher_feed()
+            },
+        )
+    }
+
+    fn clicked(mode: &mut LauncherMode, feed: LauncherFeed) -> LauncherOutcome {
+        launcher_step(
+            mode,
+            &LauncherFeed {
+                click: true,
+                ..feed
+            },
+        )
+    }
+
+    #[test]
+    fn v_switches_into_the_launcher_and_back() {
+        let mut mode = LauncherMode::default();
+        let outcome = toggled(&mut mode);
+        assert!(mode.on && outcome.switched && !outcome.fire);
+        let outcome = toggled(&mut mode);
+        assert!(!mode.on && outcome.switched && !outcome.fire);
+        // Nothing pressed: the mode stays as it is.
+        mode.on = true;
+        assert_eq!(
+            launcher_step(&mut mode, &launcher_feed()),
+            LauncherOutcome::default()
+        );
+        assert!(mode.on);
+    }
+
+    #[test]
+    fn a_click_fires_one_round_only_in_launcher_mode() {
+        let mut mode = LauncherMode::default();
+        let outcome = clicked(&mut mode, launcher_feed());
+        assert_eq!(outcome, LauncherOutcome::default(), "rifle mode: no round");
+        mode.on = true;
+        let outcome = clicked(&mut mode, launcher_feed());
+        assert!(outcome.fire && !outcome.dry_click && !outcome.switched);
+        assert!(mode.on, "firing leaves the mode on");
+        // A click and V in one frame switch only: the click isn't a shot out of the new mode.
+        let mut mode = LauncherMode::default();
+        let outcome = clicked(
+            &mut mode,
+            LauncherFeed {
+                toggle: true,
+                ..launcher_feed()
+            },
+        );
+        assert!(mode.on && outcome.switched && !outcome.fire);
+    }
+
+    #[test]
+    fn the_rifle_cannot_fire_while_the_launcher_is_selected() {
+        let mut mode = LauncherMode::default();
+        let mut trigger = Trigger::default();
+        let mut rifle = feed(FireMode::Auto);
+        rifle.held = true;
+        rifle.can_fire = mode.rifle_may_fire();
+        assert!(step(&mut trigger, &rifle, 0.1).fired > 0);
+        toggled(&mut mode);
+        rifle.can_fire = mode.rifle_may_fire();
+        assert_eq!(step(&mut trigger, &rifle, 1.0).fired, 0);
+        toggled(&mut mode);
+        rifle.can_fire = mode.rifle_may_fire();
+        assert!(step(&mut trigger, &rifle, 0.1).fired > 0, "and back again");
+    }
+
+    #[test]
+    fn with_no_rounds_left_the_click_is_dry_and_v_still_switches_back() {
+        let mut mode = LauncherMode { on: true };
+        let empty = LauncherFeed {
+            rounds: 0,
+            ..launcher_feed()
+        };
+        let outcome = clicked(&mut mode, empty);
+        assert!(outcome.dry_click && !outcome.fire);
+        assert!(mode.on);
+        let outcome = launcher_step(
+            &mut mode,
+            &LauncherFeed {
+                toggle: true,
+                ..empty
+            },
+        );
+        assert!(!mode.on && outcome.switched);
+    }
+
+    #[test]
+    fn rounds_wait_out_the_reload_gap_in_silence() {
+        let mut mode = LauncherMode { on: true };
+        let outcome = clicked(
+            &mut mode,
+            LauncherFeed {
+                cooldown: 1.2,
+                ..launcher_feed()
+            },
+        );
+        assert_eq!(outcome, LauncherOutcome::default());
+    }
+
+    #[test]
+    fn the_weapon_being_down_blocks_the_shot_but_not_the_switch() {
+        // Sprinting or still raising: no round leaves, V still works.
+        let mut mode = LauncherMode { on: true };
+        let down = LauncherFeed {
+            up: false,
+            ..launcher_feed()
+        };
+        assert_eq!(clicked(&mut mode, down), LauncherOutcome::default());
+        let outcome = launcher_step(
+            &mut mode,
+            &LauncherFeed {
+                toggle: true,
+                ..down
+            },
+        );
+        assert!(!mode.on && outcome.switched);
+    }
+
+    #[test]
+    fn dying_a_switch_a_menu_or_losing_the_launcher_returns_to_the_rifle() {
+        // `available` is false when dead, in a menu, switching Weapon, holding the Secondary or
+        // without the launcher fitted; V and clicks do nothing then.
+        let gone = LauncherFeed {
+            available: false,
+            ..launcher_feed()
+        };
+        let mut mode = LauncherMode { on: true };
+        assert_eq!(launcher_step(&mut mode, &gone), LauncherOutcome::default());
+        assert!(!mode.on);
+        let outcome = launcher_step(
+            &mut mode,
+            &LauncherFeed {
+                toggle: true,
+                click: true,
+                ..gone
+            },
+        );
+        assert_eq!(outcome, LauncherOutcome::default());
+        assert!(!mode.on, "V cannot switch it on when unavailable");
     }
 }

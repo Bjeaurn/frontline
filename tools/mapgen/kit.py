@@ -324,6 +324,14 @@ class Level:
     def bomb(self, label: str, x: float, z: float, y: float = 0.0) -> None:
         self._site("bomb_site", label, x, y, z, label=label)
 
+    def ammo_crate(self, x: float, z: float, y: float = 0.0) -> None:
+        """An ammo crate (Team Deathmatch only) standing at (x, z); inside `mirrored()` its twin
+        turned 180 degrees about the origin too. The game draws it, nothing is built here."""
+        x, z = x + self._dx, z + self._dz
+        for s in self._signs():
+            self.sites.setdefault("ammo_crate", []).append(("", s * x, y, s * z))
+            self.map.entities.append(point_entity("ammo_crate", (s * x, y, s * z)))
+
     def light(self, x: float, y: float, z: float, color: str = "1 0.92 0.8", intensity: float = 300000.0, reach: float = 12.0, practical: bool = False, shadows: bool = False) -> None:
         """A point light. `practical` ones (lamps) are switched on by the look's
         `practical_lights` (night looks) and off by day."""
@@ -401,8 +409,11 @@ class Level:
 
 # ---- model bounds, objective spacing, grounding ---------------------------------------------
 
-# Minimum distance (metres) between two sites of a class: HQs and bomb sites 30, Flags 25.
-MIN_SPACING = {"hq_site": 30.0, "dom_flag": 25.0, "bomb_site": 30.0}
+# Minimum distance (metres) between two sites of a class: HQs and bomb sites 30, Flags 25, ammo crates 8.
+MIN_SPACING = {"hq_site": 30.0, "dom_flag": 25.0, "bomb_site": 30.0, "ammo_crate": 8.0}
+# Ammo crates stand at least this far (metres) from any Team Deathmatch spawn, so a spawning
+# player isn't resupplied for free and nobody camps one.
+CRATE_SPAWN_CLEARANCE = 12.0
 WALK_SPEED = 5.5  # m/s, data/movement.ron
 
 
@@ -420,7 +431,8 @@ def model_bounds(models: str) -> dict[str, tuple[Vec3, Vec3]]:
 
 
 def objective_problems(level: Level) -> list[str]:
-    """Pairs of HQ sites, Flags or bomb sites closer than `MIN_SPACING`."""
+    """Pairs of HQ sites, Flags, bomb sites or ammo crates closer than `MIN_SPACING`, and ammo
+    crates too near a Team Deathmatch spawn or inside a solid."""
     problems = []
     for classname, minimum in MIN_SPACING.items():
         sites = level.sites.get(classname, [])
@@ -431,6 +443,14 @@ def objective_problems(level: Level) -> list[str]:
                     problems.append(
                         f"{classname} {la or '#'+str(i)} ({xa:.1f}, {za:.1f}) and {lb or '#'} ({xb:.1f}, {zb:.1f}) are {distance:.1f} m apart, need {minimum:.0f}"
                     )
+    for _, x, y, z in level.sites.get("ammo_crate", []):
+        for team, modes, sx, sz in level.spawns:
+            if "tdm" in modes.split() and math.hypot(x - sx, z - sz) < CRATE_SPAWN_CLEARANCE:
+                problems.append(f"ammo_crate ({x:.1f}, {z:.1f}) is within {CRATE_SPAWN_CLEARANCE:.0f} m of the {team} tdm spawn ({sx:.1f}, {sz:.1f})")
+        for lo, hi, _ in level.solids:
+            if hi[1] > y + 0.05 and lo[1] < y + 1.0 and lo[0] - 1.0 <= x <= hi[0] + 1.0 and lo[2] - 1.0 <= z <= hi[2] + 1.0:
+                problems.append(f"ammo_crate ({x:.1f}, {z:.1f}) is inside or touching a solid x {lo[0]:.1f}..{hi[0]:.1f} z {lo[2]:.1f}..{hi[2]:.1f}")
+                break
     return problems
 
 

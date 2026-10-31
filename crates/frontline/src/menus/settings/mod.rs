@@ -23,7 +23,7 @@ use bevy::ui_widgets::{Activate, SliderStep, SliderValue};
 use super::host_setup::picker;
 use super::rules_editor::{EditorOrigin, RulesOrigin};
 use crate::cod4::{Cod4, parse_path_input};
-use crate::flow::{MenuScreen, Overlay, Settings};
+use crate::flow::{Handedness, MenuScreen, Overlay, Settings};
 use crate::player::input::{Bindings, Rebinding};
 use crate::ui::{
     ACCENT, ArrowIcon, TEXT, TEXT_DIM, UiFonts, backdrop, button, compact_button, label, panel,
@@ -78,6 +78,7 @@ impl Plugin for SettingsPlugin {
                     video::revert_on_escape.run_if(resource_exists::<PendingRevert>),
                     controls::show_values,
                     show_auto_reload,
+                    show_handedness,
                     controls::capture_rebind.run_if(resource_exists::<Draft>),
                 ),
             )
@@ -130,12 +131,17 @@ struct TabPanel(Tab);
 struct Draft {
     invert_y: bool,
     auto_reload: bool,
+    handedness: Handedness,
     bindings: Bindings,
 }
 
 /// The Auto reload picker's text.
 #[derive(Component)]
 struct AutoReloadValue;
+
+/// The Handedness picker's text.
+#[derive(Component)]
+struct HandednessValue;
 
 #[derive(Component)]
 struct NameField;
@@ -282,6 +288,7 @@ fn spawn_settings(
     commands.insert_resource(Draft {
         invert_y: settings.invert_y,
         auto_reload: settings.auto_reload,
+        handedness: settings.handedness,
         bindings: settings.bindings.clone(),
     });
     let root = commands
@@ -482,6 +489,34 @@ fn spawn_gameplay_tab(
         ),
     ));
 
+    let hand_row = setting_row(commands, fonts, tab, "Handedness");
+    let (left, right, value) = picker(
+        commands,
+        fonts,
+        icon,
+        hand_row,
+        140.0,
+        settings.handedness.label(),
+    );
+    commands.entity(value).insert(HandednessValue);
+    for arrow in [left, right] {
+        commands
+            .entity(arrow)
+            .observe(|_: On<Activate>, mut draft: ResMut<Draft>| {
+                draft.handedness = draft.handedness.toggled();
+            });
+    }
+    let hand_hint_row = setting_row(commands, fonts, tab, "");
+    commands.spawn((
+        ChildOf(hand_hint_row),
+        label(
+            fonts,
+            "Left mirrors your view. Other players still see you right-handed.",
+            18.0,
+            TEXT_DIM,
+        ),
+    ));
+
     let cod4_row = setting_row(commands, fonts, tab, "CoD4 textures");
     let field = commands
         .spawn((
@@ -630,6 +665,19 @@ fn show_auto_reload(draft: Option<Res<Draft>>, mut value: Query<&mut Text, With<
     }
 }
 
+/// Keeps the Handedness picker in step with the draft.
+fn show_handedness(draft: Option<Res<Draft>>, mut value: Query<&mut Text, With<HandednessValue>>) {
+    let Some(draft) = draft else {
+        return;
+    };
+    let shown = draft.handedness.label().to_uppercase();
+    for mut text in &mut value {
+        if text.0 != shown {
+            text.0 = shown.clone();
+        }
+    }
+}
+
 /// Keeps the status line under the CoD4 field in step with the indexed source.
 fn show_cod4_status(cod4: Option<Res<Cod4>>, mut status: Query<&mut Text, With<Cod4Status>>) {
     let shown = cod4.map_or_else(String::new, |cod4| cod4.status());
@@ -732,6 +780,7 @@ impl Form<'_, '_> {
         }
         edited.invert_y = self.draft.invert_y;
         edited.auto_reload = self.draft.auto_reload;
+        edited.handedness = self.draft.handedness;
         edited.bindings = self.draft.bindings.clone();
         edited.video = self.video.to_save(self.pending.as_deref(), keep_display);
         if keep_display {

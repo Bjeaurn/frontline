@@ -1,6 +1,6 @@
-//! Ammo packs: a player who dies drops one for everyone to see, and a living player with the
-//! Scavenger Perk who walks over it picks it up and has their ammo refilled. Untouched packs
-//! disappear after `GameData::ammo_pack.lifetime_secs`.
+//! Ammo packs: a player who dies drops one for everyone to see, and any living player who walks
+//! over it takes it and gets a share of their Reserve back (a Scavenger, the full refill).
+//! Untouched packs disappear after `GameData::ammo_pack.lifetime_secs`.
 
 use std::time::Duration;
 
@@ -9,7 +9,7 @@ use lightyear::prelude::*;
 
 use crate::data::GameData;
 use crate::gear::{AmmoPack, EquippedPerks};
-use crate::net::protocol::{AmmoRefill, EventChannel};
+use crate::net::protocol::{AmmoRefill, AmmoSource, EventChannel};
 use crate::shared::{Health, PlayerPose};
 
 /// A pack's expiry, as elapsed time. Server-only.
@@ -34,7 +34,8 @@ pub(super) fn drop_ammo_pack(
     ));
 }
 
-/// Expires old packs and hands the rest to the first Scavenger standing on one.
+/// Expires old packs and hands the rest to the first living player standing on one: a share of
+/// each Weapon's Reserve, or with Scavenger the full refill (`AmmoPackTuning::share_for`).
 pub(super) fn tick_packs(
     packs: Query<(Entity, &AmmoPack, &PackExpiry)>,
     players: Query<(&PlayerPose, &Health, &EquippedPerks, &ControlledBy)>,
@@ -48,19 +49,30 @@ pub(super) fn tick_packs(
             commands.entity(pack).try_despawn();
             continue;
         }
-        let taker = players.iter().find(|(pose, health, perks, _)| {
+        let taker = players.iter().find(|(pose, health, _, _)| {
             !health.is_dead()
-                && data.perk_effects(perks.0.iter()).scavenger
                 && pose.position.xz().distance(position.xz()) <= data.ammo_pack.pickup_radius
                 && (pose.position.y - position.y).abs() <= PICKUP_HEIGHT
         });
-        let Some((.., link)) = taker else {
+        let Some((_, _, perks, link)) = taker else {
             continue;
         };
+        let scavenger = data.perk_effects(perks.0.iter()).scavenger;
+        let share = data.ammo_pack.share_for(scavenger);
         if let Ok(mut sender) = refills.get_mut(link.owner) {
-            sender.send::<EventChannel>(AmmoRefill);
+            sender.send::<EventChannel>(AmmoRefill {
+                share,
+                source: AmmoSource::Pack,
+            });
         }
         commands.entity(pack).try_despawn();
-        info!("An ammo pack at {position} was picked up");
+        info!(
+            "An ammo pack at {position} was picked up: {}",
+            if scavenger {
+                "Scavenger, full refill".to_owned()
+            } else {
+                format!("{:.0}% of the Reserve", share * 100.0)
+            }
+        );
     }
 }

@@ -157,7 +157,7 @@ fn build_strip(
     me: Option<&PlayerOwner>,
 ) {
     match view {
-        ModeView::None => {}
+        ModeView::None | ModeView::TeamDeathmatch(_) => {}
         ModeView::Domination(flags) => {
             strip
                 .spawn(Node {
@@ -320,7 +320,12 @@ pub(super) fn update_mode_strip(
     mut shown: Local<Option<(ModeView, Option<Team>)>>,
     mut commands: Commands,
 ) {
-    let view = modes.single().cloned().unwrap_or_default();
+    // The crates are drawn in the world, not in the strip: their opening and closing mustn't
+    // rebuild it.
+    let view = match modes.single() {
+        Ok(ModeView::TeamDeathmatch(_)) | Err(_) => ModeView::None,
+        Ok(view) => view.clone(),
+    };
     let key = (view, life.team());
     let (strip, built) = *strip;
     let empty = key.0 == ModeView::None;
@@ -407,7 +412,7 @@ fn action(
         local.single().ok()?,
     );
     match view {
-        ModeView::None => None,
+        ModeView::None | ModeView::TeamDeathmatch(_) => None,
         ModeView::Domination(flags) => {
             let tuning = &data.domination().capture;
             let flag = flags

@@ -104,9 +104,15 @@ impl Capture {
 
 /// Whether a player standing at `feet` is inside the zone cylinder around `center`.
 pub fn in_zone(feet: Vec3, center: Vec3, tuning: &CaptureTuning) -> bool {
-    feet.xz().distance(center.xz()) <= tuning.zone_radius
+    in_cylinder(feet, center, tuning.zone_radius, tuning.zone_height)
+}
+
+/// Whether `feet` is within `radius` of `center` on the ground plane and from just below it to
+/// `height` above it.
+pub fn in_cylinder(feet: Vec3, center: Vec3, radius: f32, height: f32) -> bool {
+    feet.xz().distance(center.xz()) <= radius
         && feet.y >= center.y - 0.5
-        && feet.y <= center.y + tuning.zone_height
+        && feet.y <= center.y + height
 }
 
 #[cfg(test)]

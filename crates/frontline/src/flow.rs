@@ -108,6 +108,31 @@ pub struct DiscoveredServer {
 #[derive(Resource, Default, Debug)]
 pub struct DiscoveredServers(pub Vec<DiscoveredServer>);
 
+/// Which hand holds the gun in the first-person view: Left mirrors the viewmodel. Only the
+/// local view changes; other players' soldiers are not told and keep the gun in their right.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Handedness {
+    #[default]
+    Right,
+    Left,
+}
+
+impl Handedness {
+    pub fn label(self) -> &'static str {
+        match self {
+            Handedness::Right => "Right",
+            Handedness::Left => "Left",
+        }
+    }
+
+    pub fn toggled(self) -> Self {
+        match self {
+            Handedness::Right => Handedness::Left,
+            Handedness::Left => Handedness::Right,
+        }
+    }
+}
+
 /// Player preferences, saved to the user's config directory and loaded at startup. A file
 /// from an older version loads with the defaults for what it lacks.
 #[derive(Resource, Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -136,6 +161,8 @@ pub struct Settings {
     /// Settings > Gameplay: an empty magazine reloads when the trigger is pulled on it. Off by
     /// default: the trigger only clicks and R reloads.
     pub auto_reload: bool,
+    /// Settings > Gameplay: which hand holds the gun. Left mirrors the first-person view.
+    pub handedness: Handedness,
     /// Settings > Video.
     pub video: VideoSettings,
     /// Settings > Controls: the key and mouse bindings.
@@ -155,6 +182,7 @@ impl Default for Settings {
             ads_sensitivity: 1.0,
             invert_y: false,
             auto_reload: false,
+            handedness: Handedness::Right,
             video: VideoSettings::default(),
             bindings: Bindings::default(),
         }
@@ -378,6 +406,7 @@ mod tests {
         assert_eq!(settings.bindings, defaults.bindings);
         assert_eq!(settings.ads_sensitivity, defaults.ads_sensitivity);
         assert!(!settings.invert_y);
+        assert_eq!(settings.handedness, Handedness::Right);
     }
 
     #[test]
@@ -393,6 +422,7 @@ mod tests {
             ads_sensitivity: 0.6,
             invert_y: true,
             auto_reload: true,
+            handedness: Handedness::Left,
             ..default()
         };
         settings.video.fps_cap = 144;

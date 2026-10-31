@@ -50,6 +50,7 @@ impl Plugin for CombatServerPlugin {
                         mode_systems::tick_dom,
                         mode_systems::tick_hq,
                         mode_systems::tick_sd,
+                        mode_systems::tick_crates,
                     ),
                     mode_systems::publish_view,
                     health::respawn_players.run_if(match_map_ready),

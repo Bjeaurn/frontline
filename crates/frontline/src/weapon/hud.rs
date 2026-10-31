@@ -8,10 +8,11 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::text::LetterSpacing;
 use bevy::window::PrimaryWindow;
 
-use super::{HeldWeapon, WeaponSystems, ease};
-use crate::data::ActiveRules;
+use super::{HeldWeapon, WeaponSystems, ammo, ease};
+use crate::data::{ActiveRules, GameData};
+use crate::equipment::Carried;
 use crate::flow::{AppState, Settings};
-use crate::net::protocol::HitConfirm;
+use crate::net::protocol::{AmmoRefill, AmmoSource, HitConfirm};
 use crate::player::{EyeCamera, LocalLife};
 use crate::shared::{FromServer, LocalPlayer};
 use crate::ui::{self, AMBER, UiFonts, hud_text};
@@ -43,13 +44,21 @@ const WEAPON_FONT_SIZE: f32 = 17.0;
 const AMMO_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.95);
 const AMMO_RESERVE_COLOR: Color = Color::srgba(0.82, 0.80, 0.72, 0.85);
 const AMMO_LOW_COLOR: Color = Color::srgb(1.0, 0.35, 0.25);
-/// Rounds at or below which the count turns `AMMO_LOW_COLOR`.
+/// Rounds in the magazine at or below which the count turns `AMMO_LOW_COLOR` (so does a Reserve of
+/// one magazine or less: `ammo::reserve_low`).
 const AMMO_LOW: u32 = 5;
 const MODE_FONT_SIZE: f32 = 18.0;
 const RELOAD_PROMPT_SIZE: f32 = 26.0;
+const LOW_AMMO_PROMPT_SIZE: f32 = 20.0;
 const RELOAD_PROMPT_COLOR: Color = Color::srgb(1.0, 0.3, 0.2);
-/// The RELOAD hint flashes this many times a second.
+/// The RELOAD and NO AMMO hints flash this many times a second.
 const RELOAD_FLASH_HZ: f32 = 2.5;
+const REFILL_CUE_SIZE: f32 = 20.0;
+const REFILL_CUE_COLOR: Color = Color::srgb(0.55, 0.9, 0.4);
+/// How long a pack's or a crate's "AMMO REFILLED" shows.
+const REFILL_CUE_SECS: f32 = 1.5;
+/// The Flag crate's RESUPPLYING stays up this many pulse intervals after the last pulse.
+const RESUPPLY_HOLD_INTERVALS: f32 = 1.5;
 
 pub(super) struct WeaponHudPlugin;
 
@@ -88,7 +97,8 @@ impl Plugin for WeaponHudPlugin {
                     fade_hitmarker,
                     update_ammo,
                     update_fire_mode,
-                    update_reload_prompt,
+                    update_ammo_prompt,
+                    update_refill_cue,
                     update_scope,
                     update_breath_cue,
                     update_rack_prompt,
@@ -139,13 +149,21 @@ pub struct EquipmentRows;
 #[derive(Component)]
 struct WeaponLabel;
 
+/// The Reserve beside the magazine count, e.g. `/ 120`.
+#[derive(Component)]
+struct ReserveCount;
+
 /// The fire mode shown beside the ammo count.
 #[derive(Component)]
 struct FireModeLabel;
 
-/// "RELOAD", flashing under the crosshair while the magazine is empty.
+/// RELOAD or NO AMMO flashing, or a steady LOW AMMO, under the crosshair (`ammo::hint`).
 #[derive(Component)]
-struct ReloadPrompt;
+struct AmmoPrompt;
+
+/// RESUPPLYING at a held Flag, AMMO REFILLED after a pack or crate.
+#[derive(Component)]
+struct RefillCue;
 
 fn crosshair_arm(direction: Vec2, outline: bool) -> impl Bundle {
     let mut size = if direction.x == 0.0 {
@@ -305,7 +323,7 @@ fn spawn_aim_cues(commands: &mut Commands, fonts: &UiFonts, vignette: Handle<Ima
         )],
     ));
     commands.spawn((
-        Name::new("ReloadPrompt"),
+        Name::new("AmmoPrompt"),
         DespawnOnExit(AppState::InGame),
         Node {
             position_type: PositionType::Absolute,
@@ -315,13 +333,35 @@ fn spawn_aim_cues(commands: &mut Commands, fonts: &UiFonts, vignette: Handle<Ima
             ..default()
         },
         children![(
-            ReloadPrompt,
+            AmmoPrompt,
             hud_text(
                 &fonts.display,
                 "RELOAD",
                 RELOAD_PROMPT_SIZE,
                 RELOAD_PROMPT_COLOR
             ),
+            Visibility::Hidden,
+        )],
+    ));
+    commands.spawn((
+        Name::new("RefillCue"),
+        DespawnOnExit(AppState::InGame),
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100.0),
+            top: percent(64.0),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        children![(
+            RefillCue,
+            hud_text(
+                &fonts.bold,
+                "RESUPPLYING",
+                REFILL_CUE_SIZE,
+                REFILL_CUE_COLOR
+            ),
+            LetterSpacing::Px(2.0),
             Visibility::Hidden,
         )],
     ));
@@ -551,20 +591,12 @@ fn spawn_weapon_hud(
                         hud_text(&fonts.display, "", AMMO_FONT_SIZE, AMMO_COLOR),
                     ),
                     (
-                        hud_text(&fonts.bold, "/", RESERVE_FONT_SIZE, AMMO_RESERVE_COLOR),
+                        ReserveCount,
+                        hud_text(&fonts.bold, "", RESERVE_FONT_SIZE, AMMO_RESERVE_COLOR),
                         Node {
                             margin: UiRect::bottom(px(6.0)),
                             ..default()
                         },
-                    ),
-                    // Infinite reserve: the HUD font has no "∞", so a sideways "8".
-                    (
-                        hud_text(&fonts.bold, "8", RESERVE_FONT_SIZE, AMMO_RESERVE_COLOR),
-                        Node {
-                            margin: UiRect::bottom(px(6.0)),
-                            ..default()
-                        },
-                        UiTransform::from_rotation(Rot2::degrees(90.0)),
                     ),
                 ],
             ),
@@ -678,37 +710,87 @@ fn fade_hitmarker(
     }
 }
 
-/// Rewrites the counter only when the Weapon, rounds or reload state shown actually change.
+/// Rewrites the counter only when the Weapon, rounds, Reserve or reload state shown actually
+/// change: `30 / 120`, the Reserve in the low-ammo colour at one magazine or less. With the
+/// launcher selected it counts the 40mm rounds left instead, which have no Reserve.
 fn update_ammo(
-    weapons: Query<&HeldWeapon, With<LocalPlayer>>,
-    mut shown: Local<Option<(crate::data::WeaponId, u32, bool)>>,
-    mut count: Single<(&mut Text, &mut TextColor), (With<AmmoCount>, Without<WeaponLabel>)>,
-    mut label: Single<&mut Text, (With<WeaponLabel>, Without<AmmoCount>)>,
+    weapons: Query<(&HeldWeapon, Option<&Carried>), With<LocalPlayer>>,
+    mut shown: Local<Option<AmmoShown>>,
+    mut count: Single<
+        (&mut Text, &mut TextColor),
+        (With<AmmoCount>, Without<WeaponLabel>, Without<ReserveCount>),
+    >,
+    mut reserve_text: Single<
+        (&mut Text, &mut TextColor),
+        (With<ReserveCount>, Without<WeaponLabel>, Without<AmmoCount>),
+    >,
+    mut label: Single<&mut Text, (With<WeaponLabel>, Without<AmmoCount>, Without<ReserveCount>)>,
 ) {
-    let Ok(weapon) = weapons.single() else {
+    let Ok((weapon, carried)) = weapons.single() else {
         return;
     };
-    let state = (weapon.id, weapon.rounds, weapon.reload_left.is_some());
+    let launcher = weapon.launcher_mode();
+    let rounds = if launcher {
+        carried
+            .and_then(|carried| carried.launcher)
+            .map_or(0, |pouch| pouch.left)
+    } else {
+        weapon.rounds
+    };
+    let reloading = !launcher && weapon.reload_left.is_some();
+    let state = AmmoShown {
+        weapon: weapon.id,
+        rounds,
+        reserve: weapon.reserve,
+        reloading,
+        launcher,
+    };
     if *shown == Some(state) && !label.is_added() {
         return;
     }
     *shown = Some(state);
     let (text, color) = &mut *count;
-    text.0 = weapon.rounds.to_string();
-    color.0 = if weapon.rounds <= AMMO_LOW {
-        AMMO_LOW_COLOR
+    text.0 = rounds.to_string();
+    let low = if launcher {
+        rounds == 0
     } else {
-        AMMO_COLOR
+        rounds <= AMMO_LOW
     };
+    color.0 = if low { AMMO_LOW_COLOR } else { AMMO_COLOR };
+    let (text, color) = &mut *reserve_text;
+    if launcher {
+        text.0.clear();
+    } else {
+        text.0 = format!("/ {}", weapon.reserve);
+        color.0 = if ammo::reserve_low(weapon.reserve, &weapon.stats) {
+            AMMO_LOW_COLOR
+        } else {
+            AMMO_RESERVE_COLOR
+        };
+    }
     let name = weapon.stats.name.to_uppercase();
-    label.0 = if state.2 {
+    label.0 = if reloading {
         format!("{name}  \u{b7}  RELOADING")
     } else {
         name
     };
 }
 
-/// The current fire mode, e.g. `AUTO` or `BURST 3`, beside the ammo count.
+/// What `update_ammo` last wrote.
+#[derive(Clone, Copy, PartialEq)]
+struct AmmoShown {
+    weapon: crate::data::WeaponId,
+    rounds: u32,
+    reserve: u32,
+    reloading: bool,
+    launcher: bool,
+}
+
+/// The label shown for the launcher mode where the fire mode goes.
+const LAUNCHER_LABEL: &str = "40MM";
+
+/// The current fire mode, e.g. `AUTO` or `BURST 3`, beside the ammo count; `40MM` while the
+/// underslung launcher is selected.
 fn update_fire_mode(
     weapons: Query<&HeldWeapon, With<LocalPlayer>>,
     mut label: Single<&mut Text, With<FireModeLabel>>,
@@ -716,30 +798,114 @@ fn update_fire_mode(
     let Ok(weapon) = weapons.single() else {
         return;
     };
-    let shown = weapon.mode.label();
+    let shown = if weapon.launcher_mode() {
+        LAUNCHER_LABEL.to_string()
+    } else {
+        weapon.mode.label()
+    };
     if label.0 != shown {
         label.0 = shown;
     }
 }
 
-/// A flashing "RELOAD" while the held Weapon's magazine is empty and nothing reloads it: with
-/// Auto reload on, pulling the trigger does that, so no hint is needed.
-fn update_reload_prompt(
+/// The hint under the crosshair (`ammo::hint`): a flashing RELOAD while the magazine is empty and
+/// nothing reloads it (with Auto reload on a pull does that), a flashing NO AMMO with the magazine
+/// and the Reserve both empty, a steady LOW AMMO with one magazine or less in the Reserve. The
+/// launcher has no Reserve and no hint.
+fn update_ammo_prompt(
     time: Res<Time>,
     settings: Res<Settings>,
     life: Res<LocalLife>,
     weapons: Query<&HeldWeapon, With<LocalPlayer>>,
-    mut prompt: Single<&mut Visibility, With<ReloadPrompt>>,
+    mut prompt: Single<
+        (&mut Visibility, &mut Text, &mut TextColor, &mut TextFont),
+        With<AmmoPrompt>,
+    >,
 ) {
-    let empty = weapons
+    let hint = weapons
         .single()
-        .is_ok_and(|weapon| !life.is_dead() && weapon.rounds == 0 && weapon.reload_left.is_none());
+        .ok()
+        .filter(|weapon| !life.is_dead() && !weapon.launcher_mode())
+        .and_then(|weapon| {
+            ammo::hint(
+                weapon.rounds,
+                weapon.reserve,
+                weapon.reload_left.is_some(),
+                settings.auto_reload,
+                &weapon.stats,
+            )
+        });
     let flash = (time.elapsed_secs() * RELOAD_FLASH_HZ).fract() < 0.6;
-    prompt.set_if_neq(if empty && !settings.auto_reload && flash {
+    let (visibility, text, color, font) = &mut *prompt;
+    let (shown, words, tint, size) = match hint {
+        Some(ammo::Hint::Reload) => (flash, "RELOAD", RELOAD_PROMPT_COLOR, RELOAD_PROMPT_SIZE),
+        Some(ammo::Hint::NoAmmo) => (flash, "NO AMMO", RELOAD_PROMPT_COLOR, RELOAD_PROMPT_SIZE),
+        Some(ammo::Hint::LowAmmo) => (true, "LOW AMMO", AMBER, LOW_AMMO_PROMPT_SIZE),
+        None => (false, "", RELOAD_PROMPT_COLOR, RELOAD_PROMPT_SIZE),
+    };
+    visibility.set_if_neq(if shown {
         Visibility::Inherited
     } else {
         Visibility::Hidden
     });
+    if !words.is_empty() && text.0 != words {
+        text.0 = words.to_owned();
+    }
+    color.set_if_neq(TextColor(tint));
+    if font.font_size != FontSize::Px(size) {
+        font.font_size = FontSize::Px(size);
+    }
+}
+
+/// What the last refill said: for how long and which words.
+struct Cue {
+    left: f32,
+    words: &'static str,
+}
+
+/// RESUPPLYING while the crate at a Flag keeps handing out ammo (it stays up a little longer than
+/// one pulse interval), AMMO REFILLED for a moment after a pack or a Team Deathmatch crate.
+fn update_refill_cue(
+    time: Res<Time>,
+    data: Res<GameData>,
+    life: Res<LocalLife>,
+    mut refills: MessageReader<FromServer<AmmoRefill>>,
+    mut cue: Local<Option<Cue>>,
+    mut node: Single<(&mut Visibility, &mut Text), With<RefillCue>>,
+) {
+    for FromServer(refill) in refills.read() {
+        *cue = Some(match refill.source {
+            AmmoSource::Flag => Cue {
+                left: data.domination().resupply.interval_secs * RESUPPLY_HOLD_INTERVALS,
+                words: "RESUPPLYING",
+            },
+            AmmoSource::Pack | AmmoSource::Crate => Cue {
+                left: REFILL_CUE_SECS,
+                words: "AMMO REFILLED",
+            },
+        });
+    }
+    if life.is_dead() {
+        *cue = None;
+    }
+    if let Some(active) = cue.as_mut() {
+        active.left -= time.delta_secs();
+    }
+    if cue.as_ref().is_some_and(|active| active.left <= 0.0) {
+        *cue = None;
+    }
+    let (visibility, text) = &mut *node;
+    match cue.as_ref() {
+        Some(active) => {
+            if text.0 != active.words {
+                text.0 = active.words.to_owned();
+            }
+            visibility.set_if_neq(Visibility::Inherited);
+        }
+        None => {
+            visibility.set_if_neq(Visibility::Hidden);
+        }
+    }
 }
 
 /// Shows the scope mask while a scoped Weapon is aimed far enough in.

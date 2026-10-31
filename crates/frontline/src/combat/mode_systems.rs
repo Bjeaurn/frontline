@@ -14,14 +14,16 @@ use super::hitbox::{Hitboxes, set_hitboxes_enabled};
 use super::match_flow::is_live;
 use super::xp::XpOut;
 use crate::data::{CaptureTuning, GameData, GameModeId};
-use crate::maps::{BombSite, DomFlag, HqSite, MapReady, MapRoot};
+use crate::maps::{AmmoCrate, BombSite, DomFlag, HqSite, MapReady, MapRoot};
 use crate::modes::{
-    ActionView, Bomb, BombView, Capture, CaptureEvent, DomState, FlagView, HqEvent, HqPhase,
-    HqState, HqView, ModeView, SdEvent, SdInput, SdPhase, SdPhaseView, SdState, SdView, ZoneView,
-    in_zone,
+    ActionView, AmmoCrates, Bomb, BombView, Capture, CaptureEvent, CrateView, DomState, FlagView,
+    HqEvent, HqPhase, HqState, HqView, ModeView, SdEvent, SdInput, SdPhase, SdPhaseView, SdState,
+    SdView, ZoneView, in_zone,
 };
 use crate::net::LinkPlayer;
-use crate::net::protocol::{BombExploded, EventChannel, ObjectiveHold, PlayerOwner};
+use crate::net::protocol::{
+    AmmoRefill, AmmoSource, BombExploded, EventChannel, ObjectiveHold, PlayerOwner,
+};
 use crate::progression::XpReason;
 use crate::rotation::ServerConfig;
 use crate::shared::{Health, MatchState, PlayerPose, PlayerStats, PlayerTeam, Team};
@@ -35,8 +37,10 @@ pub(super) struct UseHeld(pub bool);
 pub(super) enum ModeRuntime {
     /// A Match just (re)started; the objective is built once its Map is loaded.
     Pending,
-    /// Team Deathmatch, or a Map without the entities the mode needs.
+    /// Team Deathmatch on a Map with no ammo crates, or a Map without the entities the mode needs.
     Nothing,
+    /// Team Deathmatch on a Map with fixed ammo crates.
+    Crates(AmmoCrates),
     Dom(DomState),
     Hq(HqState),
     Sd(Box<SdRuntime>),
@@ -61,7 +65,10 @@ impl ModeRuntime {
         match self {
             ModeRuntime::Hq(hq) => hq.owner() != Some(team),
             ModeRuntime::Sd(sd) => sd.state.respawn_open(),
-            ModeRuntime::Pending | ModeRuntime::Nothing | ModeRuntime::Dom(_) => true,
+            ModeRuntime::Pending
+            | ModeRuntime::Nothing
+            | ModeRuntime::Crates(_)
+            | ModeRuntime::Dom(_) => true,
         }
     }
 
@@ -87,6 +94,16 @@ impl ModeRuntime {
     fn view(&self) -> ModeView {
         match self {
             ModeRuntime::Pending | ModeRuntime::Nothing => ModeView::None,
+            ModeRuntime::Crates(crates) => ModeView::TeamDeathmatch(
+                crates
+                    .slots
+                    .iter()
+                    .map(|slot| CrateView {
+                        position: slot.position,
+                        ready: slot.ready(),
+                    })
+                    .collect(),
+            ),
             ModeRuntime::Dom(dom) => ModeView::Domination(
                 dom.flags
                     .iter()
@@ -94,6 +111,7 @@ impl ModeRuntime {
                         label: flag.label,
                         position: flag.position,
                         zone: zone_view(&flag.capture),
+                        resupplying: flag.crate_lit,
                     })
                     .collect(),
             ),
@@ -228,17 +246,39 @@ pub(super) fn init_mode(
     flags: Query<(&DomFlag, &Transform)>,
     hq_sites: Query<&Transform, With<HqSite>>,
     bomb_sites: Query<(&BombSite, &Transform)>,
+    ammo_crates: Query<&Transform, With<AmmoCrate>>,
 ) {
-    if state.mode == GameModeId::TeamDeathmatch {
-        *runtime = ModeRuntime::Nothing;
-        return;
-    }
     let Some((root, _)) = roots.iter().find(|(_, root)| root.id == state.map) else {
         return;
     };
     let entities: Vec<Entity> = children.iter_descendants(root).collect();
+    let mut placed_crates: Vec<Vec3> = entities
+        .iter()
+        .filter_map(|&e| ammo_crates.get(e).ok())
+        .map(|transform| transform.translation)
+        .collect();
+    placed_crates.sort_by(by_position);
+    if state.mode != GameModeId::TeamDeathmatch && !placed_crates.is_empty() {
+        info!(
+            "Map \"{}\" places {} ammo crates; only Team Deathmatch uses them, so they are ignored in {}",
+            state.map,
+            placed_crates.len(),
+            state.mode.name()
+        );
+    }
     let built = match state.mode {
-        GameModeId::TeamDeathmatch => ModeRuntime::Nothing,
+        GameModeId::TeamDeathmatch => {
+            match AmmoCrates::for_mode(state.mode, data.game_mode(state.mode), placed_crates) {
+                Some(crates) => {
+                    info!("Team Deathmatch: {} ammo crates", crates.slots.len());
+                    ModeRuntime::Crates(crates)
+                }
+                None => {
+                    info!("Team Deathmatch: the Map has no ammo crates");
+                    ModeRuntime::Nothing
+                }
+            }
+        }
         GameModeId::Domination => {
             let mut found: Vec<(char, Vec3)> = entities
                 .iter()
@@ -309,6 +349,8 @@ pub(super) fn tick_dom(
     mut runtime: ResMut<ModeRuntime>,
     mut state: Single<&mut MatchState>,
     players: Players,
+    links: Query<&ControlledBy>,
+    mut refills: Query<&mut MessageSender<AmmoRefill>>,
     mut xp: XpOut,
     data: Res<GameData>,
     time: Res<Time>,
@@ -335,6 +377,30 @@ pub(super) fn tick_dom(
         })
         .collect();
     let tick = dom.tick(&presence, time.delta_secs(), tuning);
+    dom.light_crates(&living, tuning);
+    if tick.resupply {
+        for (entity, pose, health, team) in &players {
+            let Some(team) = team.0.filter(|_| !health.is_dead()) else {
+                continue;
+            };
+            let Some(index) = dom.resupply_flag(team, pose.position, tuning) else {
+                continue;
+            };
+            if let Ok(link) = links.get(entity)
+                && let Ok(mut sender) = refills.get_mut(link.owner)
+            {
+                sender.send::<EventChannel>(AmmoRefill {
+                    share: tuning.resupply.share,
+                    source: AmmoSource::Flag,
+                });
+                info!(
+                    "Flag {} crate resupplies a {team:?} player ({:.0}% of the Reserve)",
+                    dom.flags[index].label,
+                    tuning.resupply.share * 100.0
+                );
+            }
+        }
+    }
     for (index, event) in tick.events {
         let label = dom.flags[index].label;
         match event {
@@ -661,6 +727,57 @@ pub(super) fn tick_sd(
     let seconds = sd.state.clock_secs(sd.round_secs);
     if state.seconds_left != seconds {
         state.seconds_left = seconds;
+    }
+}
+
+/// Team Deathmatch's fixed ammo crates: a living player who walks up to a ready crate gets the
+/// full refill (`AmmoRefill`, share 1) and the crate closes for `respawn_secs`, then reopens.
+pub(super) fn tick_crates(
+    mut runtime: ResMut<ModeRuntime>,
+    state: Single<&MatchState>,
+    players: Players,
+    links: Query<&ControlledBy>,
+    mut refills: Query<&mut MessageSender<AmmoRefill>>,
+    data: Res<GameData>,
+    time: Res<Time>,
+) {
+    let ModeRuntime::Crates(crates) = &mut *runtime else {
+        return;
+    };
+    if !is_live(&state) {
+        return;
+    }
+    let Some(tuning) = data.game_mode(GameModeId::TeamDeathmatch).ammo_crates else {
+        return;
+    };
+    let present: Vec<(Entity, Vec3)> = players
+        .iter()
+        .filter(|(_, _, health, team)| !health.is_dead() && team.0.is_some())
+        .map(|(entity, pose, ..)| (entity, pose.position))
+        .collect();
+    let tick = crates.tick(&present, time.delta_secs(), &tuning);
+    for (index, entity) in tick.taken {
+        if let Ok(link) = links.get(entity)
+            && let Ok(mut sender) = refills.get_mut(link.owner)
+        {
+            sender.send::<EventChannel>(AmmoRefill {
+                share: 1.0,
+                source: AmmoSource::Crate,
+            });
+        }
+        info!(
+            "Ammo crate {} at {} resupplied a player; closed for {:.0} s",
+            index + 1,
+            crates.slots[index].position,
+            tuning.respawn_secs
+        );
+    }
+    for index in tick.reopened {
+        info!(
+            "Ammo crate {} at {} reopened",
+            index + 1,
+            crates.slots[index].position
+        );
     }
 }
 

@@ -172,6 +172,10 @@ _Avoid_: Zoom level, scope power
 The slow figure-eight drift of the view while aimed, by a per-**Weapon** angle times the sight's **Sway Scale**, less while crouched or prone or holding breath. It moves the aim itself, so shots follow it.
 _Avoid_: Wobble, bob (bob is the viewmodel's walking motion)
 
+**Handedness**:
+Which hand a player holds the gun in, in their own first-person view (Settings > Gameplay: Right or Left). Left mirrors the viewmodel and nothing else: aim, shots and the replicated pose are the same, so other players still see a right-hander. The arms in the view are only a visual prop.
+_Avoid_: Left-handed mode (it is a Setting, not a mode)
+
 **Flinch**:
 The kick a hit gives the victim's view, by a per-**Weapon** angle scaled by the damage and reduced while aimed; it recovers like recoil.
 _Avoid_: Hit reaction, screen shake
@@ -201,11 +205,11 @@ Pulling the trigger on an empty magazine: a click per pull and a flashing RELOAD
 _Avoid_: Empty click
 
 **Grenade**:
-A physical projectile the server flies with gravity, bounces and a fuse: the lethal Frag (blast damage that falls off with distance), the tactical Flashbang (blinds a viewer facing it, deafens everyone near) and Smoke (a cloud that blocks the view for a while), and the Grenade Launcher's 40mm round.
+A physical projectile the server flies with gravity, bounces and a fuse: the lethal Frag (blast damage that falls off with distance), the tactical Flashbang (blinds a viewer facing it, deafens everyone near) and Smoke (a cloud that blocks the view for a while), and the Grenade Launcher's 40mm round. A thrown one is readied by holding its key and thrown when the key is let go, along an arc that depends on the look angle (far at the horizon, farther looking up, a short toss looking down).
 _Avoid_: Nade, bomb (a **Bomb** is the Search & Destroy objective)
 
 **Grenade Launcher**:
-The underslung "noob tube" Attachment (Underbarrel slot, 2 **Class Points**) only the M16A4 offers; its 40mm round arcs and bursts on impact, 3 rounds per life.
+The underslung "noob tube" Attachment (Underbarrel slot, 2 **Class Points**) only the M16A4 offers. It is a mode of the M16A4 (V switches it in and out, the HUD shows `40MM` where the **Fire Mode** goes, and the rifle cannot fire meanwhile); a click fires its 40mm round, which arcs and bursts on impact, 3 rounds per life. Dying, switching **Weapon** or opening a menu returns to the rifle.
 _Avoid_: Noob tube (in docs), GL
 
 ### Loadouts & progression
@@ -234,9 +238,17 @@ _Avoid_: Perk tier
 The three-level editor, opened from the main menu (CREATE A CLASS) or from the Loadout screen in game, where a player fills one of the **Profile**'s custom **Loadouts** within its **Class Points**: a class list, a slot overview (big tiles for **Primary** with its **Attachments**, **Secondary**, equipment, **Perks**, **Wildcards**, plus a name) and a full-screen picker per slot.
 _Avoid_: Class builder, loadout editor (as the in-game name)
 
+**Reserve**:
+The spare rounds a **Weapon** carries besides the magazine in the gun: `reserve_mags` full magazines (the HUD shows `30 / 120`). A reload moves rounds from it into the magazine; with it empty a reload does nothing. Each **Weapon** keeps its own, and a respawn restores it. The launcher's 3 rounds are not part of it.
+_Avoid_: Infinite ammo, spare ammo, reserve ammo
+
 **Ammo Pack**:
-A pickup a player drops on dying; walking over it refills the ammo of a player with the Scavenger **Perk**.
+A pickup a player drops on dying; any living player walking over it gets a share of every **Weapon**'s maximum **Reserve** (about one spare magazine), a player with the Scavenger **Perk** the full refill (**Reserve** and magazines).
 _Avoid_: Ammo crate, drop
+
+**Ammo Crate**:
+A place that resupplies players from the map rather than from a death: at each captured **Flag** in Domination (slowly, while a player of the holding **Team** stands within its radius) and, fixed on the **Map** (the `ammo_crate` entity), in Team Deathmatch (a full resupply on walking up, then closed for a respawn timer). Headquarters and Search & Destroy have none.
+_Avoid_: Ammo pack, supply drop
 
 **Killstreak**:
 A reward a player earns for consecutive kills without dying; the count resets on death.
@@ -319,7 +331,8 @@ _Avoid_: Combo, double/triple (as the general term)
 - A player's **Level** follows from the **XP** in their **Profile**; custom **Loadouts** and each **Unlock** wait for their **Level**
 - A **Weapon Level** follows from the **Weapon XP** in the **Profile** and unlocks that **Weapon**'s **Attachments**; its **Camos** are unlocked separately by their **Challenges**, counted in kills
 - A **Camo** is unlocked on one **Weapon** at a time by its **Challenge**, and a **Loadout**'s Camo goes on its **Primary**
-- A dead player drops an **Ammo Pack** that a player with the Scavenger **Perk** picks up by walking over it
+- A dead player drops an **Ammo Pack** that any living player picks up by walking over it, for a share of their **Reserve** (a player with the Scavenger **Perk**: the full refill)
+- An **Ammo Crate** resupplies only the **Team** holding its **Flag** (Domination) or whoever walks up to it (Team Deathmatch); only those two **Game Modes** have them
 
 ## Flagged ambiguities
 

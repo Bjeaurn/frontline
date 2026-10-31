@@ -942,6 +942,36 @@
 }
 // entity 24
 {
+"classname" "ammo_crate"
+"origin" "0 866.1418 0"
+}
+// entity 25
+{
+"classname" "ammo_crate"
+"origin" "0 -866.1418 0"
+}
+// entity 26
+{
+"classname" "ammo_crate"
+"origin" "866.1418 472.441 0"
+}
+// entity 27
+{
+"classname" "ammo_crate"
+"origin" "-866.1418 -472.441 0"
+}
+// entity 28
+{
+"classname" "ammo_crate"
+"origin" "472.441 -551.1811 0"
+}
+// entity 29
+{
+"classname" "ammo_crate"
+"origin" "-472.441 551.1811 0"
+}
+// entity 30
+{
 "classname" "light_point"
 "origin" "314.9606 -314.9606 173.2284"
 "color" "1 0.78 0.45"
@@ -950,7 +980,7 @@
 "shadows_enabled" "true"
 "targetname" "practical"
 }
-// entity 25
+// entity 31
 {
 "classname" "light_point"
 "origin" "-314.9606 314.9606 173.2284"
@@ -960,7 +990,7 @@
 "shadows_enabled" "true"
 "targetname" "practical"
 }
-// entity 26
+// entity 32
 {
 "classname" "light_point"
 "origin" "314.9606 314.9606 173.2284"
@@ -970,7 +1000,7 @@
 "shadows_enabled" "false"
 "targetname" "practical"
 }
-// entity 27
+// entity 33
 {
 "classname" "light_point"
 "origin" "-314.9606 -314.9606 173.2284"
@@ -980,7 +1010,7 @@
 "shadows_enabled" "false"
 "targetname" "practical"
 }
-// entity 28
+// entity 34
 {
 "classname" "light_point"
 "origin" "118.1102 0 98.4252"
@@ -990,7 +1020,7 @@
 "shadows_enabled" "true"
 "targetname" "practical"
 }
-// entity 29
+// entity 35
 {
 "classname" "light_point"
 "origin" "-118.1102 0 98.4252"
@@ -1000,7 +1030,7 @@
 "shadows_enabled" "false"
 "targetname" "practical"
 }
-// entity 30
+// entity 36
 {
 "classname" "light_point"
 "origin" "-1133.8583 1385.8268 141.7323"
@@ -1010,7 +1040,7 @@
 "shadows_enabled" "false"
 "targetname" "practical"
 }
-// entity 31
+// entity 37
 {
 "classname" "light_point"
 "origin" "881.8898 -1385.8268 141.7323"
@@ -1020,7 +1050,7 @@
 "shadows_enabled" "false"
 "targetname" "practical"
 }
-// entity 32
+// entity 38
 {
 "classname" "light_point"
 "origin" "0 1456.693 137.7953"
@@ -1030,7 +1060,7 @@
 "shadows_enabled" "false"
 "targetname" "practical"
 }
-// entity 33
+// entity 39
 {
 "classname" "light_point"
 "origin" "0 -1456.693 137.7953"
@@ -1040,7 +1070,7 @@
 "shadows_enabled" "false"
 "targetname" "practical"
 }
-// entity 34
+// entity 40
 {
 "classname" "light_point"
 "origin" "1181.1024 0 137.7953"
@@ -1050,7 +1080,7 @@
 "shadows_enabled" "false"
 "targetname" "practical"
 }
-// entity 35
+// entity 41
 {
 "classname" "light_point"
 "origin" "-1181.1024 0 137.7953"
@@ -1060,7 +1090,7 @@
 "shadows_enabled" "false"
 "targetname" "practical"
 }
-// entity 36
+// entity 42
 {
 "classname" "light_point"
 "origin" "-1062.9922 866.1418 137.7953"
@@ -1070,7 +1100,7 @@
 "shadows_enabled" "false"
 "targetname" "practical"
 }
-// entity 37
+// entity 43
 {
 "classname" "light_point"
 "origin" "-1062.9922 -748.0315 137.7953"

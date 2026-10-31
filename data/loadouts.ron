@@ -39,7 +39,7 @@
         ),
         (
             // 9 points: Primary 1, Grenade Launcher 2, Secondary 1, three Perks 3, Frag 1, Smoke 1.
-            // V fires the launcher, G throws the Frag, Q the Smoke.
+            // V switches to the launcher (a click fires it), G throws the Frag, Q the Smoke.
             name: "Grenadier",
             primary: M16,
             attachments: (underbarrel: Some(GrenadeLauncher)),

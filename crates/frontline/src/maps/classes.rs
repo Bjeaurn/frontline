@@ -103,6 +103,13 @@ pub struct DomFlag {
 #[derive(Clone, Debug, Default)]
 pub struct HqSite;
 
+/// A fixed ammo crate (Team Deathmatch only; every other Game Mode ignores it): a player walking
+/// up to it is fully resupplied, then it stays closed for a while. The origin is the centre of its
+/// base on the ground.
+#[point_class(size(-16 -12 0, 16 12 24), color(110 150 60))]
+#[derive(Clone, Debug, Default)]
+pub struct AmmoCrate;
+
 /// Label of a Search & Destroy bomb site.
 #[derive(FgdType, Clone, Copy, Debug, Default, PartialEq, Eq, Reflect)]
 pub enum BombSiteLabel {

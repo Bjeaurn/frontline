@@ -200,7 +200,7 @@ pub(super) struct SoldierMeshes {
     mark_torso: Handle<Mesh>,
     /// Armbands, under the aim group.
     mark_aim: Handle<Mesh>,
-    /// The rifle every soldier carries (the first-person rifle model).
+    /// The rifle every soldier carries (the first-person M4 model).
     gun: Handle<WorldAsset>,
 }
 
@@ -653,7 +653,7 @@ const FOREARM: f32 = 0.29;
 /// The held rifle's model transform in aim space: the viewmodel's rifle, in the same place in the
 /// hands as in first person.
 fn gun_mount() -> Transform {
-    Transform::from_translation(GUN_ORIGIN) * gun_rig(GunModel::Rifle).model_transform()
+    Transform::from_translation(GUN_ORIGIN) * gun_rig(GunModel::Carbine).model_transform()
 }
 
 /// Shoulder, elbow and hand (aim space) of the arm on `side` (+1 the soldier's right, -1 the
@@ -677,7 +677,7 @@ fn arm(side: f32, hand: Vec3) -> [Vec3; 3] {
 
 /// Both arms, in aim space: the right on the grip, the left under the handguard.
 fn arms() -> [[Vec3; 3]; 2] {
-    let rig = gun_rig(GunModel::Rifle);
+    let rig = gun_rig(GunModel::Carbine);
     [
         arm(1.0, GUN_ORIGIN + rig.grip()),
         arm(-1.0, GUN_ORIGIN + rig.left.position),

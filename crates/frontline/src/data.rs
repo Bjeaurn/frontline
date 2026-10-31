@@ -93,9 +93,13 @@ impl FireMode {
     }
 }
 
-/// Which first-person gun body a Weapon is drawn with.
+/// Which first-person gun body a Weapon is drawn with. The remote players' held gun is the
+/// Carbine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 pub enum GunModel {
+    /// M4: collapsed stock, quad rail, flip-up iron sights.
+    Carbine,
+    /// M16A4: fixed stock, round full-length handguard, carry handle.
     Rifle,
     Smg,
     Sniper,
@@ -211,6 +215,9 @@ pub struct WeaponStats {
     /// Maximum distance: of the hitscan ray, or of a projectile's path.
     pub range: f32,
     pub magazine: u32,
+    /// Spare magazines carried besides the one in the gun: the Reserve is `reserve_mags` times
+    /// the (effective) `magazine`. Perks and Attachments that change the magazine change it too.
+    pub reserve_mags: u32,
     /// Reload time with rounds left in the magazine (a tactical reload).
     pub reload_secs: f32,
     /// Reload time from an empty magazine (the bolt or slide has to be worked): longer.
@@ -308,6 +315,21 @@ pub struct WeaponStats {
 }
 
 impl WeaponStats {
+    /// The most rounds the Reserve holds: `reserve_mags` full magazines.
+    pub fn reserve_max(&self) -> u32 {
+        self.reserve_mags * self.magazine
+    }
+
+    /// The rounds `share` of the Reserve is worth, rounded up so that any share above 0 gives at
+    /// least a round. A `share` of 1 or more is the whole Reserve.
+    pub fn reserve_share(&self, share: f32) -> u32 {
+        if share <= 0.0 {
+            return 0;
+        }
+        let max = self.reserve_max();
+        ((max as f32 * share.min(1.0)).ceil() as u32).min(max)
+    }
+
     /// How long a reload takes with `rounds` left in the magazine.
     pub fn reload_secs_for(&self, rounds: u32) -> f32 {
         if rounds == 0 {
@@ -421,6 +443,7 @@ impl WeaponStats {
             },
             range: 200.0,
             magazine: 30,
+            reserve_mags: 4,
             reload_secs: 1.0,
             empty_reload_secs: 1.0,
             hip_spread_deg: 2.0,
@@ -634,6 +657,9 @@ pub struct GameModeSettings {
     pub headquarters: Option<HeadquartersTuning>,
     #[serde(default)]
     pub search_and_destroy: Option<SearchAndDestroyTuning>,
+    /// Team Deathmatch: the fixed ammo crates on the Map. Other modes ignore the Map's crates.
+    #[serde(default)]
+    pub ammo_crates: Option<AmmoCrateTuning>,
 }
 
 /// A capturable zone: a cylinder around its entity (Domination Flags, the Headquarters).
@@ -658,6 +684,28 @@ pub struct DominationTuning {
     /// Every this many seconds each team scores for the Flags it holds.
     pub score_interval_secs: f32,
     pub points_per_flag: u32,
+    /// How a player standing at a Flag their Team holds is resupplied.
+    pub resupply: ResupplyTuning,
+}
+
+/// The ammo crate at each held Domination Flag: every `interval_secs` it hands each player of
+/// the holding Team within `radius` of the Flag `share` of every Weapon's Reserve.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+pub struct ResupplyTuning {
+    /// Horizontal radius around the Flag, metres.
+    pub radius: f32,
+    pub interval_secs: f32,
+    /// Fraction of each Weapon's maximum Reserve per interval, 0 to 1.
+    pub share: f32,
+}
+
+/// The fixed ammo crates of Team Deathmatch: walking within `radius` of a ready one fully
+/// resupplies, then it is closed for `respawn_secs`.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+pub struct AmmoCrateTuning {
+    /// Horizontal radius around the crate, metres.
+    pub radius: f32,
+    pub respawn_secs: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
@@ -950,6 +998,23 @@ impl GameData {
                 tuned,
                 "{GAME_MODES_FILE}: {mode:?} is missing its tuning block"
             );
+            if mode == GameModeId::TeamDeathmatch {
+                assert!(
+                    settings
+                        .ammo_crates
+                        .is_some_and(|crates| crates.radius > 0.0 && crates.respawn_secs > 0.0),
+                    "{GAME_MODES_FILE}: TeamDeathmatch needs ammo_crates with a positive radius and respawn_secs"
+                );
+            }
+            if let Some(resupply) = settings.domination.map(|dom| dom.resupply) {
+                assert!(
+                    resupply.radius > 0.0
+                        && resupply.interval_secs > 0.0
+                        && resupply.share > 0.0
+                        && resupply.share <= 1.0,
+                    "{GAME_MODES_FILE}: Domination's resupply needs a positive radius and interval_secs and a share above 0 and at most 1"
+                );
+            }
         }
         for id in WeaponId::ALL {
             assert!(
@@ -1030,6 +1095,10 @@ impl GameData {
                 .values()
                 .all(|perk| (1..=PERK_SLOTS).contains(&perk.slot)),
             "{PERKS_FILE}: a Perk's slot is 1 to {PERK_SLOTS}"
+        );
+        assert!(
+            data.ammo_pack.share > 0.0 && data.ammo_pack.share <= 1.0,
+            "{PERKS_FILE}: ammo_pack share is above 0 and at most 1"
         );
         assert!(
             !data.default_loadouts.is_empty(),
@@ -1145,6 +1214,51 @@ mod tests {
             ..rules
         };
         assert_eq!(slow.early_respawn_secs(), slow.respawn_delay_secs);
+    }
+
+    #[test]
+    fn every_weapon_carries_a_finite_reserve_of_spare_magazines() {
+        let data = GameData::load();
+        let reserve = |id| data.weapon(id).reserve_max();
+        assert_eq!(
+            reserve(WeaponId::AssaultRifle),
+            120,
+            "M4: 4 spare magazines"
+        );
+        assert_eq!(reserve(WeaponId::M16), 120, "M16A4: 4 spare magazines");
+        assert_eq!(reserve(WeaponId::Smg), 120, "MP5: 4 spare magazines");
+        assert_eq!(reserve(WeaponId::Pistol), 45, "M9: 3 spare magazines");
+        assert_eq!(
+            reserve(WeaponId::SniperRifle),
+            20,
+            "M40: 20 rounds, 5-round magazine"
+        );
+        for id in WeaponId::ALL {
+            assert!(reserve(id) > 0, "{id:?} has a Reserve");
+        }
+    }
+
+    #[test]
+    fn a_reserve_share_rounds_up_and_caps_at_the_whole_reserve() {
+        let stats = WeaponStats {
+            magazine: 5,
+            reserve_mags: 4,
+            ..WeaponStats::fixture()
+        };
+        assert_eq!(stats.reserve_share(0.0), 0);
+        assert_eq!(
+            stats.reserve_share(0.25),
+            5,
+            "one spare magazine of a four magazine Reserve"
+        );
+        assert_eq!(stats.reserve_share(0.26), 6, "rounded up");
+        assert_eq!(stats.reserve_share(0.001), 1, "any share gives a round");
+        assert_eq!(stats.reserve_share(1.0), 20);
+        assert_eq!(
+            stats.reserve_share(3.0),
+            20,
+            "never more than the whole Reserve"
+        );
     }
 
     #[test]

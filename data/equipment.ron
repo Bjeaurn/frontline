@@ -3,8 +3,16 @@
 // server flies each one as a physical projectile; clients draw it. Distances in metres, times in
 // seconds, speeds in m/s. Which items a class can carry is data/class_points.ron.
 //
-//   speed, gravity   launch speed along the aim (thrown ones lobbed a little upward) and the
-//                    downward pull (game-tuned, not physical)
+//   speed, gravity   launch speed along the aim and the downward pull (game-tuned, not
+//                    physical). For a thrown one `speed` is the cap: no throw may be faster
+//                    (the client picks the speed by the look angle, the server clamps it)
+//   throw            thrown ones only: how a throw leaves the hand by the look angle. A throw
+//                    leaves lob_deg above the aim, at level_speed looking at the horizon. Looking
+//                    up, the speed goes to up_speed and the lob fades out by up_pitch_deg above
+//                    the horizon (farther and higher, 25-30 m at the horizon, about 40 m at 45
+//                    degrees up). Looking down the speed falls to down_speed straight down
+//                    (a short underhand toss, a few metres at 45 degrees down). A Grenade never
+//                    leaves the hand steeper than max_launch_deg.
 //   restitution      share of the speed into a surface kept when bouncing off it
 //   friction         share of the sideways speed kept on a bounce
 //   radius           collision radius of the body
@@ -21,7 +29,7 @@
 {
     Frag: (
         name: "Frag Grenade",
-        speed: 17.0,
+        speed: 25.0,
         gravity: 14.0,
         restitution: 0.35,
         friction: 0.6,
@@ -30,30 +38,54 @@
         effect: Blast(damage: 150.0, radius: 8.0),
         count: 1,
         cooldown_secs: 1.0,
+        throw: Some((
+            lob_deg: 16.0,
+            max_launch_deg: 70.0,
+            down_speed: 3.0,
+            level_speed: 25.0,
+            up_speed: 23.0,
+            up_pitch_deg: 45.0,
+        )),
     ),
     Flashbang: (
         name: "Flashbang",
-        speed: 17.0,
+        speed: 25.0,
         gravity: 14.0,
         restitution: 0.35,
         friction: 0.6,
         radius: 0.06,
-        fuse: Timed(1.6),
+        fuse: Timed(2.4),
         effect: Flash(radius: 16.0, blind_secs: 5.0, deaf_secs: 6.0),
         count: 2,
         cooldown_secs: 1.0,
+        throw: Some((
+            lob_deg: 16.0,
+            max_launch_deg: 70.0,
+            down_speed: 3.0,
+            level_speed: 25.0,
+            up_speed: 23.0,
+            up_pitch_deg: 45.0,
+        )),
     ),
     Smoke: (
         name: "Smoke Grenade",
-        speed: 17.0,
+        speed: 25.0,
         gravity: 14.0,
         restitution: 0.3,
         friction: 0.5,
         radius: 0.06,
-        fuse: Timed(1.3),
+        fuse: Timed(3.0),
         effect: Smoke(radius: 5.5, secs: 14.0),
         count: 1,
         cooldown_secs: 1.0,
+        throw: Some((
+            lob_deg: 16.0,
+            max_launch_deg: 70.0,
+            down_speed: 3.0,
+            level_speed: 25.0,
+            up_speed: 23.0,
+            up_pitch_deg: 45.0,
+        )),
     ),
     Launcher: (
         name: "40mm Grenade",

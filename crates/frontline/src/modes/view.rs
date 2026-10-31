@@ -9,11 +9,13 @@ use serde::{Deserialize, Serialize};
 use super::sd::RoundEnd;
 use crate::shared::Team;
 
-/// The objective state of the current Match; `None` in Team Deathmatch.
+/// The objective state of the current Match; `None` in a Game Mode without one.
 #[derive(Component, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub enum ModeView {
     #[default]
     None,
+    /// The Map's fixed ammo crates, in Team Deathmatch.
+    TeamDeathmatch(Vec<CrateView>),
     /// The Flags in label order.
     Domination(Vec<FlagView>),
     Headquarters(HqView),
@@ -36,6 +38,16 @@ pub struct FlagView {
     pub label: char,
     pub position: Vec3,
     pub zone: ZoneView,
+    /// A player of the holding Team stands at the Flag's ammo crate: it is lit.
+    pub resupplying: bool,
+}
+
+/// A fixed ammo crate as players see it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CrateView {
+    pub position: Vec3,
+    /// Open and ready, not closed on its respawn timer.
+    pub ready: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

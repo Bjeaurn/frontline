@@ -157,7 +157,7 @@ fn owner_color(owner: Option<Team>, local: Option<Team>) -> Color {
 
 fn wanted(view: &ModeView, data: &GameData, local: Option<Team>) -> Vec<Wanted> {
     match view {
-        ModeView::None => Vec::new(),
+        ModeView::None | ModeView::TeamDeathmatch(_) => Vec::new(),
         ModeView::Domination(flags) => {
             let radius = data.domination().capture.zone_radius;
             flags

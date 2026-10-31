@@ -191,8 +191,11 @@ pub(super) fn load_remote_assets(
     asset_server: Res<AssetServer>,
 ) {
     let gun = asset_server.load(
-        AssetPath::from(format!("{EMBEDDED_ROOT}{}", gun_rig(GunModel::Rifle).file))
-            .with_label("Scene0"),
+        AssetPath::from(format!(
+            "{EMBEDDED_ROOT}{}",
+            gun_rig(GunModel::Carbine).file
+        ))
+        .with_label("Scene0"),
     );
     commands.insert_resource(RemoteAssets {
         soldiers: data

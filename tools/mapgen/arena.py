@@ -1,7 +1,7 @@
 """Generates crates/frontline/assets/maps/arena.map: the greybox arena, with spawns per Team,
-Domination Flags, HQ sites and Search & Destroy bomb sites. 96 x 96 m: the cover is spread out
-(about 1.6x the original 60 m layout) rather than enlarged, with more of it in the new space, so
-it takes about 20 s to walk across.
+Domination Flags, HQ sites, Search & Destroy bomb sites and Team Deathmatch ammo crates. 96 x 96 m:
+the cover is spread out (about 1.6x the original 60 m layout) rather than enlarged, with more of it
+in the new space, so it takes about 20 s to walk across.
 
     python3 tools/mapgen/arena.py
     python3 tools/mapgen/arena.py --check      # also flood-fill the walkable floor
@@ -137,6 +137,13 @@ def build() -> Level:
     # Search & Destroy: both bomb sites on Bravo's half.
     L.bomb("A", -22.0, 27.0)
     L.bomb("B", 19.0, 27.0)
+    # Team Deathmatch ammo crates (ignored by the other modes): three pairs turned 180 degrees about
+    # the centre, in the west/east lane and the north/south and diagonal lanes between cover, well
+    # away from the spawns. Walk over one to be resupplied.
+    with L.mirrored():
+        L.ammo_crate(-22.0, 0.0)
+        L.ammo_crate(-12.0, -22.0)
+        L.ammo_crate(14.0, -12.0)
 
     # Practical lights: lamp posts, the building's interior, the containers, the HQ lanes and the
     # outer Flags. `targetname` "practical" lets the game scale them by the look's

@@ -5,7 +5,7 @@
 //   move_speed_mul      scales movement speed
 //   sprint_stamina_mul  scales how long a sprint lasts
 //   silent_footsteps    other players don't hear this player's footsteps
-//   scavenger           walking over a dead player's ammo pack refills ammo
+//   scavenger           a dead player's ammo pack gives the full refill instead of a share
 (
     perks: {
         SleightOfHand: (
@@ -16,7 +16,7 @@
         ),
         Scavenger: (
             name: "Scavenger",
-            description: "Walk over a dead player's ammo pack to refill your ammo.",
+            description: "A dead player's ammo pack gives you a full refill, not a share.",
             slot: 1,
             effects: (scavenger: true),
         ),
@@ -45,9 +45,13 @@
             effects: (silent_footsteps: true),
         ),
     },
-    // Ammo packs a dead player drops, for Scavenger.
+    // Ammo packs a dead player drops. Anyone alive who walks within `pickup_radius` of one takes it
+    // and gets `share` of each Weapon's maximum Reserve (0.25 is one spare magazine of a four
+    // magazine Reserve); a Scavenger gets the full refill: Reserve and magazines topped up.
+    // Untouched packs vanish after `lifetime_secs`.
     ammo_pack: (
         pickup_radius: 1.5,
         lifetime_secs: 45.0,
+        share: 0.25,
     ),
 )

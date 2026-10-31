@@ -299,6 +299,12 @@ def entities(L: Level) -> None:
     # Search & Destroy: one site in each flanking block.
     L.bomb("A", -39.0, -5.0)
     L.bomb("B", 39.0, 5.0)
+    # Team Deathmatch ammo crates (ignored by the other modes): three pairs turned 180 degrees about
+    # the centre, in the middle lanes between the blocks, far from both Teams' spawns.
+    with L.mirrored():
+        L.ammo_crate(-22.0, -2.0)
+        L.ammo_crate(-30.0, -20.0)
+        L.ammo_crate(6.0, 18.0)
 
 
 def dress(L: Level) -> None:

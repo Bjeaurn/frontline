@@ -58,12 +58,19 @@ pub(super) fn receive_throws(
             let Ok(direction) = Dir3::new(throw.direction) else {
                 continue;
             };
+            if !throw.speed.is_finite() || throw.speed <= 0.0 {
+                continue;
+            }
             let eye = pose.position + Vec3::Y * pose.stance.eye_height();
             if !live || health.is_dead() || throw.origin.distance(eye) > MAX_THROW_OFFSET {
                 continue;
             }
             let tuning = data.grenade(throw.kind);
-            info!("{:?} thrown ({})", throw.kind, tuning.name);
+            let speed = throw.speed.min(tuning.speed);
+            info!(
+                "{:?} thrown ({}) from {:?} at {:.1} m/s",
+                throw.kind, tuning.name, throw.origin, speed
+            );
             commands.spawn((
                 Name::new("Grenade"),
                 Grenade {
@@ -71,7 +78,7 @@ pub(super) fn receive_throws(
                     position: throw.origin,
                 },
                 Thrown {
-                    body: Body::thrown(throw.origin, *direction, tuning),
+                    body: Body::thrown(throw.origin, *direction, speed),
                     owner: link.0,
                 },
                 Replicate::to_clients(NetworkTarget::All),

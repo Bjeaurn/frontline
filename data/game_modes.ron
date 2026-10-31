@@ -4,6 +4,12 @@
 // - score_limit / time_limit_secs: the Match ends at the score limit, or at the time limit with
 //   the leader winning. Host setup can override both per mode. In Search & Destroy score_limit is
 //   the rounds a team needs to win and time_limit_secs is one round's clock (no Match clock).
+// - Ammo: dead players' packs exist in every mode (perks.ron). Domination's `resupply` is the ammo crate
+//   at each Flag: while a player stands within `radius` of a Flag their Team holds, every
+//   `interval_secs` they get `share` (0 to 1) of each Weapon's maximum Reserve. Team Deathmatch's
+//   `ammo_crates` are the Map's fixed crates (the `ammo_crate` entity): walking within `radius`
+//   of a ready one fully resupplies, then it stays closed for `respawn_secs`. Headquarters and
+//   Search & Destroy have no crates.
 // - Capture zones (Flags, the HQ): `max_speedup` caps how much extra teammates speed a capture up;
 //   an enemy zone is neutralised first; both teams on it freezes the progress.
 {
@@ -11,6 +17,10 @@
         score_limit: 50,
         time_limit_secs: 600,
         end_screen_secs: 10,
+        ammo_crates: Some((
+            radius: 1.6,
+            respawn_secs: 30.0,
+        )),
     ),
     Domination: (
         score_limit: 200,
@@ -26,6 +36,11 @@
             ),
             score_interval_secs: 5.0,
             points_per_flag: 1,
+            resupply: (
+                radius: 4.0,
+                interval_secs: 2.0,
+                share: 0.1,
+            ),
         )),
     ),
     Headquarters: (

@@ -18,7 +18,7 @@ use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::light::NotShadowCaster;
 use bevy::mesh::{UvChannel, VertexAttributeValues};
 use bevy::prelude::*;
-use bevy::render::render_resource::BlendState;
+use bevy::render::render_resource::{BlendState, Face};
 use bevy::world_serialization::WorldInstanceReady;
 
 use super::effects::MuzzleFlash;
@@ -28,7 +28,7 @@ use crate::assets::EMBEDDED_ROOT;
 use crate::atmosphere;
 use crate::data::{GameData, SightKind, WeaponId, WeaponStats};
 use crate::equipment::GrenadeKind;
-use crate::flow::AppState;
+use crate::flow::{AppState, Handedness, Settings};
 use crate::gear::{AttachmentId, Attachments, NO_CAMO};
 use crate::net::protocol::ThrowGrenade;
 use crate::player::{ControllerSystems, EyeCamera, LocalLife, Motor, MouseCaptured};
@@ -102,6 +102,9 @@ const THROW_FORWARD: (Vec3, f32) = (Vec3::new(0.06, -0.07, -0.56), 0.6);
 /// How much gun one tile of a camo texture covers, in metres.
 const CAMO_TILE_METRES: f32 = 0.12;
 
+/// How far the fingers close round a Grenade.
+const THROW_CURL: f32 = 0.7;
+
 /// Light for the viewmodel layer; world lights only reach the world layer.
 const VIEWMODEL_LIGHT_LUX: f32 = 9_000.0;
 
@@ -129,26 +132,42 @@ impl Plugin for ViewmodelPlugin {
 #[derive(Component)]
 pub struct ViewmodelCamera;
 
+/// The entities of one arm, in the layout of a right-handed player (mirrored when the player
+/// is left-handed): the glove and the sleeve's two tubes and elbow joint.
+#[derive(Clone, Copy, Debug)]
+struct LimbEntities {
+    hand: Entity,
+    upper: Entity,
+    fore: Entity,
+    elbow: Entity,
+}
+
 /// The entities of the arms, built once with the camera.
 #[derive(Clone, Copy, Debug)]
 struct ArmEntities {
     /// Parent of the hands, sleeves and the held Grenade; hidden with the gun.
     root: Entity,
-    right_hand: Entity,
-    left_hand: Entity,
-    right_arm: Entity,
-    left_arm: Entity,
-    /// The Grenade in the right hand, and one scene per kind under it.
+    /// The arm that holds the grip and throws, and the one that steadies the gun.
+    strong: LimbEntities,
+    support: LimbEntities,
+    /// The Grenade in the strong hand, and one scene per kind under it.
     holder: Entity,
     grenades: [(GrenadeKind, Entity); 3],
+}
+
+/// The gloves, one mesh per `rig::GLOVE_CURLS` step and hand.
+#[derive(Resource)]
+struct GloveMeshes {
+    right: [Handle<Mesh>; rig::GLOVE_CURLS.len()],
+    left: [Handle<Mesh>; rig::GLOVE_CURLS.len()],
 }
 
 /// The gun root under the viewmodel camera, with its procedural animation state.
 #[derive(Component, Debug)]
 pub(super) struct ViewmodelGun {
-    /// The Weapon, Attachments and camo (an id from `data/progression.ron`, `none` for bare
-    /// metal) whose model is currently built under it.
-    weapon: Option<(WeaponId, Attachments, String)>,
+    /// The Weapon, Attachments, camo (an id from `data/progression.ron`, `none` for bare
+    /// metal) and handedness whose model is currently built under it.
+    weapon: Option<(WeaponId, Attachments, String, Handedness)>,
     /// Rig of the model built, and where the left hand rests on it.
     rig: Option<GunRig>,
     left_rest: Option<HandPose>,
@@ -170,13 +189,18 @@ pub(super) struct ViewmodelGun {
 struct GunPart;
 
 /// A glTF scene on the viewmodel layer: every mesh of it is moved there when it is ready; a
-/// gun's gets `camo`, its magazine node is found and the nodes in `ads_hidden` go when aimed.
+/// gun's gets `camo`, its magazine node is found, the nodes in `ads_hidden` go when aimed and
+/// those in `removed` (what a fitted Optic replaces) are not drawn. `mirrored`: the scene is
+/// under a mirrored (negative scale) root, which turns every triangle inside out on screen, so
+/// its materials cull the other face.
 #[derive(Component)]
 struct ViewScene {
     camo: String,
+    mirrored: bool,
     bare: &'static [&'static str],
     magazine: Option<&'static str>,
     ads_hidden: &'static [&'static str],
+    removed: &'static [&'static str],
 }
 
 /// Part of a gun model that is hidden while aimed (a wire stock round the eye).
@@ -269,7 +293,9 @@ impl Furniture {
         Furniture::Sleeve,
     ];
 
-    fn material(self) -> StandardMaterial {
+    /// `mirrored`: for a part under a mirrored root, whose triangles run the other way round
+    /// on screen, so the face that is culled is the other one.
+    fn material(self, mirrored: bool) -> StandardMaterial {
         let (color, roughness) = match self {
             Furniture::Metal => (Color::srgb(0.16, 0.16, 0.17), 0.45),
             Furniture::Polymer => (Color::srgb(0.22, 0.20, 0.17), 0.8),
@@ -297,14 +323,30 @@ impl Furniture {
         StandardMaterial {
             base_color: color,
             perceptual_roughness: roughness,
+            cull_mode: Some(if mirrored { Face::Front } else { Face::Back }),
             ..default()
         }
     }
 }
 
-/// Materials shared by every procedural part, indexed by `Furniture`.
+/// Materials shared by every procedural part, indexed by `Furniture`: for the gun as it is,
+/// and for the gun under a mirrored root.
 #[derive(Resource)]
-struct GunMaterials([Handle<StandardMaterial>; 7]);
+struct GunMaterials {
+    plain: [Handle<StandardMaterial>; 7],
+    mirrored: [Handle<StandardMaterial>; 7],
+}
+
+impl GunMaterials {
+    fn get(&self, furniture: Furniture, mirrored: bool) -> Handle<StandardMaterial> {
+        let set = if mirrored {
+            &self.mirrored
+        } else {
+            &self.plain
+        };
+        set[furniture as usize].clone()
+    }
+}
 
 fn create_gun_materials(
     mut commands: Commands,
@@ -312,9 +354,10 @@ fn create_gun_materials(
     assets: Res<AssetServer>,
     data: Res<GameData>,
 ) {
-    commands.insert_resource(GunMaterials(
-        Furniture::ALL.map(|furniture| materials.add(furniture.material())),
-    ));
+    commands.insert_resource(GunMaterials {
+        plain: Furniture::ALL.map(|furniture| materials.add(furniture.material(false))),
+        mirrored: Furniture::ALL.map(|furniture| materials.add(furniture.material(true))),
+    });
     let camos = data
         .progression
         .camos
@@ -617,39 +660,40 @@ fn spawn_arms(
             ChildOf(camera),
         ))
         .id();
-    let glove = materials.add(Furniture::Glove.material());
-    let sleeve = materials.add(Furniture::Sleeve.material());
-    let sleeve_mesh = meshes.add(rig::sleeve_mesh());
-    let mut hand = |name: &'static str, curl: f32| {
-        commands
-            .spawn((
-                Name::new(name),
-                Mesh3d(meshes.add(rig::hand_mesh(curl))),
-                MeshMaterial3d(glove.clone()),
-                Transform::default(),
-                viewmodel_layer(),
-                NotShadowCaster,
-                ChildOf(root),
-            ))
-            .id()
+    let glove = materials.add(Furniture::Glove.material(false));
+    let sleeve = materials.add(Furniture::Sleeve.material(false));
+    let gloves = GloveMeshes {
+        right: rig::GLOVE_CURLS.map(|curl| meshes.add(rig::glove_mesh(curl, false))),
+        left: rig::GLOVE_CURLS.map(|curl| meshes.add(rig::glove_mesh(curl, true))),
     };
-    let right_hand = hand("RightHand", 0.9);
-    let left_hand = hand("LeftHand", 0.75);
-    let mut arm = |name: &'static str| {
-        commands
-            .spawn((
-                Name::new(name),
-                Mesh3d(sleeve_mesh.clone()),
-                MeshMaterial3d(sleeve.clone()),
-                Transform::default(),
-                viewmodel_layer(),
-                NotShadowCaster,
-                ChildOf(root),
-            ))
-            .id()
+    let upper_mesh = meshes.add(rig::upper_arm_mesh());
+    let fore_mesh = meshes.add(rig::forearm_mesh());
+    let elbow_mesh = meshes.add(rig::elbow_mesh());
+    let mut limb = |side: &'static str| {
+        let mut part =
+            |name: &'static str, mesh: Handle<Mesh>, material: &Handle<StandardMaterial>| {
+                commands
+                    .spawn((
+                        Name::new(format!("{side}{name}")),
+                        Mesh3d(mesh),
+                        MeshMaterial3d(material.clone()),
+                        Transform::default(),
+                        viewmodel_layer(),
+                        NotShadowCaster,
+                        ChildOf(root),
+                    ))
+                    .id()
+            };
+        LimbEntities {
+            hand: part("Hand", gloves.right[0].clone(), &glove),
+            upper: part("UpperArm", upper_mesh.clone(), &sleeve),
+            fore: part("Forearm", fore_mesh.clone(), &sleeve),
+            elbow: part("Elbow", elbow_mesh.clone(), &sleeve),
+        }
     };
-    let right_arm = arm("RightArm");
-    let left_arm = arm("LeftArm");
+    let strong = limb("Strong");
+    let support = limb("Support");
+    commands.insert_resource(gloves);
     let holder = commands
         .spawn((
             Name::new("HeldGrenade"),
@@ -672,9 +716,11 @@ fn spawn_arms(
                 Name::new(format!("Held {kind:?}")),
                 ViewScene {
                     camo: NO_CAMO.to_owned(),
+                    mirrored: false,
                     bare: &[],
                     magazine: None,
                     ads_hidden: &[],
+                    removed: &[],
                 },
                 WorldAssetRoot(scene),
                 // The holder is the palm-up hand's frame, upside down; the model's centre goes
@@ -690,13 +736,19 @@ fn spawn_arms(
     });
     ArmEntities {
         root,
-        right_hand,
-        left_hand,
-        right_arm,
-        left_arm,
+        strong,
+        support,
         holder,
         grenades,
     }
+}
+
+/// The face to cull under a mirrored root: its triangles run the other way round on screen.
+fn flipped_cull(cull: Option<Face>) -> Option<Face> {
+    cull.map(|face| match face {
+        Face::Front => Face::Back,
+        Face::Back => Face::Front,
+    })
 }
 
 /// A glTF scene of the viewmodel is ready: puts all its meshes on the viewmodel layer, finds a
@@ -732,11 +784,17 @@ fn scene_ready(
             )
         });
     let mut skinned: HashMap<AssetId<StandardMaterial>, Handle<StandardMaterial>> = HashMap::new();
+    let mut flipped: HashMap<AssetId<StandardMaterial>, Handle<StandardMaterial>> = HashMap::new();
     for entity in descendants.iter_descendants(root) {
         if let Ok(name) = names.get(entity)
             && scene.ads_hidden.contains(&name.as_str())
         {
             commands.entity(entity).insert(AdsHidden);
+        }
+        if let Ok(name) = names.get(entity)
+            && scene.removed.contains(&name.as_str())
+        {
+            commands.entity(entity).insert(Visibility::Hidden);
         }
         if let (Some(wanted), Ok(name)) = (scene.magazine, names.get(entity))
             && name.as_str() == wanted
@@ -752,16 +810,24 @@ fn scene_ready(
         commands
             .entity(entity)
             .insert((viewmodel_layer(), NotShadowCaster));
-        let Some((texture, metallic, roughness)) = &camo else {
-            continue;
-        };
         let node = parents.get(entity).map(ChildOf::parent).ok();
         let bare = node
             .and_then(|node| names.get(node).ok())
             .is_some_and(|name| scene.bare.contains(&name.as_str()));
-        if bare {
+        let Some((texture, metallic, roughness)) = camo.as_ref().filter(|_| !bare) else {
+            if scene.mirrored {
+                let material = flipped
+                    .entry(material.0.id())
+                    .or_insert_with(|| {
+                        let mut flipped = standard.get(&material.0).cloned().unwrap_or_default();
+                        flipped.cull_mode = flipped_cull(flipped.cull_mode);
+                        standard.add(flipped)
+                    })
+                    .clone();
+                commands.entity(entity).insert(MeshMaterial3d(material));
+            }
             continue;
-        }
+        };
         // The mesh's own transform up to the scene root, then the root's, takes it into gun
         // space.
         let mut to_gun = transforms.get(entity).copied().unwrap_or_default();
@@ -796,6 +862,9 @@ fn scene_ready(
                 skin.base_color_channel = UvChannel::Uv1;
                 skin.metallic = *metallic;
                 skin.perceptual_roughness = *roughness;
+                if scene.mirrored {
+                    skin.cull_mode = flipped_cull(skin.cull_mode);
+                }
                 standard.add(skin)
             })
             .clone();
@@ -803,6 +872,20 @@ fn scene_ready(
             .entity(entity)
             .insert((Mesh3d(meshes.add(skinned_mesh)), MeshMaterial3d(skin)));
     }
+}
+
+/// Where the rod and the knob of a bolt handle rest in gun space, if the model has one. A
+/// left-handed player's gun is mirrored, so the handle is put on the other side of the gun to
+/// stay on the right of the screen, where the right hand works it.
+fn bolt_handle_points(rig: &GunRig, mirrored: bool) -> Option<(Vec3, Vec3)> {
+    let side = if mirrored { -1.0 } else { 1.0 };
+    rig.bolt.map(|root| {
+        let root = Vec3::new(side * root.x, root.y, root.z);
+        (
+            root + Vec3::new(side * 0.027, 0.0, 0.0),
+            root + Vec3::new(side * 0.058, -0.006, 0.0),
+        )
+    })
 }
 
 /// Swaps the gun model when the held Weapon (or what is fitted to it) changes, moving the flash
@@ -818,6 +901,7 @@ fn build_gun(
     mut gun: Query<(Entity, &mut ViewmodelGun, &Children)>,
     parts: Query<(), With<GunPart>>,
     mut flash: Query<&mut Transform, With<MuzzleFlash>>,
+    settings: Res<Settings>,
 ) {
     let (Ok((weapon, kit)), Ok((gun, mut anim, children))) = (player.single(), gun.single_mut())
     else {
@@ -830,7 +914,9 @@ fn build_gun(
     } else {
         NO_CAMO.to_owned()
     };
-    let built = (weapon.id, weapon.attachments, camo.clone());
+    let handedness = settings.handedness;
+    let mirrored = handedness == Handedness::Left;
+    let built = (weapon.id, weapon.attachments, camo.clone(), handedness);
     if anim.weapon.as_ref() == Some(&built) {
         return;
     }
@@ -849,7 +935,7 @@ fn build_gun(
             .spawn((
                 GunPart,
                 Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(materials.0[furniture as usize].clone()),
+                MeshMaterial3d(materials.get(furniture, mirrored)),
                 transform,
                 viewmodel_layer(),
                 NotShadowCaster,
@@ -873,11 +959,8 @@ fn build_gun(
         part(mesh, furniture, transform);
     }
     // The bolt handle: a rod out of the receiver's side with a knob on its end.
-    let bolt: Vec<(Entity, Vec3)> = rig
-        .bolt
-        .map(|root| {
-            let rod = root + Vec3::new(0.027, 0.0, 0.0);
-            let knob = root + Vec3::new(0.058, -0.006, 0.0);
+    let bolt: Vec<(Entity, Vec3)> = bolt_handle_points(&rig, mirrored)
+        .map(|(rod, knob)| {
             vec![
                 (
                     part(
@@ -923,7 +1006,11 @@ fn build_gun(
                     Furniture::Polymer,
                     Transform::from_translation(at + Vec3::new(0.0, 0.0, 0.0)),
                 );
-                left_rest = rig.left_grip;
+                // The tube is wider than a Foregrip: the hand sits that much further out.
+                left_rest = HandPose {
+                    position: rig.left_grip.position + Vec3::X * (FOREGRIP.0 - LAUNCHER.0),
+                    ..rig.left_grip
+                };
             }
             _ => {}
         }
@@ -937,9 +1024,16 @@ fn build_gun(
         GunPart,
         ViewScene {
             camo,
+            mirrored,
             bare: rig.bare,
             magazine: rig.magazine,
             ads_hidden: rig.ads_hidden,
+            // A fitted Optic stands where the carry handle and flip-up sights are.
+            removed: if matches!(stats.sight, SightKind::Irons) {
+                &[]
+            } else {
+                rig.optic_hidden
+            },
         },
         WorldAssetRoot(scene),
         rig.model_transform(),
@@ -974,6 +1068,16 @@ fn match_eye_fov(
 fn smooth(from: f32, to: f32, x: f32) -> f32 {
     let t = ((x - from) / (to - from)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
+}
+
+/// A hand pose between `a` and `b`; the glove is the one of the nearer pose.
+fn blend_pose(a: HandPose, b: HandPose, weight: f32) -> HandPose {
+    HandPose {
+        position: a.position.lerp(b.position, weight),
+        rotation: a.rotation.slerp(b.rotation, weight),
+        left: if weight < 0.5 { a.left } else { b.left },
+        curl: a.curl.lerp(b.curl, weight),
+    }
 }
 
 /// A transform between `a` and `b`.
@@ -1017,6 +1121,8 @@ fn animate_viewmodel(
     magazines: Query<(Entity, &Magazine)>,
     mut transforms: Query<&mut Transform>,
     mut visibilities: Query<&mut Visibility, Without<ViewmodelGun>>,
+    settings: Res<Settings>,
+    (gloves, mut glove_meshes): (Res<GloveMeshes>, Query<&mut Mesh3d>),
 ) {
     let shots = fired.read().count();
     let thrown = throws
@@ -1030,6 +1136,12 @@ fn animate_viewmodel(
         return;
     };
     let stats = &*weapon.stats;
+    // A left-handed player's view is the right-handed one in a mirror: everything is worked
+    // out as for a right hand and the results mirrored at the end, so only what is not part of
+    // the gun's own movement (the mouse sway and the walking bob, which follow the screen) is
+    // turned about first.
+    let mirrored = settings.handedness == Handedness::Left;
+    let side = if mirrored { -1.0 } else { 1.0 };
     let hidden = life.is_dead() || weapon.scoped(stats);
     visibility.set_if_neq(if hidden {
         Visibility::Hidden
@@ -1135,18 +1247,18 @@ fn animate_viewmodel(
     let switching = weapon.switch_lowering().max(throw_lowered);
     let ads_offset = ads_offset(stats);
     let wobble = (bob + anim.sway) * motion_scale;
-    let gun_transform = Transform {
+    let gun_right_handed = Transform {
         translation: HIP_OFFSET.lerp(ads_offset, ads)
             + SPRINT_OFFSET * sprint
             + BOLT_SHIFT * bolt
             + Vec3::new(
-                wobble.x,
+                wobble.x * side,
                 wobble.y + RELOAD_RAISE * dip - MANTLE_DROP * mantle - SWITCH_DROP * switching,
                 KICK_BACK * kick,
             ),
         rotation: Quat::from_euler(
             EulerRot::YXZ,
-            anim.sway.x * SWAY_TILT * motion_scale + SPRINT_YAW * sprint,
+            anim.sway.x * SWAY_TILT * motion_scale * side + SPRINT_YAW * sprint,
             KICK_PITCH * kick
                 + RELOAD_TILT * dip
                 + anim.sway.y * SWAY_TILT * motion_scale
@@ -1158,46 +1270,110 @@ fn animate_viewmodel(
         ),
         scale: Vec3::ONE,
     };
+    let gun_transform = if mirrored {
+        rig::mirror_solid(gun_right_handed)
+    } else {
+        gun_right_handed
+    };
     if let Ok(mut transform) = transforms.get_mut(gun_entity) {
         *transform = gun_transform;
     }
 
-    // The arms, held to the gun (or, for the right hand, to the Grenade) in camera space.
+    // The arms, held to the gun (the strong hand, for a throw, to the Grenade) in camera space.
     let (Some(rig), Some(left_rest)) = (&anim.rig, anim.left_rest) else {
         return;
     };
-    let right_on_gun = gun_transform.mul_transform(rig.right.transform());
-    let right = blend(right_on_gun, throw_transform, throw_weight);
-    let mut left_mag = rig.left_mag;
-    left_mag.position += rig.mag_travel * mag_out;
-    let left = gun_transform.mul_transform(blend(
-        left_rest.transform(),
-        left_mag.transform(),
-        hand_on_mag,
-    ));
-    for (hand_entity, arm_entity, hand, elbow) in [
-        (arms.right_hand, arms.right_arm, right, rig::RIGHT_ELBOW),
-        (arms.left_hand, arms.left_arm, left, rig::LEFT_ELBOW),
-    ] {
-        if let Ok(mut transform) = transforms.get_mut(hand_entity) {
-            *transform = hand;
+    // The bolt handle's knob is worked by the right hand of the screen: the strong hand when
+    // right-handed, the other one when left-handed.
+    let knob = bolt_handle_points(rig, mirrored)
+        .map(|(_, knob)| rig::bolt_grip(knob + Vec3::new(0.0, BOLT_LIFT, BOLT_TRAVEL) * bolt));
+    let bolt_weight = smooth(0.0, 0.35, bolt);
+    let mut strong_pose = rig.right;
+    let mut support_pose = left_rest;
+    let mut mag_pose = rig.left_mag;
+    mag_pose.position += rig.mag_travel * mag_out;
+    support_pose = blend_pose(support_pose, mag_pose, hand_on_mag);
+    if let Some(grip) = knob {
+        if mirrored {
+            support_pose = blend_pose(support_pose, grip, bolt_weight);
+        } else {
+            strong_pose = blend_pose(strong_pose, grip, bolt_weight);
         }
-        let wrist = rig::wrist(&hand);
-        let along = elbow - wrist;
-        let length = along.length().max(0.01);
-        if let Ok(mut transform) = transforms.get_mut(arm_entity) {
-            let direction = along / length;
-            // A little inside the cuff so there is no gap.
-            *transform = Transform {
-                translation: wrist - direction * 0.02 + along / 2.0,
-                rotation: Quat::from_rotation_arc(Vec3::Y, direction),
-                scale: Vec3::new(1.0, length, 1.0),
-            };
+    }
+    // Camera space, as a right-handed player has it.
+    let strong_on_gun = gun_right_handed.mul_transform(strong_pose.transform());
+    let strong = blend(strong_on_gun, throw_transform, throw_weight);
+    let strong_curl = strong_pose.curl.lerp(THROW_CURL, throw_weight);
+    let support = gun_right_handed.mul_transform(support_pose.transform());
+    let mirror_point = |point: Vec3| {
+        if mirrored {
+            rig::mirror_point(point)
+        } else {
+            point
+        }
+    };
+    for (limb, hand, curl, left, arm) in [
+        (
+            arms.strong,
+            strong,
+            strong_curl,
+            strong_pose.left,
+            rig::RIGHT_ARM,
+        ),
+        (
+            arms.support,
+            support,
+            support_pose.curl,
+            support_pose.left,
+            rig::left_arm(),
+        ),
+    ] {
+        let end = rig::sleeve_end(&hand);
+        let elbow = rig::solve_elbow(arm.shoulder, end, arm.upper, arm.fore, arm.pole);
+        let hand_on_screen = if mirrored {
+            rig::mirror_placement(hand)
+        } else {
+            hand
+        };
+        if let Ok(mut transform) = transforms.get_mut(limb.hand) {
+            *transform = hand_on_screen;
+        }
+        // The other hand's glove when mirrored.
+        let gloves = if left != mirrored {
+            &gloves.left
+        } else {
+            &gloves.right
+        };
+        if let Ok(mut mesh) = glove_meshes.get_mut(limb.hand) {
+            let wanted = &gloves[rig::nearest_curl(curl)];
+            if mesh.0 != *wanted {
+                mesh.0 = wanted.clone();
+            }
+        }
+        for (entity, placed) in [
+            (
+                limb.upper,
+                rig::tube_transform(mirror_point(arm.shoulder), mirror_point(elbow)),
+            ),
+            (
+                limb.fore,
+                rig::tube_transform(mirror_point(elbow), mirror_point(end)),
+            ),
+            (limb.elbow, Transform::from_translation(mirror_point(elbow))),
+        ] {
+            if let Ok(mut transform) = transforms.get_mut(entity) {
+                *transform = placed;
+            }
         }
     }
     // The held Grenade sits in the palm of the throwing hand.
     if let Ok(mut transform) = transforms.get_mut(arms.holder) {
-        *transform = right.mul_transform(Transform::from_xyz(0.0, -0.045, -0.035));
+        let held = strong.mul_transform(Transform::from_xyz(0.0, -0.045, -0.035));
+        *transform = if mirrored {
+            rig::mirror_placement(held)
+        } else {
+            held
+        };
     }
     let holding = anim.throw.map(|(kind, _)| kind).filter(|_| throw_holding);
     if let Ok(mut holder_visibility) = visibilities.get_mut(arms.holder) {
