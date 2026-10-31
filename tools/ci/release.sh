@@ -11,7 +11,7 @@ tag=${1:?usage: release.sh <vX.Y.Z> [--check]}
 mode=${2:-}
 repo=Bjeaurn/frontline
 runner_label=frontline-release
-min_free_gb=10
+min_free_gb=${MIN_FREE_GB:-10}
 
 cd "$(git rev-parse --show-toplevel)"
 fail() { echo "NOT READY: $*" >&2; exit 1; }
@@ -30,7 +30,7 @@ status=$(gh api "repos/$repo/actions/runners" \
   --jq "[.runners[] | select(any(.labels[]; .name == \"$runner_label\"))] | map(.status) | first // \"none\"")
 [ "$status" = online ] || fail "the Mac runner is $status: start it with ~/actions-runner-frontline/start.sh"
 
-free_gb=$(df -g "$HOME" | awk 'NR==2 {print $4}')
+free_gb=$(df -Pk "$HOME" | awk 'NR==2 {printf "%d", $4 / 1048576}')
 [ "$free_gb" -ge "$min_free_gb" ] || fail "only ${free_gb} GB free, the macOS builds need about $min_free_gb GB"
 
 echo "ready: $tag, main pushed, Mac runner online, ${free_gb} GB free"
