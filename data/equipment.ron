@@ -75,7 +75,7 @@
         friction: 0.5,
         radius: 0.06,
         fuse: Timed(3.0),
-        effect: Smoke(radius: 5.5, secs: 14.0),
+        effect: Smoke(radius: 5.5, secs: 25.0),
         count: 1,
         cooldown_secs: 1.0,
         throw: Some((

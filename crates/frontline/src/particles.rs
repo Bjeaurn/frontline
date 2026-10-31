@@ -79,6 +79,8 @@ impl Plugin for ParticlesPlugin {
 pub enum Shape {
     /// Round and lumpy, for dust, smoke and fire.
     Soft,
+    /// Like `Soft` with a wide fully opaque core, for smoke that has to block the view.
+    Dense,
     /// A bright core with spikes, for flashes.
     Star,
     /// A thin circle, for shock waves.
@@ -180,6 +182,7 @@ struct Spark {
 pub struct ParticleAssets {
     quad: Handle<Mesh>,
     soft: Handle<Image>,
+    dense: Handle<Image>,
     star: Handle<Image>,
     ring: Handle<Image>,
     spark_mesh: Handle<Mesh>,
@@ -192,6 +195,7 @@ impl ParticleAssets {
     fn texture(&self, shape: Shape) -> Handle<Image> {
         match shape {
             Shape::Soft => self.soft.clone(),
+            Shape::Dense => self.dense.clone(),
             Shape::Star => self.star.clone(),
             Shape::Ring => self.ring.clone(),
         }
@@ -255,6 +259,17 @@ fn soft_texture() -> Image {
     })
 }
 
+/// The same lumpy outline as `soft_texture`, but opaque out to about 60% of the radius, so a
+/// handful of puffs hide what is behind them instead of letting it show through.
+fn dense_texture() -> Image {
+    image(96, |p| {
+        let lump = fbm(p * 2.6 + Vec2::splat(3.0)) - 0.5;
+        let edge = p.length() + lump * 0.5;
+        let shade = 1.0 - 0.18 * (p.y * 0.5 + 0.5);
+        [shade, shade, shade, smoothstep(1.0, 0.6, edge)]
+    })
+}
+
 fn star_texture() -> Image {
     image(96, |p| {
         let r = p.length().min(1.0);
@@ -310,6 +325,7 @@ impl FromWorld for ParticleAssets {
         let mut images = world.resource_mut::<Assets<Image>>();
         let hole = images.add(hole_texture());
         let soft = images.add(soft_texture());
+        let dense = images.add(dense_texture());
         let star = images.add(star_texture());
         let ring = images.add(ring_texture());
         let flame = images.add(flame_texture());
@@ -320,6 +336,7 @@ impl FromWorld for ParticleAssets {
         ParticleAssets {
             quad,
             soft,
+            dense,
             star,
             ring,
             flame,

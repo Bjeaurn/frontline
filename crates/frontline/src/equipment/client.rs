@@ -193,6 +193,8 @@ const SMOKE_PUFF: LinearRgba = LinearRgba::rgb(0.40, 0.41, 0.43);
 const SMOKE_GROW_SECS: f32 = super::SMOKE_FADE_IN_SECS * 1.6;
 /// Smoke puffs push apart at this rate (fraction of speed lost per second).
 const SMOKE_DRAG: f32 = 1.6;
+/// Puffs in a smoke cloud at Medium detail (half that at Low, more at High).
+const SMOKE_PUFFS: u32 = 34;
 
 fn random_in_ball(rng: &mut WeaponRng) -> Vec3 {
     random_unit(rng) * rng.next().cbrt()
@@ -507,8 +509,10 @@ fn spawn_flash_pop(
     }
 }
 
-/// A smoke grenade's cloud: soft grey puffs that billow out to fill a ball of `radius`, hold for
-/// `secs` (as `smoke_density` says) and thin out again.
+/// A smoke grenade's cloud: dense grey puffs that billow out to fill a ball of `radius`, hold for
+/// `secs` (as `smoke_density` says) and thin out again. There are enough of them, wide enough and
+/// opaque enough in the middle, that you cannot see a target through the cloud; the puffs rest on
+/// the ground and reach about a puff's height up, over a standing head.
 #[allow(clippy::too_many_arguments)]
 fn spawn_smoke_puffs(
     commands: &mut Commands,
@@ -520,12 +524,12 @@ fn spawn_smoke_puffs(
     radius: f32,
     secs: f32,
 ) {
-    for _ in 0..detail.count(14) {
-        let end_size = radius * (0.85 + rng.next() * 0.35);
-        let mut target = random_in_ball(rng) * radius * 0.55;
+    for _ in 0..detail.count(SMOKE_PUFFS) {
+        let end_size = radius * (1.0 + rng.next() * 0.5);
+        let mut target = random_in_ball(rng) * radius * 0.6;
         // A puff is a flat quad: rest it on the ground (half its size up) so it doesn't cut a
         // hard line through the floor.
-        target.y = end_size * (0.5 + rng.next() * 0.3);
+        target.y = end_size * (0.5 + rng.next() * 0.25);
         let shade = 0.85 + rng.next() * 0.3;
         spawn_puff(
             commands,
@@ -539,12 +543,13 @@ fn spawn_smoke_puffs(
                 end_size,
                 grow_secs: SMOKE_GROW_SECS,
                 life: secs,
+                shape: Shape::Dense,
                 color: LinearRgba::rgb(
                     SMOKE_PUFF.red * shade,
                     SMOKE_PUFF.green * shade,
                     SMOKE_PUFF.blue * shade,
                 ),
-                alpha: 0.95,
+                alpha: 1.0,
                 fade: Fade::Hold {
                     in_secs: super::SMOKE_FADE_IN_SECS,
                     out_secs: super::SMOKE_FADE_OUT_SECS.min(secs * 0.5),
