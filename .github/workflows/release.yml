@@ -59,6 +59,12 @@ jobs:
             *)             filter='.' ;;
           esac
           echo "matrix=$(jq -c "$filter" <<< "$all")" >> "$GITHUB_OUTPUT"
+          if jq -e 'any(.mac)' <<< "$(jq -c "$filter" <<< "$all")" > /dev/null; then
+            msg="The macOS builds run on the self-hosted Mac runner (label frontline-release). If it is not running, start ~/actions-runner-frontline/start.sh now: the jobs wait for it, and GitHub cancels a job that waits more than 24 hours."
+            echo "::warning title=Start the Mac runner::$msg"
+            echo "### Start the Mac runner" >> "$GITHUB_STEP_SUMMARY"
+            echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   ci:
     name: CI
