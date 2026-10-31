@@ -14,7 +14,8 @@ name=${2:?usage: package.sh <target-triple> <name>}
 exe=frontline
 [[ $target == *windows* ]] && exe=frontline.exe
 
-bin="target/$target/release/$exe"
+# CARGO_TARGET_DIR moves the build folder (the self-hosted Mac builds outside the checkout).
+bin="${CARGO_TARGET_DIR:-target}/$target/release/$exe"
 [ -f "$bin" ] || { echo "missing $bin: build with --release --target $target first" >&2; exit 1; }
 
 stage="dist/$name"

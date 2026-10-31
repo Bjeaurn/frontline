@@ -2,12 +2,28 @@ name: Release
 
 # Push a tag `vX.Y.Z` (matching the version in crates/frontline/Cargo.toml) and this runs CI, builds
 # Frontline for Linux, Windows and macOS (Apple silicon and Intel) and publishes a GitHub release
-# with the archives. Run it by hand (Actions > Release > Run workflow) to build the archives
-# without releasing: they are attached to the run as artifacts.
+# with the archives.
+#
+# Linux and Windows build on GitHub's runners. macOS builds on the maintainer's own Mac (a
+# self-hosted runner labelled `frontline-release`, see README > CI and releases), because GitHub
+# bills macOS minutes at 10x. If that runner is not online, the macOS jobs wait for it.
+#
+# Run it by hand (Actions > Release > Run workflow) to build the archives without releasing:
+# they are attached to the run as artifacts.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      targets:
+        description: Which platforms to build
+        type: choice
+        options: [all, macos, linux-windows]
+        default: all
+      run_checks:
+        description: Run format, clippy and tests first
+        type: boolean
+        default: true
 
 concurrency:
   group: release-${{ github.ref }}
@@ -21,24 +37,45 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - id: matrix
+        env:
+          TARGETS: ${{ inputs.targets || 'all' }}
+        run: |
+          all='[
+            {"target":"x86_64-unknown-linux-gnu","runs_on":"ubuntu-24.04","mac":false},
+            {"target":"x86_64-pc-windows-msvc","runs_on":"windows-latest","mac":false},
+            {"target":"aarch64-apple-darwin","runs_on":["self-hosted","macOS","ARM64","frontline-release"],"mac":true},
+            {"target":"x86_64-apple-darwin","runs_on":["self-hosted","macOS","ARM64","frontline-release"],"mac":true}
+          ]'
+          case "$TARGETS" in
+            macos)         filter='map(select(.mac))' ;;
+            linux-windows) filter='map(select(.mac | not))' ;;
+            *)             filter='.' ;;
+          esac
+          echo "matrix=$(jq -c "$filter" <<< "$all")" >> "$GITHUB_OUTPUT"
+
   ci:
     name: CI
+    if: github.event_name == 'push' || inputs.run_checks
     uses: ./.github/workflows/ci.yml
 
   build:
     name: Build ${{ matrix.target }}
-    needs: ci
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    needs: [plan, ci]
+    # `ci` is skipped on a dry run that turns the checks off; a failed check still blocks.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.ci.result == 'success' || needs.ci.result == 'skipped') }}
+    runs-on: ${{ matrix.runs_on }}
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: ubuntu-24.04, target: x86_64-unknown-linux-gnu }
-          - { os: windows-latest, target: x86_64-pc-windows-msvc }
-          - { os: macos-latest, target: aarch64-apple-darwin }
-          # Cross-compiled from the Apple silicon runner.
-          - { os: macos-latest, target: x86_64-apple-darwin }
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v6
 
@@ -73,6 +110,13 @@ jobs:
           name: ${{ steps.meta.outputs.name }}
           path: ${{ steps.package.outputs.archive }}
           if-no-files-found: error
+
+      # The self-hosted Mac has little spare disk: give the build folder back after every job.
+      - name: Free the build folder
+        if: ${{ always() && runner.environment == 'self-hosted' }}
+        shell: bash
+        run: |
+          rm -rf "${CARGO_TARGET_DIR:?}" dist
 
   release:
     name: Publish release

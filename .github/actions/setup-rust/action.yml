@@ -45,7 +45,8 @@ runs:
           libx11-dev libxcursor-dev libxi-dev libxrandr-dev
 
     - name: Cache cargo
-      if: inputs.cache == 'true'
+      # A self-hosted runner keeps its own toolchain and build folder; the hosted cache is for GitHub's.
+      if: inputs.cache == 'true' && runner.environment == 'github-hosted'
       uses: Swatinem/rust-cache@v2
       with:
         key: ${{ inputs.cache-key }}
