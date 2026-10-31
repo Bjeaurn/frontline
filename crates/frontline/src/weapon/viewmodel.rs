@@ -118,7 +118,12 @@ impl Plugin for ViewmodelPlugin {
             .add_systems(OnEnter(AppState::InGame), spawn_viewmodel_light)
             .add_systems(
                 Update,
-                (match_eye_fov, build_gun, animate_viewmodel)
+                (
+                    match_eye_fov,
+                    build_gun,
+                    // The gloves are made with the gun: the menu backdrop has neither.
+                    animate_viewmodel.run_if(resource_exists::<GloveMeshes>),
+                )
                     .chain()
                     .after(WeaponSystems)
                     .after(ControllerSystems::View),
