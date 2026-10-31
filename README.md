@@ -304,7 +304,7 @@ The Release workflow runs the checks above on the tagged commit, builds Frontlin
 **The macOS builds run on the maintainer's own Mac**, not on GitHub's runners, which bill macOS minutes at 10x (a cold build is about 40 minutes each). Linux and Windows build on GitHub's. The Mac is a self-hosted runner labelled `frontline-release` in `~/actions-runner-frontline`; the macOS jobs wait until it is online, so start it before tagging and stop it after:
 
 ```sh
-cd ~/actions-runner-frontline && ./run.sh      # Ctrl-C to stop
+~/actions-runner-frontline/start.sh      # Ctrl-C to stop
 ```
 
 It is deliberately not a login service, and only the Release workflow uses it (never pull requests: code from a pull request would run on the Mac). It keeps its own Rust toolchain (`rust/`, so it needs no rustup of yours), builds in `~/.cache/frontline-runner-target` and deletes that folder after every job, so it needs about 10 GB free while a release builds. To set one up on another Mac: download the runner for your architecture from github.com/actions/runner/releases, `./config.sh --url https://github.com/Bjeaurn/frontline --token <token from Settings > Actions > Runners> --labels frontline-release`, install rustup into it (`RUSTUP_HOME=<runner>/rust/rustup CARGO_HOME=<runner>/rust/cargo`, put `<runner>/rust/cargo/bin` first in the runner's `.path` and set both variables in its `.env`), and have Xcode's command line tools installed.
