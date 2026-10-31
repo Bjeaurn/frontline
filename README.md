@@ -299,7 +299,15 @@ GitHub Actions (`.github/workflows/`) run on every push to `main` and every pull
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-The Release workflow runs the checks above on the tagged commit, builds Frontline in release mode for Linux (x86_64), Windows (x86_64) and macOS (Apple silicon and Intel), packs each into `frontline-<tag>-<target>.tar.gz` (`.zip` on Windows) and publishes them in a GitHub release with generated notes. A tag with a suffix (`v0.2.0-rc1`) is marked a pre-release; a tag that doesn't match the crate version fails before building. Run the workflow by hand (Actions > Release > Run workflow) to get the archives as run artifacts without releasing anything.
+The Release workflow runs the checks above on the tagged commit, builds Frontline in release mode for Linux (x86_64), Windows (x86_64) and macOS (Apple silicon and Intel), packs each into `frontline-<tag>-<target>.tar.gz` (`.zip` on Windows) and publishes them in a GitHub release with generated notes. A tag with a suffix (`v0.2.0-rc1`) is marked a pre-release; a tag that doesn't match the crate version fails before building. Run the workflow by hand (Actions > Release > Run workflow) to get the archives as run artifacts without releasing anything; it can build just `macos` or `linux-windows`, and skip the checks.
+
+**The macOS builds run on the maintainer's own Mac**, not on GitHub's runners, which bill macOS minutes at 10x (a cold build is about 40 minutes each). Linux and Windows build on GitHub's. The Mac is a self-hosted runner labelled `frontline-release` in `~/actions-runner-frontline`; the macOS jobs wait until it is online, so start it before tagging and stop it after:
+
+```sh
+cd ~/actions-runner-frontline && ./run.sh      # Ctrl-C to stop
+```
+
+It is deliberately not a login service, and only the Release workflow uses it (never pull requests: code from a pull request would run on the Mac). It keeps its own Rust toolchain (`rust/`, so it needs no rustup of yours), builds in `~/.cache/frontline-runner-target` and deletes that folder after every job, so it needs about 10 GB free while a release builds. To set one up on another Mac: download the runner for your architecture from github.com/actions/runner/releases, `./config.sh --url https://github.com/Bjeaurn/frontline --token <token from Settings > Actions > Runners> --labels frontline-release`, install rustup into it (`RUSTUP_HOME=<runner>/rust/rustup CARGO_HOME=<runner>/rust/cargo`, put `<runner>/rust/cargo/bin` first in the runner's `.path` and set both variables in its `.env`), and have Xcode's command line tools installed.
 
 Each archive holds the executable, `assets/` (maps, models, fonts: it must stay next to the executable), `data/` (optional tuning overrides; the same files are built in) and this README. The builds are unsigned: macOS asks you to allow the app in System Settings > Privacy & Security (or `xattr -d com.apple.quarantine frontline`), and Windows SmartScreen shows a warning. The toolchain is the `rust-version` in the workspace `Cargo.toml`, so it is bumped in one place.
 
