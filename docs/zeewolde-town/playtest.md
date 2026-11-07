@@ -1,6 +1,6 @@
-# Zeewolde-Town: playtest guide and interview
+# Z-Town: playtest guide and interview
 
-Run it: `cargo run -- --host --map zeewolde_town --mode dom` (also `hq`, `sd`, `tdm`). Look from above first: `cargo run -p mapedit -- --map zeewolde_town --top`. Alpha spawns in the south-west (the south street), Bravo in the east (the Open Hof car park); switch teams from the pause menu.
+Run it: `cargo run -- --host --map z_town --mode dom` (also `hq`, `sd`, `tdm`). Look from above first: `cargo run -p mapedit -- --map z_town --top`. Alpha spawns in the south-west (the south street), Bravo in the east (the Open Hof car park); switch teams from the pause menu.
 
 ## What changed since the first test (phase 2 and 3)
 

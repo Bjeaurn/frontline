@@ -21,9 +21,9 @@
         modes: ["tdm", "dom", "hq", "sd"],
         factions: ("northern_sabre", "crimson_vanguard"),
     ),
-    "zeewolde_town": (
-        name: "Zeewolde-Town",
-        file: "maps/zeewolde_town.map",
+    "z_town": (
+        name: "Z-Town",
+        file: "maps/z_town.map",
         look: Some("overcast_urban"),
         modes: ["tdm", "dom", "hq", "sd"],
         factions: ("baekho", "volkov"),

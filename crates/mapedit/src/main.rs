@@ -3,8 +3,8 @@
 //! change and screenshots. It shares the game's library (`frontline`), so a Map looks here as it
 //! does in the game.
 //!
-//!     cargo run -p mapedit -- --map zeewolde_town
-//!     cargo run -p mapedit -- --map zeewolde_town --top --shot /tmp/top.png
+//!     cargo run -p mapedit -- --map z_town
+//!     cargo run -p mapedit -- --map z_town --top --shot /tmp/top.png
 
 mod camera;
 mod edit;

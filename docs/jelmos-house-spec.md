@@ -7,7 +7,7 @@ Only the name is known so far. This file holds the pipeline facts and constraint
 | # | Topic | Status |
 |---|---|---|
 | 1 | Setting and scale: a single house, a house plus grounds, or a neighbourhood? Interior-heavy or outdoor? Real place or fictional? | TBD |
-| 2 | Public Remix Map or private Homage Map (ADR 0003)? Zeewolde-Town is public. | TBD |
+| 2 | Public Remix Map or private Homage Map (ADR 0003)? Z-Town is public. | TBD |
 | 3 | Player count (the built-in Maps target 6-10) | TBD |
 | 4 | Game Modes: `tdm dom hq sd`, all four or a subset | TBD |
 | 5 | Layout: symmetric (`mirrored()`) or asymmetric, number of lanes, a main focus area, recognition points | TBD |
@@ -54,7 +54,7 @@ Only the name is known so far. This file holds the pipeline facts and constraint
 | Registry | `data/maps.ron` entry: name, file, look, modes, factions |
 | Docs | README mentions of built-in Maps |
 
-**Acceptance (same as Zeewolde-Town).**
+**Acceptance (same as Z-Town).**
 1. `python3 tools/mapgen/jelmos_house.py --check` prints `check: ok`.
 2. `python3 tools/mapgen/lint.py crates/frontline/assets/maps/jelmos_house.map` is clean.
 3. `cargo run -- --host --map jelmos_house --mode <mode>` starts for each supported mode.

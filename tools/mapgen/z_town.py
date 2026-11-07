@@ -1,4 +1,4 @@
-"""Generates crates/frontline/assets/maps/zeewolde_town.map: Zeewolde-Town, an original Remix Map in
+"""Generates crates/frontline/assets/maps/z_town.map: Z-Town, an original Remix Map in
 the centre of the Dutch polder town of Zeewolde (docs/zeewolde-town-spec.md, docs/zeewolde-town/).
 
 The layout follows the user's drawing on a Google Maps screenshot (docs/zeewolde-town/), at the
@@ -20,8 +20,8 @@ park), the church in between. Phase 1: a blockout: footprints, routes, enterable
 objectives and cover. The library's arcade and glass box, the church's tower and the roof
 climbs come next.
 
-    python3 tools/mapgen/zeewolde_town.py
-    python3 tools/mapgen/zeewolde_town.py --check      # also flood-fill the walkable floor
+    python3 tools/mapgen/z_town.py
+    python3 tools/mapgen/z_town.py --check      # also flood-fill the walkable floor
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ from pathlib import Path
 
 from kit import MAPS_DIR, Level, door, window
 
-OUT = MAPS_DIR / "zeewolde_town.map"
+OUT = MAPS_DIR / "z_town.map"
 
 STOREY = 3.6  # floor to floor
 SLAB = 0.3
@@ -558,7 +558,7 @@ def entities(L: Level) -> None:
 
 
 def build() -> Level:
-    L = Level("Zeewolde-Town", "overcast_urban")
+    L = Level("Z-Town", "overcast_urban")
     ground(L)
     perimeter(L)
     kerkplein(L)

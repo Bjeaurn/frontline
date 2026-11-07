@@ -260,7 +260,7 @@ TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "map": {"type": "string", "description": "Map id, e.g. zeewolde_town"},
+                "map": {"type": "string", "description": "Map id, e.g. z_town"},
                 "look": {"type": "string", "description": "Look preset instead of the Map's own"},
                 "mode": {"type": "string", "enum": ["tdm", "dom", "hq", "sd"], "description": "Show only what this Game Mode uses"},
                 "top": {"type": "boolean", "description": "Start in the top view"},

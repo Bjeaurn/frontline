@@ -1,4 +1,4 @@
-# Zeewolde-Town: vision notes (interview in progress)
+# Z-Town: vision notes (interview in progress)
 
 Collected from the reference images and the interview. The spec (`../zeewolde-town-spec.md`) is rewritten from these once the interview is done. **The reference images (the Google Maps screenshots, the numbered drawing, the church photos) are kept locally and not committed: the repo is public, and they are Google's imagery and personal photos.** They sat in this folder as `overlay-gmaps-*.png`, `overlay-gmaps-lines-numbered.svg` and `church*.HEIC`.
 

@@ -1,4 +1,4 @@
-# Zeewolde-Town: map spec
+# Z-Town: map spec
 
 A public **Remix Map** (ADR 0003): original layout in the centre of the Dutch polder town of Zeewolde, urban, 6-10 players, all four Game Modes (`tdm dom hq sd`). The layout follows the user's drawing on a Google Maps screenshot; the buildings are simplified massing, not plans.
 
@@ -65,10 +65,10 @@ The next HQ site is a **random one of the sites at least 60% of the farthest sit
 ## 8. Commands and acceptance
 
 ```sh
-python3 tools/mapgen/zeewolde_town.py --check                      # walkability, spawns, spacing, fences
-python3 tools/mapgen/lint.py crates/frontline/assets/maps/zeewolde_town.map
-cargo run -p mapedit -- --map zeewolde_town --top                  # look at it
-cargo run -- --host --map zeewolde_town --mode dom                 # play it
+python3 tools/mapgen/z_town.py --check                      # walkability, spawns, spacing, fences
+python3 tools/mapgen/lint.py crates/frontline/assets/maps/z_town.map
+cargo run -p mapedit -- --map z_town --top                  # look at it
+cargo run -- --host --map z_town --mode dom                 # play it
 ```
 
 Phases 1-3 pass: `check: ok` (every climb verified), lint clean, 605 brushes, the HQ rule's unit tests pass. The playtest guide and interview questions are in `docs/zeewolde-town/playtest.md`.
