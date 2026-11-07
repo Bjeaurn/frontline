@@ -1,6 +1,6 @@
 # Z-Town: vision notes (interview in progress)
 
-Collected from the reference images and the interview. The spec (`../zeewolde-town-spec.md`) is rewritten from these once the interview is done. **The reference images (the Google Maps screenshots, the numbered drawing, the church photos) are kept locally and not committed: the repo is public, and they are Google's imagery and personal photos.** They sat in this folder as `overlay-gmaps-*.png`, `overlay-gmaps-lines-numbered.svg` and `church*.HEIC`.
+Collected from the reference images and the interview. The spec (`../z-town-spec.md`) is rewritten from these once the interview is done. **The reference images (the Google Maps screenshots, the numbered drawing, the church photos) are kept locally and not committed: the repo is public, and they are Google's imagery and personal photos.** They sat in this folder as `overlay-gmaps-*.png`, `overlay-gmaps-lines-numbered.svg` and `church*.HEIC`.
 
 ## Decided
 
@@ -31,7 +31,7 @@ The user also said: two paths in the east part, one with defilade and bushes, th
 
 ## Reference photos (copyright Fleurbaaij Kunst & Cultuur: for looking at, not to be committed)
 
-FlevoMeer Bibliotheek, Kerkstraat 2, Koen van Velsen, 1989 (flevolanderfgoed.nl, "Bibliotheek" under Zeewolde):
+FlevoMeer Bibliotheek, Kerkstraat 2, Koen van Velsen, 1989 (flevolanderfgoed.nl, "Bibliotheek" in the town architecture list):
 
 - A large pale concrete box, about three storeys, with a regular grid of small square window holes: vertical rows on the front and back, horizontal rows on the long sides. The grey panels hang above a strip of glass, so the box looks lifted off the ground.
 - At the entrance end a **glass box on thin steel legs** sticks out over a **5 m deep arcade** (the other shops have 2 m).

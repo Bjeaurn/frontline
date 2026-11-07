@@ -25,7 +25,7 @@ Run it: `cargo run -- --host --map z_town --mode dom` (also `hq`, `sd`, `tdm`). 
 **Recognition and look**
 1. Does the church read as Open Haven now? What is the first thing you'd change (tower slimness, glass front, the arches, the cable-net poles)?
 2. The library: does the box, arcade and glass box give you the "boekenbajes" feeling? Is the dark band pattern too busy, too faint, or fine?
-3. Does the map feel Dutch? What would make it feel more like Zeewolde (colour, signage, greenery, water at the edge)?
+3. Does the map feel Dutch? What would make it feel more like the real town (colour, signage, greenery, water at the edge)?
 
 **Flow**
 4. How did the walk from your start feel (too short, too long)? It is 90 m from Alpha to Bravo, shorter than the other maps.
@@ -51,4 +51,4 @@ Run it: `cargo run -- --host --map z_town --mode dom` (also `hq`, `sd`, `tdm`). 
 
 ## Noting findings
 
-Write what you find in `docs/zeewolde-town/notes.md` under a "Playtest" heading, or tell me; I'll retune from there. Known gaps: no chamfered arches (the brick arches are plain openings), no medallion on the library, no cable net over the plaza, no signage, no colour accents.
+Write what you find in `docs/z-town/notes.md` under a "Playtest" heading, or tell me; I'll retune from there. Known gaps: no chamfered arches (the brick arches are plain openings), no medallion on the library, no cable net over the plaza, no signage, no colour accents.

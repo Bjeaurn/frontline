@@ -18,6 +18,6 @@ __pycache__/
 .mapedit-*.map
 
 # Z-Town reference imagery (Google Maps screenshots, personal photos): local only, the repo is public.
-/docs/zeewolde-town/*.png
-/docs/zeewolde-town/*.svg
-/docs/zeewolde-town/*.HEIC
+/docs/z-town/*.png
+/docs/z-town/*.svg
+/docs/z-town/*.HEIC

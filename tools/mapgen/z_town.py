@@ -1,7 +1,7 @@
 """Generates crates/frontline/assets/maps/z_town.map: Z-Town, an original Remix Map in
-the centre of the Dutch polder town of Zeewolde (docs/zeewolde-town-spec.md, docs/zeewolde-town/).
+the centre of a Dutch polder town (docs/z-town-spec.md, docs/z-town/).
 
-The layout follows the user's drawing on a Google Maps screenshot (docs/zeewolde-town/), at the
+The layout follows the user's drawing on a Google Maps screenshot (docs/z-town/), at the
 scale they measured (12 px per metre in the 1568-px view). The town's grid is turned about 15.6
 degrees against the screenshot; the Map is turned back so every street and wall is axis-aligned
 (x east, z south, -z "north" of the Map; true north is about 16 degrees off). The origin is the
@@ -608,7 +608,7 @@ if __name__ == "__main__":
             "south lane": (20.0, 35.0),
         }
         walks = check_walkability(
-            level, (X0 - 1, X1 + 1, Z0 - 1, Z1 + 1), starts, goals, image=Path("/tmp/zeewolde_nav.ppm"), walk_range=(80.0, 140.0),
+            level, (X0 - 1, X1 + 1, Z0 - 1, Z1 + 1), starts, goals, image=Path("/tmp/z_town_nav.ppm"), walk_range=(80.0, 140.0),
         )
         problems = placement_problems(level) + climb_problems(level, CLIMBS) + fence_conflicts(level)
         for line in problems:

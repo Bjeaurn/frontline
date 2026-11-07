@@ -1,8 +1,8 @@
 # Z-Town: map spec
 
-A public **Remix Map** (ADR 0003): original layout in the centre of the Dutch polder town of Zeewolde, urban, 6-10 players, all four Game Modes (`tdm dom hq sd`). The layout follows the user's drawing on a Google Maps screenshot; the buildings are simplified massing, not plans.
+A public **Remix Map** (ADR 0003): original layout in the centre of a Dutch polder town, urban, 6-10 players, all four Game Modes (`tdm dom hq sd`). The layout follows the user's drawing on a Google Maps screenshot; the buildings are simplified massing, not plans.
 
-Status: **phases 1-3 built** (blockout, the recognisable parts, the HQ rotation rule). Left: what the playtest finds, then dressing (see section 6's "not built"). The vision, interview answers and photo notes are in `docs/zeewolde-town/notes.md`; the screenshots and the numbered drawing are in `docs/zeewolde-town/`; the playtest guide is `docs/zeewolde-town/playtest.md`.
+Status: **phases 1-3 built** (blockout, the recognisable parts, the HQ rotation rule). Left: what the playtest finds, then dressing (see section 6's "not built"). The vision, interview answers and photo notes are in `docs/z-town/notes.md`; the screenshots and the numbered drawing are in `docs/z-town/`; the playtest guide is `docs/z-town/playtest.md`.
 
 ## 1. Frame and scale
 
@@ -71,4 +71,4 @@ cargo run -p mapedit -- --map z_town --top                  # look at it
 cargo run -- --host --map z_town --mode dom                 # play it
 ```
 
-Phases 1-3 pass: `check: ok` (every climb verified), lint clean, 605 brushes, the HQ rule's unit tests pass. The playtest guide and interview questions are in `docs/zeewolde-town/playtest.md`.
+Phases 1-3 pass: `check: ok` (every climb verified), lint clean, 605 brushes, the HQ rule's unit tests pass. The playtest guide and interview questions are in `docs/z-town/playtest.md`.
