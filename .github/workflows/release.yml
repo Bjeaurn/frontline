@@ -131,7 +131,9 @@ jobs:
 
   release:
     name: Publish release
-    if: github.ref_type == 'tag' || inputs.test_release
+    # `ci` is skipped on a manual run without checks, and a skipped job upstream skips every job
+    # below it unless the `if` has a status function: so test the build's result ourselves.
+    if: ${{ !cancelled() && needs.build.result == 'success' && (github.ref_type == 'tag' || inputs.test_release) }}
     needs: build
     runs-on: ubuntu-24.04
     permissions:
