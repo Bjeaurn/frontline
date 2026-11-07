@@ -59,6 +59,9 @@
             points_per_tick: 1,
             life_secs: 60.0,
             relocate_secs: 5.0,
+            // The next HQ is a random one of the sites at least this fraction of the farthest
+            // site's distance away from the one that fell (never the same site twice in a row).
+            relocate_far_fraction: 0.6,
         )),
     ),
     SearchAndDestroy: (

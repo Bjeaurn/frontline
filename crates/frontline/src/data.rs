@@ -718,6 +718,15 @@ pub struct HeadquartersTuning {
     pub life_secs: f32,
     /// Seconds between an HQ falling (or expiring) and the next one appearing.
     pub relocate_secs: f32,
+    /// The next HQ appears at a random site at least this fraction (0 to 1) of the farthest site's
+    /// distance from the one that fell, so it moves around the Map without landing on the same
+    /// spot twice in a row.
+    #[serde(default = "default_hq_far_fraction")]
+    pub relocate_far_fraction: f32,
+}
+
+fn default_hq_far_fraction() -> f32 {
+    0.6
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
