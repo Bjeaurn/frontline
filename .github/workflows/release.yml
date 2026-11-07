@@ -9,7 +9,8 @@ name: Release
 # bills macOS minutes at 10x. If that runner is not online, the macOS jobs wait for it.
 #
 # Run it by hand (Actions > Release > Run workflow) to build the archives without releasing:
-# they are attached to the run as artifacts.
+# they are attached to the run as artifacts. Tick "test_release" to also publish them as a
+# pre-release tagged test-<sha>-run<n> (never "Latest").
 on:
   push:
     tags: ["v*"]
@@ -24,6 +25,10 @@ on:
         description: Run format, clippy and tests first
         type: boolean
         default: true
+      test_release:
+        description: Publish the archives as a pre-release (test-<sha>-run<n>) instead of run artifacts only
+        type: boolean
+        default: false
 
 concurrency:
   group: release-${{ github.ref }}
@@ -126,7 +131,7 @@ jobs:
 
   release:
     name: Publish release
-    if: github.ref_type == 'tag'
+    if: github.ref_type == 'tag' || inputs.test_release
     needs: build
     runs-on: ubuntu-24.04
     permissions:
@@ -142,7 +147,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          flags=(--generate-notes --title "Frontline ${GITHUB_REF_NAME}")
-          # A tag with a suffix (v0.2.0-rc1) is a pre-release.
-          [[ ${GITHUB_REF_NAME} == *-* ]] && flags+=(--prerelease)
-          gh release create "${GITHUB_REF_NAME}" archives/* "${flags[@]}"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            flags=(--generate-notes --title "Frontline ${GITHUB_REF_NAME}")
+            # A tag with a suffix (v0.2.0-rc1) is a pre-release.
+            [[ ${GITHUB_REF_NAME} == *-* ]] && flags+=(--prerelease)
+            gh release create "${GITHUB_REF_NAME}" archives/* "${flags[@]}"
+          else
+            # A test build from a manual run: always a pre-release, tagged on the run's commit.
+            tag="test-${GITHUB_SHA::7}-run${GITHUB_RUN_NUMBER}"
+            gh release create "${tag}" archives/* --target "${GITHUB_SHA}" --prerelease \
+              --title "Frontline test build ${GITHUB_SHA::7}" \
+              --notes "Test build of ${GITHUB_SHA} (${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}). Not a release."
+          fi
