@@ -91,7 +91,7 @@ impl Surface {
     }
 }
 
-pub const SURFACES: [Surface; 7] = [
+pub const SURFACES: [Surface; 8] = [
     Surface {
         name: "concrete",
         tile_metres: (2.2, 1.1),
@@ -126,6 +126,11 @@ pub const SURFACES: [Surface; 7] = [
         name: "brick",
         tile_metres: (2.4, 1.2),
         image_px: (1024.0, 512.0),
+    },
+    Surface {
+        name: "grass",
+        tile_metres: (3.0, 3.0),
+        image_px: (1024.0, 1024.0),
     },
 ];
 

@@ -229,7 +229,7 @@ Maps are TrenchBroom `.map` files (Valve 220 format), loaded with bevy_trenchbro
 2. From the repository root, write Frontline's game config into TrenchBroom: `cargo run -- --write-trenchbroom-config` (or set `FRONTLINE_WRITE_TRENCHBROOM_CONFIG=1`). bevy_trenchbroom writes `GameConfig.cfg` and `frontline.fgd` (every entity class below) into TrenchBroom's `games/frontline/` folder and sets the game path in TrenchBroom's preferences to the current directory, with `crates/frontline/assets/` as its search path. Run it again whenever the entity classes change. Normal launches never touch TrenchBroom's files.
 3. In TrenchBroom, open or create a map for the game "Frontline" in the Valve format.
 
-Textures come from `crates/frontline/assets/textures/<surface>/color.jpg` (concrete, plaster, metal, corrugated, wood, ground, brick). A face's texture picks the in-game surface by its folder name, and the game draws it with that surface's full material (normal and roughness maps, palette tint). The texture scale is real-world: a scale of 0.0846 on concrete repeats it every 2.2 m, as `tools/mapgen` sets it.
+Textures come from `crates/frontline/assets/textures/<surface>/color.jpg` (concrete, plaster, metal, corrugated, wood, ground, brick, grass). A face's texture picks the in-game surface by its folder name, and the game draws it with that surface's full material (normal and roughness maps, palette tint). The texture scale is real-world: a scale of 0.0846 on concrete repeats it every 2.2 m, as `tools/mapgen` sets it.
 
 Brushes in worldspawn or any brush entity (`func_group`, `func_generic`) become solid, bullet-stopping geometry, one convex collider per brush. Entities:
 

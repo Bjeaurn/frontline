@@ -25,11 +25,13 @@ pub enum SurfaceKind {
     /// Dirt and gravel.
     Ground,
     Brick,
+    /// Lawns, hedges and foliage.
+    Grass,
 }
 
 impl SurfaceKind {
     /// In declaration order, so `kind as usize` indexes it.
-    pub const ALL: [SurfaceKind; 7] = [
+    pub const ALL: [SurfaceKind; 8] = [
         SurfaceKind::Concrete,
         SurfaceKind::Plaster,
         SurfaceKind::Metal,
@@ -37,6 +39,7 @@ impl SurfaceKind {
         SurfaceKind::Wood,
         SurfaceKind::Ground,
         SurfaceKind::Brick,
+        SurfaceKind::Grass,
     ];
 
     /// Canonical lowercase name; also the texture folder under `assets/textures/`.
@@ -49,6 +52,7 @@ impl SurfaceKind {
             SurfaceKind::Wood => "wood",
             SurfaceKind::Ground => "ground",
             SurfaceKind::Brick => "brick",
+            SurfaceKind::Grass => "grass",
         }
     }
 
@@ -74,6 +78,8 @@ impl SurfaceKind {
             ("gravel", SurfaceKind::Ground),
             ("sand", SurfaceKind::Ground),
             ("brick", SurfaceKind::Brick),
+            ("grass", SurfaceKind::Grass),
+            ("lawn", SurfaceKind::Grass),
         ];
         name.rsplit(['/', '\\']).find_map(|segment| {
             let segment = segment.to_ascii_lowercase();
@@ -96,6 +102,7 @@ impl SurfaceKind {
             SurfaceKind::Wood => Vec2::new(1.0, 1.0),
             SurfaceKind::Ground => Vec2::new(4.0, 4.0),
             SurfaceKind::Brick => Vec2::new(2.4, 1.2),
+            SurfaceKind::Grass => Vec2::new(3.0, 3.0),
         }
     }
 
@@ -110,6 +117,7 @@ impl SurfaceKind {
             SurfaceKind::Wood => Color::srgb(1.0, 0.94, 0.86),
             SurfaceKind::Ground => Color::srgb(0.96, 0.93, 0.88),
             SurfaceKind::Brick => Color::srgb(0.84, 0.72, 0.66),
+            SurfaceKind::Grass => Color::srgb(0.92, 0.98, 0.86),
         }
     }
 
@@ -129,8 +137,8 @@ pub struct SurfaceTextures {
 /// Textures and a tinted material per [`SurfaceKind`], loaded once at startup.
 #[derive(Resource, Clone, Debug)]
 pub struct SurfaceMaterials {
-    textures: [SurfaceTextures; 7],
-    materials: [Handle<StandardMaterial>; 7],
+    textures: [SurfaceTextures; SurfaceKind::ALL.len()],
+    materials: [Handle<StandardMaterial>; SurfaceKind::ALL.len()],
 }
 
 impl SurfaceMaterials {
@@ -359,6 +367,7 @@ mod tests {
             ("painted_metal", Some(SurfaceKind::Metal)),
             ("crate_plywood", Some(SurfaceKind::Wood)),
             ("ground/dirt01", Some(SurfaceKind::Ground)),
+            ("grass/color", Some(SurfaceKind::Grass)),
             ("plaster_white", Some(SurfaceKind::Plaster)),
             ("__TB_empty", None),
             // TrenchBroom names: folder per kind, `color` the map to paint with.

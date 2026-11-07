@@ -13,7 +13,7 @@ church's west front.
     Open Haven church (west front with covered walkways) .. x -6..24, z -5..32
     Paths east of the church ................................ x 24..37 (a second path with bushes)
     Open Hof car park and road, the east shops ............ x 37..58
-    Raadhuisstraat (north) and the north lane ............. z -41..-35 and z -11..-5
+    Raadhuisstraat (north) and the north lane ............. z -41..-30 and z -11..-5
 
 Alpha starts in the south-west (the south street at Kerkstraat's end), Bravo in the east (the car
 park), the church in between. Phase 1: a blockout: footprints, routes, enterable buildings,
@@ -122,13 +122,23 @@ def stall(L: Level, x: float, z: float, yaw: float = 0.0) -> None:
 
 
 def pine(L: Level, x: float, z: float, height: float = 6.0) -> None:
-    """A pine trunk: thin solid cover."""
+    """A pine: a thin solid trunk under three tiers of grass-surface foliage above head height."""
     L.block("wood", x - 0.2, x + 0.2, 0.0, height, z - 0.2, z + 0.2)
+    L.block("grass", x - 1.4, x + 1.4, 3.2, 4.6, z - 1.4, z + 1.4)
+    L.block("grass", x - 1.0, x + 1.0, 4.6, 5.8, z - 1.0, z + 1.0)
+    L.block("grass", x - 0.6, x + 0.6, 5.8, 6.8, z - 0.6, z + 0.6)
+
+
+def tree(L: Level, x: float, z: float) -> None:
+    """A street tree: a trunk and a two-tier grass-surface canopy above head height."""
+    L.block("wood", x - 0.25, x + 0.25, 0.0, 3.2, z - 0.25, z + 0.25)
+    L.block("grass", x - 1.8, x + 1.8, 3.0, 4.6, z - 1.8, z + 1.8)
+    L.block("grass", x - 1.2, x + 1.2, 4.6, 5.8, z - 1.2, z + 1.2)
 
 
 def hedge(L: Level, x0: float, x1: float, z0: float, z1: float, height: float = 1.3) -> None:
-    """A hedge or bush row: waist-high cover (a ground-surface block)."""
-    L.block("ground", x0, x1, 0.0, height, z0, z1)
+    """A hedge or bush row: waist-high cover (a grass-surface block)."""
+    L.block("grass", x0, x1, 0.0, height, z0, z1)
 
 
 def stair(L: Level, x0: float, x1: float, z0: float, z1: float) -> None:
@@ -171,7 +181,7 @@ def ground(L: Level) -> None:
         ("brick", X0, -5.0, -3.0, 2.0),  # Marktstraat
         ("brick", -38.0, -31.0, -37.0, -33.0),  # the street round the north of the square
         ("brick", -5.0, 1.0, Z0, -3.0),  # Torenstraat and the street along the square's east side
-        ("brick", -5.0, X1, -41.0, -35.0),  # Raadhuisstraat
+        ("brick", -5.0, X1, -41.0, -30.0),  # Raadhuisstraat
         ("brick", -6.0, 46.0, -11.0, -5.0),  # the north lane
         ("brick", 24.0, 29.0, -5.0, 32.0),  # the path along the church's east side
         ("brick", 32.0, 37.0, -5.0, 38.0),  # the second path (with bushes)
@@ -180,7 +190,15 @@ def ground(L: Level) -> None:
         ("brick", -16.0, 46.0, 32.0, 38.0),  # the south lane
         ("brick", -16.0, -6.0, -3.0, 40.0),  # the lane in front of the church (west side)
     ]
-    paint_floor(L, streets)
+    lawns = [
+        ("grass", -31.0, -5.0, -33.0, -30.5),  # Kerkplein's frame of lawn
+        ("grass", -31.0, -5.0, -5.5, -3.0),
+        ("grass", -31.0, -28.5, -33.0, -3.0),
+        ("grass", -7.5, -5.0, -33.0, -3.0),
+        ("grass", 29.0, 32.0, -5.0, 32.0),  # the garden between the east paths
+        ("grass", -5.0, X1, -41.0, -39.4),  # the tree strip along the north row
+    ]
+    paint_floor(L, streets + lawns)
 
 
 def perimeter(L: Level) -> None:
@@ -201,7 +219,7 @@ def kerkplein(L: Level) -> None:
     for x, z, yaw in (
         (-26.0, -27.0, 0.0), (-20.0, -27.0, 0.0), (-14.0, -27.0, 0.0),
         (-26.0, -9.0, math.pi), (-20.0, -9.0, math.pi),
-        (-9.0, -18.0, math.pi / 2), (-28.0, -18.0, -math.pi / 2),
+        (-9.0, -18.0, math.pi / 2),
     ):
         stall(L, x, z, yaw)
     L.van(-12.0, -11.0, 0.35, "corrugated")
@@ -281,43 +299,47 @@ def library(L: Level) -> None:
 
 
 def church(L: Level) -> None:
-    """Open Haven, x -6..24, z -5..32. Three halls under double-height roofs: the entrance hall
-    (x -6..8, z 1..11), the north hall (x 8..24, z -2..11) and the south hall of the parish (x -6..24,
-    z 14..32), with an open lane between them (z 11..14) that runs through from the front to the
-    east path, roofed for its first 8 m (the arch). Covered walkways 3 m wide ride along the west
-    and north fronts. The glass front, the tower and the hard way up to the roof (phase 2) follow."""
+    """Open Haven, x -6..24, z -5..28. Three halls under double-height roofs: the entrance hall
+    (x -6..8, z 1..11), the north hall (x 8..24, z -2..11) and the smaller south hall of the parish
+    (x -6..20, z 14..28, with windows on three sides), a solid block (z 11..14) between them. A 2 m
+    covered walk rides the north front and, as the canopy over the entrance, the west front
+    (z -4..13); no door of the church opens into either one except the entrance. The glass front,
+    the tower and the hard way up to the roof (phase 2) follow."""
     brick, h = "brick", CHURCH_WALL
-    # Entrance hall: the glass front on the west (a 5 m door), a door to each neighbour.
-    L.room(brick, -6.0, 8.0, 1.0, 11.0, 0.0, h, T, south=[door(2.0, 5.0)], west=[(3.0, 8.0, 0.0, h)], east=[door(4.0, 7.0, 3.2)])
-    # North hall: doors to the north walk, the east path and the lane.
-    L.room(brick, 8.0, 24.0, -2.0, 11.0, 0.0, h, T, north=[door(14.0, 17.0)], south=[door(14.0, 17.0)], west=[door(4.0, 7.0, 3.2)], east=[door(3.0, 6.0)])
-    # South hall (the parish): doors to the front, the lane, the east path and the south lane.
+    # Entrance hall: the glass front on the west (a 5 m door), a door to the north hall.
+    L.room(brick, -6.0, 8.0, 1.0, 11.0, 0.0, h, T, west=[(3.0, 8.0, 0.0, h)], east=[door(4.0, 7.0, 3.2)])
+    # North hall: a door from the entrance hall and one to the east path.
+    L.room(brick, 8.0, 24.0, -2.0, 11.0, 0.0, h, T, west=[door(4.0, 7.0, 3.2)], east=[door(3.0, 6.0)])
+    # South hall (the parish): two doors (south lane, east path) and windows on the front lane, the
+    # south lane and the east path: extra ways in and out.
     L.room(
-        brick, -6.0, 24.0, 14.0, 32.0, 0.0, h, T,
-        north=[door(2.0, 5.0)], south=[door(8.0, 11.0), window(16.0, 17.4)],
-        west=[door(22.0, 25.0)], east=[door(20.0, 23.0)],
+        brick, -6.0, 20.0, 14.0, 28.0, 0.0, h, T,
+        south=[door(8.0, 11.0), window(-2.0, -0.4), window(4.0, 5.6)],
+        west=[window(16.0, 17.6), window(20.5, 22.1), window(24.0, 25.6)],
+        east=[door(19.0, 22.0), window(15.5, 17.1)],
     )
-    # The corner block north of the entrance hall.
+    # The corner block north of the entrance hall, and the solid block between the halls.
     terrace(L, -6.0, 8.0, -2.0, 1.0, 0.0, h)
-    for x0, x1, z0, z1 in ((-6.0, 24.0, -2.0, 11.0), (-6.0, 24.0, 14.0, 32.0)):
+    terrace(L, -6.0, 24.0, 11.0, 14.0, 0.0, h)
+    terrace(L, 16.0, 24.0, 28.0, 31.0, 0.0, 7.2)  # the sacristy annex, closing the hall's south-east corner
+    for x0, x1, z0, z1 in ((-6.0, 24.0, -2.0, 14.0), (-6.0, 20.0, 14.0, 28.0)):
         L.block("concrete", x0, x1, h, CHURCH_ROOF, z0, z1)
-    # The arch: the lane's first 8 m are roofed.
-    L.block("concrete", -6.0, 2.0, WT, STOREY, 11.0, 14.0)
-    # Covered walks: north (x -6..24, z -5..-2) and west (x -9..-6, z -5..26), on columns.
-    L.block("concrete", -6.0, 24.0, WT, STOREY, -5.0, -2.0)
-    L.block("concrete", -9.0, -6.0, WT, STOREY, -5.0, 26.0)
+    # Covered walks (a green metal canopy on columns): north (x -6..24, z -4..-2) and west
+    # (x -8..-6, z -4..13), the latter over the entrance.
+    L.block("metal", -6.0, 24.0, WT, STOREY, -4.0, -2.0)
+    L.block("metal", -8.0, -6.0, WT, STOREY, -4.0, 13.0)
     for x in (-5.6, 0.0, 6.0, 12.0, 18.0, 23.6):
-        L.block("concrete", x - 0.2, x + 0.2, 0.0, WT, -5.0, -4.6)
-    for z in (-4.6, 2.0, 8.0, 14.0, 20.0, 25.6):
-        L.block("concrete", -9.0, -8.6, 0.0, WT, z - 0.2, z + 0.2)
+        L.block("metal", x - 0.2, x + 0.2, 0.0, WT, -4.0, -3.6)
+    for z in (-3.6, 2.0, 8.0, 12.6):
+        L.block("metal", -8.0, -7.6, 0.0, WT, z - 0.2, z + 0.2)
     # Pews.
     for z in (-0.5, 2.0):
         for x0, x1 in ((10.0, 13.0), (18.0, 21.0)):
             L.block("wood", x0, x1, 0.0, 0.9, z, z + 0.5)
-    for z in (17.0, 19.0, 21.0, 26.0, 28.0):
+    for z in (17.0, 19.0, 21.0, 25.0):
         for x0, x1 in ((-3.0, 3.0), (7.0, 13.0)):
             L.block("wood", x0, x1, 0.0, 0.9, z, z + 0.5)
-    for x, z in ((1.0, 6.0), (16.0, 4.0), (9.0, 24.0), (-2.0, 24.0)):
+    for x, z in ((1.0, 6.0), (16.0, 4.0), (9.0, 22.0), (-2.0, 22.0)):
         L.light(x, 5.5, z, intensity=260000.0, reach=11.0)
     glass_front(L)
     tower(L)
@@ -380,8 +402,8 @@ def church_roof_route(L: Level) -> None:
     against the covered walk's edge, the walk's roof (3.6 m), two ledges on the glass front (5.0 and
     6.3 m), the roof (7.3 m), the tower's two steps (8.7 and 10.0 m). Every step is within the 1.6 m
     mantle (`CLIMBS`, checked by `--check`). The roof has no cover."""
-    L.crate(-9.65, 10.8, 1.2)
-    L.crate(-9.65, 10.8, 1.0, y=1.2)
+    L.crate(-8.6, 10.8, 1.2)
+    L.crate(-8.6, 10.8, 1.0, y=1.2)
     L.block("metal", -7.0, -6.0, 4.8, 5.0, 6.0, 9.0)
     L.block("metal", -7.0, -6.0, 6.1, 6.3, 3.0, 6.0)
     # Tall poles in front of the church (the cable net's, in the real square), with a wire between.
@@ -405,8 +427,11 @@ def west_blocks(L: Level) -> None:
     # Block A and B along Kerkstraat's east side, with an alley between them.
     terrace(L, -31.0, -16.0, 13.0, 24.0, 0.0, 7.2)
     terrace(L, -31.0, -16.0, 27.0, 40.0, 0.0, 7.2)
-    # The arch over the lane at the church's south-west corner: from block B to the church hall.
+    # The arch over the lane at the church's south-west corner: from block B to the church hall,
+    # 6 m wide between two piers.
     L.block("concrete", -16.0, -6.0, WT, 6.8, 28.0, 32.0)
+    L.block("brick", -16.0, -14.0, 0.0, WT, 28.0, 32.0)
+    L.block("brick", -8.0, -6.0, 0.0, WT, 28.0, 32.0)
     # North and west of Kerkplein and Kerkstraat: solid terraces.
     terrace(L, X0, -38.0, -33.0, -5.0, 0.0, 7.2)
     terrace(L, X0, -37.0, 26.0, Z1 - 4.0, 0.0, 7.2)
@@ -417,14 +442,43 @@ def west_blocks(L: Level) -> None:
 # ---- the north: Raadhuisstraat and the shops along it ------------------------------------------------
 
 
+def north_shop(L: Level, x0: float, x1: float, enterable: bool = False, columns=(), **sides) -> None:
+    """One shop of the row on Raadhuisstraat's south side (z -30..-11): the ground floor set back 2 m
+    behind an arcade (a green metal ceiling on columns), one storey of brick above it. Enterable ones
+    have a shop room (z -28..-19) with a door and a window on the street and the given side doors."""
+    z_front, z_back = -28.0, -19.0
+    if enterable:
+        L.room("brick", x0, x1, z_front, z_back, 0.0, WT, T, north=[door(x0 + 3.0, x0 + 5.4), window(x0 + 7.0, x0 + 9.5)], **sides)
+        terrace(L, x0, x1, z_back, -11.0, 0.0, WT)
+        L.block("wood", x0 + 1.0, x1 - 1.0, 0.0, 1.0, z_back - 1.6, z_back - 1.0)  # the counter
+        L.block("wood", x0 + 0.3, x0 + 0.9, 0.0, 2.0, z_front + 1.5, z_front + 5.5)  # shelves
+        L.block("wood", x1 - 0.9, x1 - 0.3, 0.0, 2.0, z_front + 1.5, z_front + 5.5)
+        L.light((x0 + x1) / 2, 2.9, (z_front + z_back) / 2, intensity=120000.0, reach=9.0)
+    else:
+        terrace(L, x0, x1, z_front, -11.0, 0.0, WT)
+    L.block("metal", x0, x1, WT, STOREY, -30.0, z_front)  # the awning
+    L.block("concrete", x0, x1, WT, STOREY, z_front, -11.0)
+    terrace(L, x0, x1, -30.0, -11.0, STOREY, 7.2)
+    for x in columns:
+        L.block("metal", x - 0.2, x + 0.2, 0.0, WT, -29.8, -29.4)
+
+
 def north_block(L: Level) -> None:
     # The north row on Raadhuisstraat.
     terrace(L, -5.0, X1, Z0, -41.0, 0.0, 7.2)
-    # The shops between Raadhuisstraat and the north lane (Hair Flair and its neighbours), with two
-    # alleys through.
-    terrace(L, 1.0, 14.0, -34.0, -11.0, 0.0, 7.2)
-    terrace(L, 17.0, 31.0, -34.0, -11.0, 0.0, 7.2)
-    terrace(L, 34.0, 46.0, -34.0, -11.0, 0.0, 7.2)
+    # The shops between Raadhuisstraat and the north lane, with two alleys through; the two end
+    # shops are enterable (street door, an alley door), the middle one is solid.
+    north_shop(L, 1.0, 14.0, True, (1.4, 7.2, 11.0, 13.6), east=[door(-24.0, -21.6)])
+    north_shop(L, 17.0, 31.0, False, (17.4, 21.0, 24.0, 27.0, 30.6))
+    north_shop(L, 34.0, 46.0, True, (34.4, 40.2, 44.0, 45.6), west=[door(-24.0, -21.6)])
+    # Street life: trees in the grass strip along the north row, planters, benches and a kiosk.
+    for x in (4.0, 18.0, 36.0, 52.0):
+        tree(L, x, -40.0)
+    for x, z in ((15.5, -35.5), (32.5, -35.5), (47.5, -35.5)):
+        L.prop("Prop_Planter_Single", x, z, 0.0, 0.0, "box")
+    for x, z in ((21.0, -33.0), (40.0, -33.0)):
+        L.block("wood", x - 0.9, x + 0.9, 0.0, 0.5, z - 0.25, z + 0.25)
+    L.block("metal", 34.0, 36.4, 0.0, 2.6, -37.0, -35.0)  # the newspaper kiosk
     # The art pavilion (the "Insectenhotel") on the north lane: cover.
     L.block("wood", 12.0, 15.0, 0.0, 3.0, -9.5, -7.0)
     L.block("metal", 12.5, 14.5, 3.0, 3.2, -9.0, -7.5)
@@ -576,7 +630,7 @@ def build() -> Level:
 # The trick-jump routes: the (x, z) of each ledge in climbing order (a third number picks the top
 # below it, for a stack). Each step may rise at most the mantle height (kit.MANTLE_MAX).
 CLIMBS = {
-    "church roof, tower steps": [(-11.5, 10.8), (-9.65, 10.8, 1.5), (-9.65, 10.8, 2.5), (-8.5, 10.8), (-6.5, 7.5), (-6.5, 4.5), (-3.0, 6.0, 7.5), (-0.5, 6.0, 9.0), (-0.5, 6.0, 10.5)],
+    "church roof, tower steps": [(-11.5, 10.8), (-8.6, 10.8, 1.5), (-8.6, 10.8, 2.5), (-7.2, 10.8), (-6.5, 7.5), (-6.5, 4.5), (-3.0, 6.0, 7.5), (-0.5, 6.0, 9.0), (-0.5, 6.0, 10.5)],
     "library terrace": [(-38.6, 0.0), (-38.6, 1.4, 1.5), (-38.6, 1.4, 2.5), (-40.0, 2.5, 3.6), (-38.0, 2.5, 5.0), (-40.0, 2.5, 6.5), (-44.0, 8.0, 7.5)],
     "cafe roof": [(-33.5, 9.4), (-31.7, 9.4, 1.5), (-31.7, 9.4, 2.5), (-29.0, 9.4)],
     "east shop roof, north": [(47.0, 11.0), (48.35, 11.0, 1.5), (48.35, 11.0, 2.5), (51.0, 11.0)],
@@ -600,7 +654,6 @@ if __name__ == "__main__":
             "bomb B east shop": BOMBS["B"],
             "church north hall": (16.0, 8.0),
             "church south hall": (9.0, 24.0),
-            "church lane": (12.0, 12.5),
             "cafe": (-24.0, 8.0),
             "library 1F": (-50.0, STOREY, 18.0),
             "second path": (34.0, 20.0),

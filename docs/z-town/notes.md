@@ -94,3 +94,11 @@ About 60-100 brushes, no props and no extra lights beyond a few interior ones. I
 - Church: tower over the entrance hall (trick-jump deck at 10 m), glass front, poles; library: arcade, glass box, window bands, loopholes, roof terrace; trick-jump roofs on the library, Cafe De Mens and the two east shops, all verified by `--check`.
 - Headquarters: the next site is a random one of the far sites (60% of the farthest distance, never the same twice), `next_site` in `modes/hq.rs`.
 - Playtest guide and interview questions: `playtest.md` in this folder.
+
+## Playtest 1 (Windows) and what changed
+
+Findings: church fine but its lane gap should close and the south hall (windows = extra routes) shrink; the covered walks too wide and with church doors into them; colour and greenery thin (the library's look is liked); the north shopping street empty and narrow; market good, one stall fewer; the open trick-jump is good, keep; flags well placed; no FPS drops on Windows, a bit heavy on Mac. Untested: gunfights, HQ, S&D, TDM.
+
+Done: lane filled and roofed (one solid block, no lane); south hall x -6..20, z 14..28 with windows on the front lane, south lane and east path, plus a sacristy annex closing the south-east corner (it also keeps the Alpha-Bravo sightlines closed); walks 2 m wide in green metal, doors into them removed (the west walk is the entrance canopy, climb crates moved to x -8.6); the lane arch is now 6 m wide between piers; Raadhuisstraat widened to 11 m with arcaded shop fronts, two enterable shops, trees, planters, benches and a kiosk; one market stall removed; new `grass` surface (CC0 Grass001) for lawns, hedges and tree foliage; `z_town` now uses `dawn_cold`, `z_town_night` is the same map with `night_ops`.
+
+Still open: HQ, S&D and TDM playtests; whether `dawn_cold` reads well (the bricks go strongly orange, shade is dark); Mac frame rate.

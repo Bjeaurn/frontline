@@ -24,7 +24,15 @@
     "z_town": (
         name: "Z-Town",
         file: "maps/z_town.map",
-        look: Some("overcast_urban"),
+        look: Some("dawn_cold"),
+        modes: ["tdm", "dom", "hq", "sd"],
+        factions: ("baekho", "volkov"),
+    ),
+    // The same Map after dark: the look turns the Map's practical lights on.
+    "z_town_night": (
+        name: "Z-Town (Night)",
+        file: "maps/z_town.map",
+        look: Some("night_ops"),
         modes: ["tdm", "dom", "hq", "sd"],
         factions: ("baekho", "volkov"),
     ),

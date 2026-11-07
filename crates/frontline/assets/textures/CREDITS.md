@@ -21,3 +21,4 @@ downscaled to 512 px; all were re-encoded as JPEG with ImageMagick.
 | `wood/`       | [Planks023A](https://ambientcg.com/view?id=Planks023A)                 |
 | `ground/`     | [Ground109](https://ambientcg.com/view?id=Ground109)                   |
 | `brick/`      | [Bricks105](https://ambientcg.com/view?id=Bricks105)                   |
+| `grass/`      | [Grass001](https://ambientcg.com/view?id=Grass001)                     |

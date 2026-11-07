@@ -15,19 +15,18 @@ Status: **phases 1-3 built** (blockout, the recognisable parts, the HQ rotation 
 
 | Zone | Bounds (x; z) | Notes |
 |---|---|---|
-| **Kerkplein** | -31..-5; -33..-3 | The market square, the main fight. Seven stalls in two rows and two columns round a clear middle (Flag A), one market van, pines, light poles, planters. |
+| **Kerkplein** | -31..-5; -33..-3 | The market square, the main fight. Six stalls round a clear middle (Flag A), one market van, pines with foliage, light poles, planters, a lawn frame. |
 | Kerkstraat | -37..-31; -33..54 | The long shopping street on the west; 6 m wide, cars and barriers break the sightline. |
 | **FlevoMeer library** | -66..-42; 3..26 | Enterable, ground and first floor, stair, loopholes ("boekenbajes" slits) towards Kerkstraat and Marktstraat, 11 m tall. Phase 2 adds the 5 m arcade and the glass box. |
 | **Cafe De Mens** | -31..-16; 2..13 | Enterable, ground floor, doors on Marktstraat, Kerkstraat and the front lane. |
 | Blocks A and B | -31..-16; 13..24 and 27..40 | Solid, with a 3 m alley between (z 24..27) from Kerkstraat to the front lane. |
 | Front lane | -16..-6; -3..40 | Paved lane along the church's west front (the paved square of the photos). |
-| **Open Haven church** | -6..24; -5..32 | Three double-height halls: entrance hall (x -6..8, z 1..11), north hall (x 8..24, z -2..11), the parish's south hall (x -6..24, z 14..32). The tower comes in phase 2. |
-| Church lane (the arch) | -6..24; 11..14 | Open lane between the halls, from the front to the east path; roofed for its first 8 m. |
-| Covered walks | west x -9..-6, z -5..26; north z -5..-2 | 3 m wide on columns, along the church's west and north fronts; doors open into them. |
-| Arch over the lane | -16..-6; 28..32 | A gateway from block B to the church's south-west corner; the lane passes under it (3.3 m). |
+| **Open Haven church** | -6..24; -5..31 | Three double-height halls: entrance hall (x -6..8, z 1..11), north hall (x 8..24, z -2..11), the parish's smaller south hall (x -6..20, z 14..28, windows on three sides), joined by a solid block (z 11..14, no lane). A sacristy annex (x 16..24, z 28..31) closes the south-east corner. |
+| Covered walks | west x -8..-6, z -4..13; north z -4..-2 | 2 m wide, green metal canopies on columns; the west one is the canopy over the entrance. No door opens into them except the entrance. |
+| Arch over the lane | -16..-6; 28..32 | A gateway from block B to the church's south-west corner, 6 m wide between two piers (3.3 m high). |
 | North lane | -6..46; -11..-5 | Between the church and the shops; the Insectenhotel pavilion (cover) stands on it. |
-| Raadhuisstraat | -5..58; -41..-35 | The north street, with the north row of buildings on its far side. |
-| Shops (Hair Flair) | 1..46; -34..-11 | Solid, with two 3 m alleys (x 14..17 and 31..34) between Raadhuisstraat and the north lane. |
+| Raadhuisstraat | -5..58; -41..-30 | The north street, about 11 m wide (9 m open plus the 2 m arcades), a grass strip with trees along the north row, planters, benches and a kiosk. |
+| Shops (Hair Flair) | 1..46; -30..-11 | Arcade fronts (green metal awnings on columns), two 3 m alleys (x 14..17 and 31..34). The shops at x 1..14 and x 34..46 are enterable (street door and an alley door); the middle one is solid. |
 | East paths | 24..29 and 32..37; -5..38 | Path 9 along the church's east side; path 8 with bushes and defilade; hedges (1.3 m) between them. |
 | Car park, Open Hof, east shops | 37..46 / 46..49 / 49..58 | Bravo's start in the car park; two enterable shops on Open Hof (HQ, Flag C, bomb site B). |
 | South lane, S block | -16..46; 32..38; S block -4..36, 38..54 | The south lane is Alpha's route east. The S block closes the south street so the starts don't see each other. |
@@ -36,8 +35,8 @@ Status: **phases 1-3 built** (blockout, the recognisable parts, the HQ rotation 
 ## 3. Routes
 
 - **Alpha** (south-west) to the centre: north along Kerkstraat; through the alley between blocks A and B to the front lane; north up the front lane and under the arch; through the library or the cafe; east along the south lane to the paths.
-- **Bravo** (east) to the centre: west along the north lane or Raadhuisstraat; down path 9 or path 8 (bushes); through the church (south hall west door, or the lane); through an east shop.
-- The church lane and the covered walks give routes round the church. The shops' alleys connect the north to the lane.
+- **Bravo** (east) to the centre: west along the north lane or Raadhuisstraat (under the arcades); down path 9 or path 8 (bushes); through the church (south hall east door or windows); through an east shop.
+- The covered walks give routes round the church; the south hall's windows add ways through. The shops' alleys connect the north to the lane.
 
 ## 4. Entities
 
@@ -50,7 +49,7 @@ Status: **phases 1-3 built** (blockout, the recognisable parts, the HQ rotation 
 
 ## 5. Look and surfaces
 
-`overcast_urban`; factions `baekho` and `volkov` (swap and playtest). Surfaces: brick (streets, walls, terraces), concrete (the library, church roofs, plaza), plaster bands, wood and metal (stalls, cover), ground (hedges). There is no colour; the Maps' MegaKit buildings are not used (they read American).
+`dawn_cold` (a `z_town_night` entry on the same file uses `night_ops`); factions `baekho` and `volkov` (swap and playtest). Surfaces: brick (streets, walls, terraces), concrete (the library, church roofs, plaza), plaster bands, wood and metal (stalls, cover, the green awnings and canopies), and the `grass` surface (ambientCG Grass001, CC0) for the plaza's lawn frame, hedges, the tree strip along Raadhuisstraat and every tree's foliage. The Maps' MegaKit buildings are not used (they read American).
 
 ## 6. Phase 2 (built)
 
