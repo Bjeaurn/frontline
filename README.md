@@ -358,7 +358,7 @@ GitHub Actions (`.github/workflows/`) run on every push to `main` and every pull
 1. **Format:** `cargo fmt --all --check`.
 2. **Clippy and tests:** `cargo clippy --locked --workspace --all-targets -- -D warnings`, then `cargo test --locked --workspace`, on Linux (the whole workspace, MapEdit included; plain `cargo run`, `build` and the release build are the game alone). The Homage Maps (`content/private/`) are never there: nothing may depend on them.
 
-**Releasing:** bump `version` in `crates/frontline/Cargo.toml`, commit and push to `main`, start the Mac runner (below), then:
+**Releasing:** bump the version with `tools/ci/bump.sh minor --commit` (or `patch`, `major`, or an exact `0.3.0` / `0.3.0-rc1`; it sets `crates/frontline` and `crates/mapedit` together and refreshes `Cargo.lock`), push `main`, start the Mac runner (below), then:
 
 ```sh
 tools/ci/release.sh v0.2.0
@@ -419,6 +419,7 @@ Each archive holds the executable, `assets/` (maps, models, fonts: it must stay 
 - `tools/camos/`: generates the weapon camo textures (`camos.py`, Pillow only)
 - `tools/assets/`: imports prop models from raw asset packs (`import_props.py`, also their `bounds.json`)
 - `tools/ci/package.sh`: packs a release build (executable, `assets/`, `data/`, README) into the archive the release workflow publishes
+- `tools/ci/bump.sh`: bumps the version of both crates together (`patch`, `minor`, `major` or `X.Y.Z[-suffix]`), refreshes `Cargo.lock`, and with `--commit` commits it
 - `crates/frontline/src/shared.rs`: pose and stance types shared by netcode and gameplay
 
 Private content such as Homage Maps lives in the separate private repo `Bjeaurn/frontline-private`, cloned into the git-ignored `content/private/` (see `docs/adr/0003`):
