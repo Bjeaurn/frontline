@@ -112,6 +112,7 @@ impl Plugin for RemotePlayerVisualsPlugin {
             )
             .add_observer(remote::attach_remote_visuals)
             .add_observer(footsteps::attach_stride)
+            .add_observer(footsteps::attach_own_stride)
             .add_observer(packs::show_pack)
             .add_systems(
                 Update,
@@ -123,6 +124,13 @@ impl Plugin for RemotePlayerVisualsPlugin {
                 )
                     .chain(),
             )
-            .add_systems(Update, (footsteps::play_footsteps, packs::spin_packs));
+            .add_systems(
+                Update,
+                (
+                    footsteps::play_footsteps,
+                    footsteps::play_own_footsteps,
+                    packs::spin_packs,
+                ),
+            );
     }
 }

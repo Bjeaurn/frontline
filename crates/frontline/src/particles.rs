@@ -13,6 +13,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::atmosphere::sky::fbm;
 use crate::flow::AppState;
+use crate::maps::MapReady;
 use crate::player::EyeCamera;
 use crate::video::{AntiAliasing, Quality, SsaoQuality};
 use crate::weapon::WeaponRng;
@@ -50,12 +51,13 @@ impl Detail {
         }
     }
 
-    /// Bullet holes kept in the world at once.
+    /// Bullet holes kept in the world at once (the oldest go first): enough that a long
+    /// fight's hits stay readable.
     fn hole_cap(self) -> usize {
         match self {
-            Detail::Low => 16,
-            Detail::Medium => 48,
-            Detail::High => 120,
+            Detail::Low => 120,
+            Detail::Medium => 300,
+            Detail::High => 600,
         }
     }
 }
@@ -66,6 +68,7 @@ impl Plugin for ParticlesPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BulletHoles>()
             .init_resource::<ParticleAssets>()
+            .add_observer(clear_bullet_holes_on_new_map)
             .add_systems(OnExit(AppState::InGame), forget_bullet_holes)
             .add_systems(
                 Update,
@@ -307,16 +310,20 @@ fn flame_texture() -> Image {
     })
 }
 
-/// A hole with a dark crater, a scorched rim and a few cracks.
+/// A bullet hole: a black round crater with a ragged edge and a gray rim fading out, readable on
+/// dark and light surfaces alike.
 fn hole_texture() -> Image {
     image(64, |p| {
-        let r = p.length();
-        let wobble = (fbm(p * 4.0 + Vec2::splat(11.0)) - 0.5) * 0.5;
-        let crater = smoothstep(0.30 + wobble, 0.2 + wobble, r);
-        let scorch = smoothstep(1.0, 0.25, r + wobble * 1.4) * 0.55;
-        let alpha = crater.max(scorch * 0.7);
-        let shade = 0.03 + 0.1 * (1.0 - crater);
-        [shade, shade, shade, alpha]
+        let wobble = (fbm(p * 4.0 + Vec2::splat(11.0)) - 0.5) * 0.3;
+        let edge = p.length() + wobble;
+        let core = smoothstep(0.46, 0.40, edge);
+        let rim = smoothstep(0.80, 0.55, edge);
+        let shade = if core > 0.0 {
+            0.02
+        } else {
+            0.36 - 0.1 * smoothstep(0.5, 0.8, edge)
+        };
+        [shade, shade, shade, core.max(rim * 0.85)]
     })
 }
 
@@ -364,6 +371,18 @@ impl FromWorld for ParticleAssets {
 /// The holes went with the game (`DespawnOnExit`); drop their entities from the list.
 fn forget_bullet_holes(mut holes: ResMut<BulletHoles>) {
     holes.0.clear();
+}
+
+/// A new Map is ready (a Rotation moved on, or the Match started): the old Map's holes would
+/// hang in the air, so they go.
+fn clear_bullet_holes_on_new_map(
+    _: On<Add<MapReady>>,
+    mut holes: ResMut<BulletHoles>,
+    mut commands: Commands,
+) {
+    for hole in holes.0.drain(..) {
+        commands.entity(hole).try_despawn();
+    }
 }
 
 /// Spawns a puff.
@@ -517,7 +536,7 @@ pub fn spawn_bullet_hole(
             commands.entity(old).despawn();
         }
     }
-    let size = 0.07 + 0.04 * (roll * 7.0).fract();
+    let size = 0.14 + 0.06 * (roll * 7.0).fract();
     let id = commands
         .spawn((
             Name::new("Bullet hole"),

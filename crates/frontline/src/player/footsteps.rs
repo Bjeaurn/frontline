@@ -1,36 +1,49 @@
-//! Footsteps of remote players: a step sound for every stride of a walking or running player,
-//! heard from where they are. Crouched and prone players are silent, and so are players with the
-//! Ninja Perk (`silent_footsteps`). The steps come at about 2.2 a second walking, rising to
-//! about 3 a second sprinting, by the player's replicated speed; each is a random one of the
-//! concrete footstep recordings in `assets/sounds/` at a slightly random pitch.
+//! Footsteps: a step sound for every stride of a walking or running player. Remote players are
+//! heard from where they are; you hear your own, quieter. Crouched and prone players are silent,
+//! so are players with the Ninja Perk (`silent_footsteps`, to others) and you while airborne.
+//!
+//! A step falls due by the distance walked, not by a clock: a stride is `step_length` metres
+//! (the walking one at walking speed, lengthening to the sprinting one), so steps come exactly as
+//! fast as the player moves, none while standing or pushing against a wall, and the next follows
+//! as soon as they set off again. Each is a random one of the eight concrete footstep sounds in
+//! `assets/sounds/` (`tools/audio/footsteps.py` makes them) at a slightly random pitch.
 
 use bevy::audio::AudioSource;
 use bevy::prelude::*;
 
+use super::controller::Motor;
+use super::life::LocalLife;
 use crate::assets::EMBEDDED_ROOT;
 use crate::data::GameData;
 use crate::gear::EquippedPerks;
 use crate::rear_cue::RearCue;
-use crate::shared::{Health, PlayerPose, RemotePlayer, Stance, TELEPORT_DISTANCE};
+use crate::shared::{Health, LocalPlayer, PlayerPose, RemotePlayer, Stance, TELEPORT_DISTANCE};
 use crate::weapon::WeaponRng;
 
-const FOOTSTEPS: [&str; 5] = [
+const FOOTSTEPS: [&str; 8] = [
     "sounds/footstep_concrete_000.ogg",
     "sounds/footstep_concrete_001.ogg",
     "sounds/footstep_concrete_002.ogg",
     "sounds/footstep_concrete_003.ogg",
     "sounds/footstep_concrete_004.ogg",
+    "sounds/footstep_concrete_005.ogg",
+    "sounds/footstep_concrete_006.ogg",
+    "sounds/footstep_concrete_007.ogg",
 ];
-const FOOTSTEP_VOLUME: f32 = 0.4;
+/// Other players' steps.
+const FOOTSTEP_VOLUME: f32 = 0.6;
+/// Your own steps: there, but not louder than what you are listening for.
+const OWN_FOOTSTEP_VOLUME: f32 = 0.25;
 /// Footsteps play between `1 - PITCH_JITTER` and `1 + PITCH_JITTER` times their normal speed.
-const PITCH_JITTER: f32 = 0.05;
-/// Footsteps a second at walking speed, and at sprinting speed and above.
+const PITCH_JITTER: f32 = 0.06;
+/// Footsteps a second at walking speed, and at sprinting speed and above; with the speeds this
+/// gives the stride lengths.
 const WALK_RATE: f32 = 2.2;
 const SPRINT_RATE: f32 = 3.0;
 /// Metres a second below which a player stands still, as heard.
 const MIN_SPEED: f32 = 0.5;
-/// Seconds over which a remote player's speed, from the steps its replicated position takes,
-/// follows the real one.
+/// Seconds over which the speed, from the steps the position takes, follows the real one. It only
+/// tells a walk from a sprint; when steps fall due is the distance.
 const SPEED_SMOOTHING_SECS: f32 = 0.12;
 /// Where a stride starts after standing still, so the first step follows soon after setting off.
 const FIRST_STEP_PHASE: f32 = 0.6;
@@ -38,14 +51,45 @@ const FIRST_STEP_PHASE: f32 = 0.6;
 #[derive(Resource)]
 pub(super) struct FootstepSounds(Vec<Handle<AudioSource>>);
 
-/// How fast a remote player walks and how far into its next footstep it is.
+/// How fast a player walks and how far into its next footstep it is.
 #[derive(Component, Debug, Default)]
 pub(super) struct Stride {
     last: Option<Vec3>,
     /// Smoothed horizontal speed in metres a second.
     speed: f32,
-    /// `0..1` through the stride; a footstep plays on reaching 1.
+    /// `0..1` through the stride; a footstep falls due on reaching 1.
     phase: f32,
+}
+
+impl Stride {
+    /// Follows the player to `position` after `dt` seconds. `audible` is false while they make no
+    /// steps (crouched, dead, airborne). True when a footstep falls due now.
+    fn advance(&mut self, position: Vec3, dt: f32, audible: bool, walk: f32, sprint: f32) -> bool {
+        let moved = self
+            .last
+            .map_or(0.0, |last| (position - last).xz().length());
+        let teleported = self
+            .last
+            .is_some_and(|last| position.distance(last) > TELEPORT_DISTANCE);
+        self.last = Some(position);
+        if teleported || !audible {
+            self.speed = 0.0;
+            self.phase = FIRST_STEP_PHASE;
+            return false;
+        }
+        let follow = 1.0 - (-dt / SPEED_SMOOTHING_SECS).exp();
+        self.speed += (moved / dt - self.speed) * follow;
+        if self.speed < MIN_SPEED {
+            self.phase = FIRST_STEP_PHASE;
+            return false;
+        }
+        self.phase += moved / step_length(self.speed, walk, sprint);
+        if self.phase < 1.0 {
+            return false;
+        }
+        self.phase %= 1.0;
+        true
+    }
 }
 
 pub(super) fn load_footstep_sounds(mut commands: Commands, assets: Res<AssetServer>) {
@@ -61,11 +105,36 @@ pub(super) fn attach_stride(add: On<Add<RemotePlayer>>, mut commands: Commands) 
     commands.entity(add.entity).insert(Stride::default());
 }
 
-/// Footsteps a second at horizontal `speed`: `WALK_RATE` at `walk`, rising to `SPRINT_RATE` at
-/// `sprint`.
-fn step_rate(speed: f32, walk: f32, sprint: f32) -> f32 {
+pub(super) fn attach_own_stride(add: On<Add<LocalPlayer>>, mut commands: Commands) {
+    commands.entity(add.entity).insert(Stride::default());
+}
+
+/// Metres between two footsteps at horizontal `speed`: the walking stride (`walk / WALK_RATE`) at
+/// `walk` and below, the sprinting one (`sprint / SPRINT_RATE`) at `sprint` and above.
+fn step_length(speed: f32, walk: f32, sprint: f32) -> f32 {
     let sprinting = ((speed - walk) / (sprint - walk).max(f32::EPSILON)).clamp(0.0, 1.0);
-    WALK_RATE + (SPRINT_RATE - WALK_RATE) * sprinting
+    let walking = walk / WALK_RATE;
+    let running = sprint / SPRINT_RATE;
+    walking + (running - walking) * sprinting
+}
+
+/// Plays one random footstep.
+fn play_step(
+    commands: &mut Commands,
+    cue: &mut RearCue,
+    sounds: &FootstepSounds,
+    rng: &mut WeaponRng,
+    volume: f32,
+    at: Vec3,
+) {
+    let pick = ((rng.next() * sounds.0.len() as f32) as usize).min(sounds.0.len() - 1);
+    cue.play(
+        commands,
+        &sounds.0[pick],
+        volume,
+        1.0 + rng.signed() * PITCH_JITTER,
+        at,
+    );
 }
 
 /// Follows each remote player's walking and plays a step per stride.
@@ -85,43 +154,62 @@ pub(super) fn play_footsteps(
     if dt <= 0.0 || sounds.0.is_empty() {
         return;
     }
-    let follow = 1.0 - (-dt / SPEED_SMOOTHING_SECS).exp();
     for (pose, health, perks, mut stride) in &mut players {
-        let moved = stride
-            .last
-            .map_or(0.0, |last| (pose.position - last).xz().length());
-        let teleported = stride
-            .last
-            .is_some_and(|last| pose.position.distance(last) > TELEPORT_DISTANCE);
-        stride.last = Some(pose.position);
-        if teleported || health.is_dead() || pose.stance != Stance::Standing {
-            stride.speed = 0.0;
-            stride.phase = FIRST_STEP_PHASE;
-            continue;
-        }
-        stride.speed += (moved / dt - stride.speed) * follow;
-        if stride.speed < MIN_SPEED {
-            stride.phase = FIRST_STEP_PHASE;
-            continue;
-        }
-        stride.phase += step_rate(
-            stride.speed,
+        let audible = !health.is_dead() && pose.stance == Stance::Standing;
+        let due = stride.advance(
+            pose.position,
+            dt,
+            audible,
             data.movement.walk_speed,
             data.movement.sprint_speed,
-        ) * dt;
-        if stride.phase < 1.0 {
+        );
+        if !due || perks.is_some_and(|perks| data.perk_effects(perks.0.iter()).silent_footsteps) {
             continue;
         }
-        stride.phase -= 1.0;
-        if perks.is_some_and(|perks| data.perk_effects(perks.0.iter()).silent_footsteps) {
-            continue;
-        }
-        let pick = ((rng.next() * sounds.0.len() as f32) as usize).min(sounds.0.len() - 1);
-        cue.play(
+        play_step(
             &mut commands,
-            &sounds.0[pick],
+            &mut cue,
+            &sounds,
+            &mut rng,
             FOOTSTEP_VOLUME,
-            1.0 + rng.signed() * PITCH_JITTER,
+            pose.position,
+        );
+    }
+}
+
+/// The same for the local player: your own steps, quieter, and none in the air.
+pub(super) fn play_own_footsteps(
+    time: Res<Time>,
+    data: Res<GameData>,
+    life: Res<LocalLife>,
+    sounds: Res<FootstepSounds>,
+    mut rng: ResMut<WeaponRng>,
+    mut cue: RearCue,
+    mut player: Query<(&PlayerPose, &Motor, &mut Stride), With<LocalPlayer>>,
+    mut commands: Commands,
+) {
+    let dt = time.delta_secs();
+    if dt <= 0.0 || sounds.0.is_empty() {
+        return;
+    }
+    let Ok((pose, motor, mut stride)) = player.single_mut() else {
+        return;
+    };
+    let audible = !life.is_dead() && motor.grounded() && pose.stance == Stance::Standing;
+    let due = stride.advance(
+        pose.position,
+        dt,
+        audible,
+        data.movement.walk_speed,
+        data.movement.sprint_speed,
+    );
+    if due {
+        play_step(
+            &mut commands,
+            &mut cue,
+            &sounds,
+            &mut rng,
+            OWN_FOOTSTEP_VOLUME,
             pose.position,
         );
     }
@@ -131,16 +219,61 @@ pub(super) fn play_footsteps(
 mod tests {
     use super::*;
 
+    const WALK: f32 = 5.0;
+    const SPRINT: f32 = 8.0;
+    const DT: f32 = 1.0 / 60.0;
+
+    /// Walks `stride` along +x at `speed` for `secs` seconds from `from`, counting steps.
+    fn walk(stride: &mut Stride, from: f32, speed: f32, secs: f32) -> (usize, f32) {
+        let mut x = from;
+        let mut steps = 0;
+        for _ in 0..(secs / DT).round() as usize {
+            x += speed * DT;
+            steps += usize::from(stride.advance(Vec3::new(x, 0.0, 0.0), DT, true, WALK, SPRINT));
+        }
+        (steps, x)
+    }
+
     #[test]
-    fn cadence_rises_from_walking_to_sprinting_and_stays_within_them() {
-        let (walk, sprint) = (5.0, 8.0);
-        assert_eq!(step_rate(walk, walk, sprint), WALK_RATE);
-        assert_eq!(step_rate(sprint, walk, sprint), SPRINT_RATE);
-        let jog = step_rate(6.5, walk, sprint);
-        assert!(WALK_RATE < jog && jog < SPRINT_RATE);
-        // Slower than a walk (strafing, stepping off) keeps the walking cadence; faster than a
-        // sprint (a Perk, a slope) does not outrun the sprinting one.
-        assert_eq!(step_rate(2.0, walk, sprint), WALK_RATE);
-        assert_eq!(step_rate(12.0, walk, sprint), SPRINT_RATE);
+    fn stride_length_rises_from_walking_to_sprinting_and_stays_within_them() {
+        let (walking, running) = (WALK / WALK_RATE, SPRINT / SPRINT_RATE);
+        assert_eq!(step_length(WALK, WALK, SPRINT), walking);
+        assert_eq!(step_length(SPRINT, WALK, SPRINT), running);
+        let jog = step_length(6.5, WALK, SPRINT);
+        assert!(jog > walking.min(running) && jog < walking.max(running));
+        // Slower than a walk (strafing, stepping off) keeps the walking stride; faster than a
+        // sprint (a Perk, a slope) the sprinting one.
+        assert_eq!(step_length(2.0, WALK, SPRINT), walking);
+        assert_eq!(step_length(12.0, WALK, SPRINT), running);
+    }
+
+    #[test]
+    fn steps_follow_the_distance_walked_and_stop_when_the_player_does() {
+        let mut stride = Stride::default();
+        let (steps, x) = walk(&mut stride, 0.0, WALK, 4.0);
+        // 20 m at one step per 5 / 2.2 m, the first one early (it starts 60% in).
+        let expected = (x / (WALK / WALK_RATE) + FIRST_STEP_PHASE).floor() as usize;
+        assert!(
+            steps.abs_diff(expected) <= 1,
+            "{steps} steps, expected {expected}"
+        );
+        // Standing still: no more steps, however long.
+        let (steps, x) = walk(&mut stride, x, 0.0, 3.0);
+        assert_eq!(steps, 0);
+        // Setting off again: the first step comes within half a stride.
+        let (steps, _) = walk(&mut stride, x, WALK, 0.4);
+        assert!(steps >= 1);
+    }
+
+    #[test]
+    fn nothing_is_heard_while_not_audible_and_a_teleport_does_not_count_as_walking() {
+        let mut stride = Stride::default();
+        for i in 0..120 {
+            let at = Vec3::new(i as f32 * WALK * DT, 0.0, 0.0);
+            assert!(!stride.advance(at, DT, false, WALK, SPRINT));
+        }
+        let mut stride = Stride::default();
+        walk(&mut stride, 0.0, WALK, 0.2);
+        assert!(!stride.advance(Vec3::new(200.0, 0.0, 0.0), DT, true, WALK, SPRINT));
     }
 }

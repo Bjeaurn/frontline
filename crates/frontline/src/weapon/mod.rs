@@ -822,6 +822,7 @@ fn aim(
     };
     let t = weapon.ads_eased();
     modifiers.ads = t;
+    modifiers.scope = if stats.steady_sight() { t } else { 0.0 };
     modifiers.fov_scale = 1.0_f32.lerp(stats.ads_fov_scale(), t);
     modifiers.move_scale = stats.move_scale * 1.0_f32.lerp(stats.ads_move_scale, t);
     modifiers.stamina_scale = kit.effects.sprint_stamina_mul;

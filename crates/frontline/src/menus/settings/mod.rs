@@ -3,7 +3,7 @@
 //!   display mode and resolution apply live; those two wait for APPLY, which then asks "Keep
 //!   these settings?".
 //! - Audio: master volume.
-//! - Controls (`controls`): sensitivity, ADS multiplier, invert Y and the key-rebinding list.
+//! - Controls (`controls`): sensitivity, ADS and scope multipliers, invert Y and the key-rebinding list.
 //! - Gameplay: name, field of view, Auto reload and the CoD4 folder for Homage Map textures
 //!   (docs/adr/0004; CHECK applies it at once so the status line can say what was found).
 //!
@@ -35,11 +35,12 @@ const MAX_NAME_CHARS: usize = 24;
 const MAX_PATH_CHARS: usize = 300;
 const SENSITIVITY_RANGE: (f32, f32) = (0.0005, 0.006);
 const ADS_SENSITIVITY_RANGE: (f32, f32) = (0.25, 1.5);
+const SCOPE_SENSITIVITY_RANGE: (f32, f32) = (0.1, 1.5);
 const FOV_RANGE: (f32, f32) = (65.0, 110.0);
 const PANEL_WIDTH: f32 = 860.0;
 /// Height of the tab area: the Controls tab is the tallest, the others keep its size so the
 /// panel doesn't jump when switching.
-const TAB_HEIGHT: f32 = 470.0;
+const TAB_HEIGHT: f32 = 510.0;
 
 /// Where the screen was opened from, and so where APPLY/BACK return to.
 #[derive(Clone, Copy)]
@@ -159,6 +160,7 @@ pub(super) struct Cod4Status;
 enum SettingSlider {
     Sensitivity,
     AdsSensitivity,
+    ScopeSensitivity,
     Fov,
     Volume,
     Brightness,
@@ -169,6 +171,7 @@ impl SettingSlider {
         match self {
             SettingSlider::Sensitivity => "Mouse sensitivity",
             SettingSlider::AdsSensitivity => "ADS sensitivity",
+            SettingSlider::ScopeSensitivity => "Scope sensitivity",
             SettingSlider::Fov => "Field of view",
             SettingSlider::Volume => "Master volume",
             SettingSlider::Brightness => "Brightness",
@@ -179,6 +182,7 @@ impl SettingSlider {
         match self {
             SettingSlider::Sensitivity => SENSITIVITY_RANGE,
             SettingSlider::AdsSensitivity => ADS_SENSITIVITY_RANGE,
+            SettingSlider::ScopeSensitivity => SCOPE_SENSITIVITY_RANGE,
             SettingSlider::Fov => FOV_RANGE,
             SettingSlider::Volume => (0.0, 1.0),
             SettingSlider::Brightness => BRIGHTNESS_RANGE,
@@ -189,6 +193,7 @@ impl SettingSlider {
         match self {
             SettingSlider::Sensitivity => 0.0001,
             SettingSlider::AdsSensitivity => 0.05,
+            SettingSlider::ScopeSensitivity => 0.05,
             SettingSlider::Fov => 1.0,
             SettingSlider::Volume => 0.05,
             SettingSlider::Brightness => 0.05,
@@ -199,6 +204,7 @@ impl SettingSlider {
         match self {
             SettingSlider::Sensitivity => settings.mouse_sensitivity,
             SettingSlider::AdsSensitivity => settings.ads_sensitivity,
+            SettingSlider::ScopeSensitivity => settings.scope_sensitivity,
             SettingSlider::Fov => settings.fov_deg,
             SettingSlider::Volume => settings.master_volume,
             SettingSlider::Brightness => video.0.brightness,
@@ -210,6 +216,7 @@ impl SettingSlider {
             // Shown in thousandths: the default 0.002 reads "2.0".
             SettingSlider::Sensitivity => format!("{:.1}", value * 1000.0),
             SettingSlider::AdsSensitivity => format!("{value:.2}x"),
+            SettingSlider::ScopeSensitivity => format!("{value:.2}x"),
             SettingSlider::Fov => format!("{value:.0}°"),
             SettingSlider::Volume | SettingSlider::Brightness => {
                 format!("{:.0}%", value * 100.0)
@@ -395,6 +402,14 @@ fn spawn_settings(
         fonts,
         controls_tab,
         SettingSlider::AdsSensitivity,
+        settings,
+        video,
+    );
+    slider_row(
+        &mut commands,
+        fonts,
+        controls_tab,
+        SettingSlider::ScopeSensitivity,
         settings,
         video,
     );
@@ -772,6 +787,7 @@ impl Form<'_, '_> {
             match kind {
                 SettingSlider::Sensitivity => edited.mouse_sensitivity = value.0,
                 SettingSlider::AdsSensitivity => edited.ads_sensitivity = value.0,
+                SettingSlider::ScopeSensitivity => edited.scope_sensitivity = value.0,
                 SettingSlider::Fov => edited.fov_deg = value.0,
                 SettingSlider::Volume => edited.master_volume = value.0,
                 // Applied live into the video settings, which are copied below.

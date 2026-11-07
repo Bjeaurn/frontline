@@ -156,6 +156,9 @@ pub struct Settings {
     pub cod4_path: Option<PathBuf>,
     /// Mouse sensitivity multiplier while aiming down sights; 1.0 is the same as the hip.
     pub ads_sensitivity: f32,
+    /// Extra mouse sensitivity multiplier on top of `ads_sensitivity` while aiming through a
+    /// magnified sight (a scope, 3x and up); 1.0 changes nothing.
+    pub scope_sensitivity: f32,
     /// Moving the mouse up looks down.
     pub invert_y: bool,
     /// Settings > Gameplay: an empty magazine reloads when the trigger is pulled on it. Off by
@@ -180,6 +183,7 @@ impl Default for Settings {
             host: HostSetup::default(),
             cod4_path: None,
             ads_sensitivity: 1.0,
+            scope_sensitivity: 1.0,
             invert_y: false,
             auto_reload: false,
             handedness: Handedness::Right,
@@ -405,6 +409,7 @@ mod tests {
         assert_eq!(settings.video, defaults.video);
         assert_eq!(settings.bindings, defaults.bindings);
         assert_eq!(settings.ads_sensitivity, defaults.ads_sensitivity);
+        assert_eq!(settings.scope_sensitivity, defaults.scope_sensitivity);
         assert!(!settings.invert_y);
         assert_eq!(settings.handedness, Handedness::Right);
     }
@@ -420,6 +425,7 @@ mod tests {
     fn settings_round_trip_through_ron() {
         let mut settings = Settings {
             ads_sensitivity: 0.6,
+            scope_sensitivity: 0.4,
             invert_y: true,
             auto_reload: true,
             handedness: Handedness::Left,

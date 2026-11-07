@@ -295,6 +295,9 @@ pub struct ControllerModifiers {
     /// How far into aiming down sights the weapon is, 0..1 (eased); blends the ADS mouse
     /// sensitivity multiplier in.
     pub ads: f32,
+    /// `ads` while the sight in use is magnified (a scope), else 0: blends the scope mouse
+    /// sensitivity multiplier in.
+    pub scope: f32,
     /// Multiplies the horizontal field of view.
     pub fov_scale: f32,
     /// Multiplies the sprint stamina tank.
@@ -310,6 +313,7 @@ impl Default for ControllerModifiers {
         Self {
             move_scale: 1.0,
             ads: 0.0,
+            scope: 0.0,
             fov_scale: 1.0,
             stamina_scale: 1.0,
             sprint_blocked: false,
@@ -674,15 +678,19 @@ pub(super) fn apply_respawn(
 
 /// Radians of view rotation `motion` (mouse counts) turns the view by: yaw then pitch, positive
 /// to the right and down. `ads` (0..1) blends from the hip sensitivity to `ads_multiplier`
-/// times it; `invert_y` flips the pitch.
+/// times it; `scoped` (0..1, the ADS blend through a magnified sight, else 0) blends in the
+/// extra `scope_multiplier` on top; `invert_y` flips the pitch.
 fn look_delta(
     motion: Vec2,
     sensitivity: f32,
     ads_multiplier: f32,
     ads: f32,
+    scope_multiplier: f32,
+    scoped: f32,
     invert_y: bool,
 ) -> Vec2 {
-    let scale = sensitivity * 1.0_f32.lerp(ads_multiplier, ads);
+    let scale =
+        sensitivity * 1.0_f32.lerp(ads_multiplier, ads) * 1.0_f32.lerp(scope_multiplier, scoped);
     let delta = motion * scale;
     if invert_y {
         Vec2::new(delta.x, -delta.y)
@@ -709,6 +717,8 @@ pub(super) fn mouse_look(
         settings.mouse_sensitivity,
         settings.ads_sensitivity,
         modifiers.ads,
+        settings.scope_sensitivity,
+        modifiers.scope,
         settings.invert_y,
     );
     pose.yaw = (pose.yaw - delta.x + PI).rem_euclid(TAU) - PI;
@@ -1219,23 +1229,44 @@ mod tests {
         let motion = Vec2::new(10.0, 4.0);
         let close = |a: Vec2, b: Vec2| (a - b).abs().max_element() < 1e-6;
         assert!(close(
-            look_delta(motion, 0.002, 0.5, 0.0, false),
+            look_delta(motion, 0.002, 0.5, 0.0, 1.0, 0.0, false),
             motion * 0.002
         ));
         assert!(close(
-            look_delta(motion, 0.002, 0.5, 1.0, false),
+            look_delta(motion, 0.002, 0.5, 1.0, 1.0, 0.0, false),
             motion * 0.001
         ));
         assert!(close(
-            look_delta(motion, 0.002, 0.5, 0.5, false),
+            look_delta(motion, 0.002, 0.5, 0.5, 1.0, 0.0, false),
             motion * 0.0015
         ));
     }
 
     #[test]
     fn invert_y_flips_only_the_pitch() {
-        let delta = look_delta(Vec2::new(10.0, 4.0), 0.002, 1.0, 0.0, true);
+        let delta = look_delta(Vec2::new(10.0, 4.0), 0.002, 1.0, 0.0, 1.0, 0.0, true);
         assert!((delta - Vec2::new(0.02, -0.008)).abs().max_element() < 1e-6);
+    }
+
+    #[test]
+    fn the_scope_multiplier_stacks_on_the_ads_one_only_through_a_magnified_sight() {
+        let motion = Vec2::new(10.0, 4.0);
+        let close = |a: Vec2, b: Vec2| (a - b).abs().max_element() < 1e-6;
+        // Aimed through a scope: 0.5 (ADS) * 0.4 (scope) of the hip.
+        assert!(close(
+            look_delta(motion, 0.002, 0.5, 1.0, 0.4, 1.0, false),
+            motion * 0.002 * 0.5 * 0.4
+        ));
+        // Aimed through plain sights (`scoped` stays 0): the scope multiplier is not used.
+        assert!(close(
+            look_delta(motion, 0.002, 0.5, 1.0, 0.4, 0.0, false),
+            motion * 0.001
+        ));
+        // Half into the scope: the blend is halfway.
+        assert!(close(
+            look_delta(motion, 0.002, 1.0, 0.5, 0.4, 0.5, false),
+            motion * 0.002 * 0.7
+        ));
     }
 
     #[test]
