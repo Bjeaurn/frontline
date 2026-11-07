@@ -186,11 +186,18 @@ impl Looks {
         names.sort_unstable();
         names.join(", ")
     }
+
+    /// Preset names in alphabetical order.
+    pub fn names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self.0.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        names
+    }
 }
 
 /// `--look`: a look preset that replaces every Map's own for this session.
 #[derive(Resource, Debug)]
-struct LookOverride(Option<String>);
+pub struct LookOverride(pub Option<String>);
 
 /// The look in effect; cameras spawned later pick it up.
 #[derive(Resource, Debug)]

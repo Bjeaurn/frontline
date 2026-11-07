@@ -1,49 +1,18 @@
 //! Frontline: one binary for the windowed game (main menu, Client or Host) and the headless
-//! Dedicated Server.
-
-mod assets;
-mod atmosphere;
-mod ballistics;
-mod chat;
-mod class;
-mod cli;
-mod cod4;
-mod combat;
-mod data;
-mod equipment;
-mod flow;
-mod gear;
-mod loadout;
-mod maps;
-mod match_hud;
-mod materials;
-mod menus;
-mod modes;
-mod net;
-mod particles;
-mod player;
-mod profile;
-mod progression;
-mod rear_cue;
-mod rotation;
-mod rules;
-mod shared;
-mod ui;
-mod video;
-mod weapon;
-mod world;
+//! Dedicated Server. The modules live in the library (`lib.rs`).
 
 use std::time::Duration;
 
 use bevy::prelude::*;
 use clap::Parser;
+use frontline::cli::{Cli, Mode};
+use frontline::{
+    TICK_HZ, assets, atmosphere, chat, cod4, combat, data, equipment, flow, loadout, maps,
+    match_hud, materials, menus, modes, net, particles, player, profile, progression, rear_cue, ui,
+    video, weapon, world,
+};
 use lightyear::prelude::client::ClientPlugins;
 use lightyear::prelude::server::ServerPlugins;
-
-use crate::cli::{Cli, Mode};
-
-/// Simulation and network tick rate, shared by client and server.
-pub const TICK_HZ: f64 = 64.0;
 
 fn main() -> AppExit {
     let cli = Cli::parse();

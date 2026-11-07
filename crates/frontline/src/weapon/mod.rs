@@ -475,7 +475,7 @@ struct ModeSwitched;
 
 /// Small xorshift generator for spread, recoil and cosmetic jitter (footsteps use it too).
 #[derive(Resource, Debug)]
-pub(crate) struct WeaponRng(u64);
+pub struct WeaponRng(u64);
 
 impl WeaponRng {
     fn seeded() -> Self {

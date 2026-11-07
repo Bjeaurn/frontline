@@ -40,7 +40,9 @@ use bevy_trenchbroom::special_textures::SpecialTexturesPlugin;
 pub use classes::{
     AmmoCrate, BombSite, DomFlag, HqSite, Prop, PropCollider, SpawnPoint, SpawnTeam,
 };
-pub use registry::{DEFAULT_MAP, MapId, MapRegistry, private_dir, register_private_source};
+pub use registry::{
+    DEFAULT_MAP, MapId, MapInfo, MapRegistry, private_dir, register_private_source,
+};
 
 use crate::cli::Mode;
 use crate::cod4::{Cod4, Cod4Overrides, PreparedTexture};
@@ -264,7 +266,7 @@ pub struct ChangeMap(pub MapId);
 
 /// The Map loaded while there is no Match.
 #[derive(Resource, Clone, Debug)]
-struct IdleMap(MapId);
+pub struct IdleMap(pub MapId);
 
 /// Root entity of the loaded Map's scene; despawning it unloads the Map.
 #[derive(Component, Debug)]

@@ -45,6 +45,6 @@ jobs:
       # The Homage Maps live in a separate private repo (docs/adr/0003) and are never present
       # here: the build and the tests must not depend on them.
       - name: Clippy
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Tests
-        run: cargo test --locked
+        run: cargo test --locked --workspace

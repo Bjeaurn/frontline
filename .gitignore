@@ -10,3 +10,14 @@
 /content/assets/
 __pycache__/
 /dist
+
+# MapEdit screenshots (F12).
+/screenshots/
+
+# MapEdit's live preview of the Map being edited (deleted when it closes).
+.mapedit-*.map
+
+# Zeewolde-Town reference imagery (Google Maps screenshots, personal photos): local only, the repo is public.
+/docs/zeewolde-town/*.png
+/docs/zeewolde-town/*.svg
+/docs/zeewolde-town/*.HEIC

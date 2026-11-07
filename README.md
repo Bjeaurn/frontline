@@ -49,7 +49,7 @@ Every Match runs one Game Mode (`data/game_modes.ron`; every number below is dat
 |---|---|---|
 | Team Deathmatch | `tdm` | Each kill scores a point. 50 points or 10 min. The Map's fixed **ammo crates** (the `ammo_crate` entity, 6 on each built-in Map) fully resupply a player who walks up to them (no key): both magazines and the whole Reserve. A used crate stays shut for 30 s (`ammo_crates.respawn_secs`), then opens again; open it is lit green with its lid up, shut it is dark. |
 | Domination | `dom` | Three Flags (A, B, C). Stand in a Flag's zone to capture it: ~10 s alone, up to 3x faster with teammates; both teams on it freezes it, and an enemy Flag is neutralised first. Each held Flag scores a point every 5 s. 200 points or 10 min. Spawns lean toward your Flags. The HUD shows A/B/C icons under the score, a progress bar while you capture, and markers over the Flags. Each Flag has an **ammo crate** beside it: while you stand within 4 m of a Flag your Team holds you are slowly resupplied (every 2 s, 10% of each Weapon's maximum Reserve, `resupply` in `game_modes.ron`), the crate opens and lights up while a holder is there, and the HUD shows `RESUPPLYING`. An enemy or neutral Flag's crate stays shut. |
-| Headquarters | `hq` | One HQ is active at a time (rotating through the Map's HQ sites, ~60 s each). Capture it by standing in it (~10 s); the holders score a point per second and **don't respawn** while they hold it, so the other team must destroy it (stand in it ~10 s) before they are all dead. 250 points or 10 min. |
+| Headquarters | `hq` | One HQ is active at a time, ~60 s each; when it falls or expires the next one appears at a random one of the Map's HQ sites that are far from the one it left (at least 60% of the farthest site's distance, `relocate_far_fraction` in `data/game_modes.ron`; never the same site twice in a row), so it moves between areas without a fixed order. Capture it by standing in it (~10 s); the holders score a point per second and **don't respawn** while they hold it, so the other team must destroy it (stand in it ~10 s) before they are all dead. 250 points or 10 min. |
 | Search & Destroy | `sd` | Rounds without respawns, attackers against defenders; sides swap after round 3, first to 4 rounds wins. A random attacker starts with the bomb (dropped on death, picked up by walking over it). The carrier plants it at site A or B by **holding F** for ~5 s (frozen in place), defenders defuse by holding F ~7 s, the fuse is ~45 s and the explosion kills everyone within 20 m. Defenders are never told which site holds the planted bomb (both site markers look the same all round): they find it by its positional beep, which speeds up as the fuse runs down. A round ends on elimination, detonation, defusal or the 2:30 clock (defenders win on time unless it is planted). Dead players spectate a teammate (click to switch). |
 
 ### Host setup
@@ -261,6 +261,56 @@ Generated maps stay editable in TrenchBroom, but regenerating overwrites hand ed
 
 `python3 tools/mapgen/lint.py <map>...` is the flicker linter. Two surfaces flicker (z-fight) when they lie in one plane: two brush faces that are coplanar (within 0.01 units), face the same way and overlap, or two flat props (street tiles, decals) at the same height that overlap; a perimeter wall flush with a building model's facade is the same thing and hides the windows. It reads any Valve 220 `.map` (Homage Maps too), rebuilds each face as a polygon, ignores overlaps buried inside a third brush and undersides at or below the ground, prints the pairs grouped by plane with brush numbers (`// brush N` of the entity) and positions in game metres, and exits 1 if it found any. Every generated Map must lint clean; run it after regenerating. Fixes that work: stop a brush where the next one begins (or 0.07 m inside it), give crossing bars different thicknesses, keep decals 1 cm above their tile and tiles apart, stand a perimeter wall 0.5 m behind the buildings' front plane (`crossroads.py`).
 
+### MapEdit
+
+`mapedit` (`crates/mapedit`) is a second executable that shows a Map on the game's own rendering (materials, looks, props, lights, physics colliders: it is built on the same `frontline` library), with a free-fly camera and the Map's entities drawn over it, and edits it: you move, resize, paint, add and delete brushes and entities, create new Maps, and save. After regenerating a Map with `tools/mapgen` you see the result at once.
+
+```sh
+cargo run -p mapedit -- --map zeewolde_town                              # the viewer and editor
+cargo run -p mapedit -- --map arena                                      # Esc: load, save, new Map, settings
+cargo run -p mapedit -- --map zeewolde_town --top --shot /tmp/top.png    # top view, screenshot, exit
+```
+
+`--look`, `--mode tdm|dom|hq|sd` (show only what that Game Mode uses), `--cam X Y Z YAW PITCH` (metres, degrees; yaw 0 looks north, -z), `--top`, `--size 1600x900`, `--remote-port`, `--no-remote`. Like the game it reads `data/` from the working directory; run from the repository root.
+
+| Control | Action |
+|---|---|
+| Hold right mouse button | Look |
+| W A S D, Q / E | Move, down / up (Shift fast, Ctrl slow, wheel changes the speed) |
+| T / Home | Top view (fog off) / default aerial view |
+| `[` `]` | Previous / next Map (every Map in `data/maps.ron` and the private folder) |
+| `,` `.` | Previous / next look preset (the first is the Map's own) |
+| R | Read the Map's `.map` file again (asks first when there are unsaved edits; the file is also re-read by itself when it changes on disk and there are none) |
+| 1 - 5 | Show everything, or only what Team Deathmatch, Domination, Headquarters or Search & Destroy uses |
+| C / X / L / F | Collider wireframe / draw markers through walls / labels / fog |
+| F12 | Screenshot to `screenshots/` (also `--shot`, and the remote method below) |
+| H | Hide or show the help |
+| **Esc** | The menu: Resume, Load Map, Save, Save As, New Map, Map settings, Quit. Esc steps back a screen, then closes it |
+| **P** | The palette panel: Surfaces, Brushes, Entities, Props (click to paint, or to place in front of the camera) |
+| Left click | Select the brush or entity under the cursor (yellow outline; white outline on hover); click empty space to deselect |
+| Arrows, PgUp / PgDn | Move the selection by the grid step (0.25 m; Shift: 4 steps). The arrows follow the camera: right and forward snap to the nearest world axis |
+| Alt + arrows, PgUp / PgDn | Grow the brush towards that direction by one grid step; with Shift, shrink it from that side |
+| Tab / Shift+Tab | Next / previous surface of the selected brush |
+| B / Shift+B | A box / a ramp (climbing away from you) at the cursor, in the current surface |
+| Delete | Delete the selection |
+| Ctrl+D (Cmd+D) | Duplicate the selection, four grid steps (1 m) to the right; the copy is selected |
+| Ctrl+Z, Ctrl+Y or Ctrl+Shift+Z | Undo, redo (200 steps) |
+| Ctrl+S (Cmd+S) | Save |
+| G | Grid step: 0.25, 0.5, 1, 0.05 m |
+| J / K | Turn the selected entity 45 degrees (spawn facing) |
+
+Drawn over the Map: spawn points (by Team, with their facing), Flags and HQ sites (their 3.5 m capture zone), bomb sites (2.5 m) and ammo crates (1.6 m), the sizes of `data/game_modes.ron`. The HUD counts them, shows the selection, the grid, the unsaved flag and the last message.
+
+**How editing works.** Opening a Map parses its `.map` file (Valve 220, `crates/mapedit/src/mapfile.rs`) into a working copy; every edit changes that copy and is undoable. The viewer shows the copy through the game's own Map loader: after each edit MapEdit writes it to a git-ignored preview next to the Map's file (`maps/.mapedit-arena.map`, deleted when you leave the Map or quit) and reloads it, so what you see is exactly what the game would load (a few hundred milliseconds after an edit; large Maps take longer). Nothing touches the Map's own file before **Save**. Moving and resizing keep each face's texture alignment to the world, as `tools/mapgen` writes it, so neighbouring brushes stay seamless; a painted brush gets its surface's real-world texture scale. Resizing scales the brush's bounding box: exact for boxes and ramps, a turned box shears. Brush primitives are boxes, walls, slabs and ramps (`Brush::wedge`, the same as `mapgen.py`'s `wedge`); the new Map's floor and everything MapEdit adds lands in the worldspawn. Point entities are the classes of the table above: spawn points (team, modes, facing), Flags, HQ and bomb sites, ammo crates, point lights and props (the palette lists `models/*/*.glb` with their bounds).
+
+**The menu.** *Load Map* lists every Map of `data/maps.ron` and the private folder, plus loose `.map` files in `maps/` that no entry uses (they are registered for this session and listed in `data/maps.ron` at the next Save). *Save* writes the working copy to the Map's file, and the Map's entry in `data/maps.ron` when its settings changed or it was loose. *Save As* writes a copy as a new Map (`maps/<id>.map`), registers it and opens it; the original stays as last saved. *New Map* takes an id (letters, digits, `_`) and a name and creates `maps/<id>.map`: a 60 x 60 m ground floor (top at y = 0), two spawns per Team, a worldspawn with a look; it is listed in `data/maps.ron` for Team Deathmatch with the first two Factions of `factions.ron` (set Game Modes and Factions in *Map settings* as the Map grows objectives). *Map settings* edit the name, look (also written to the worldspawn), Game Modes and Factions; **Apply** changes the open Map, **Save** writes `data/maps.ron`. `data/maps.ron` is edited as text: only that Map's entry is rewritten, comments and the other entries stay. Unsaved changes are marked `* UNSAVED` in the HUD, and loading another Map, creating one, reloading or quitting (also the window's close button) asks: save and continue, discard, or cancel. A Map the file parser cannot read is shown as the game loads it but marked view only.
+
+**Generated maps.** Maps written by a `tools/mapgen` script (Arena, Crossroads, Zeewolde-Town: any `.map` that has a `tools/mapgen/<name>.py`) are overwritten by the next run of the script. MapEdit says so in the menu, in the HUD while there are unsaved edits, and in the answer to Save: edit those Maps in the script, or stop regenerating them. Saving a generated Map without edits leaves the bytes as the script wrote them (the writer reproduces `mapgen.py`'s layout exactly; a test checks every committed Map).
+
+**Remote control.** MapEdit serves Bevy's remote protocol (JSON-RPC over HTTP, localhost only, port 15702) with its own methods, documented in `crates/mapedit/src/remote.rs` (the generic `world.*` methods work too). Viewing: `mapedit/status` (also the editor state: `dirty`, selection, `synced`, undo availability, the `generator` script), `load_map`, `reload`, `set_look`, `set_camera`, `set_overlay`, `entities`, `screenshot`, `ui` (show the menu or the palette) and `quit`. Editing: `new_map`, `save`, `save_as`, `map_settings` (name, look, Game Modes, Factions), `palette` (surfaces, primitives, entity classes with their properties, props with bounds, looks, Factions), `items` (the brushes and entities of the working copy, filterable and paged), `select` (by item, ray or window pixel), `move`, `resize`, `delete`, `duplicate`, `set_texture`, `set_property`, `add_brush` (box, wedge, wall, slab, ramp), `add_entity`, `undo` and `redo`. Positions are game space, metres, y up; an item is `{"entity": 0, "brush": 12}` or `{"entity": 5}`. Methods that would lose unsaved changes (`load_map`, `reload`, `new_map`, `quit`) refuse unless called with `discard: true`. `tools/mapedit-mcp/server.py` is a standard-library MCP server over all of them (`mapedit_launch`, `mapedit_new_map`, `mapedit_add_brush`, `mapedit_add_entity`, `mapedit_screenshot`, `mapedit_save` and so on), so an AI agent can create a Map, build it, look at it and save it; `mapedit_screenshot` waits until the view shows the latest edit. Register it with an MCP client as the command `python3 tools/mapedit-mcp/server.py`. It starts the viewer with `cargo run -p mapedit` (or the executable named in `MAPEDIT_BIN`).
+
+MapEdit is a blockout tool, not TrenchBroom: there is no vertex or face editing, no rotation of brushes, no multi-selection, and no texture alignment beyond the surface's real-world scale. For those, open the same `.map` in TrenchBroom. It is not part of the release archive.
+
 ### Props
 
 Props are glTF models from the CC0 Downtown City MegaKit (Quaternius), processed into one `.glb` each (textures at most 1024 px, shared ones in `models/downtown/textures/`) under `crates/frontline/assets/models/downtown/`; credits in `assets/models/CREDITS.md`. The raw pack stays in the git-ignored `content/assets/`. `tools/assets/import_props.py` picks the pieces out of the zip, writes each pack's `bounds.json` (the model bounds the generators place by: `Level.prop(..., y)` puts a model's *base* at `y`, wherever its origin is; `--bounds-only` rewrites it from the `.glb` files already there), and with `--from-maps` imports exactly the ones the maps use:
@@ -306,7 +356,7 @@ The arms are only something to look at: they have no effect on gameplay or on a 
 GitHub Actions (`.github/workflows/`) run on every push to `main` and every pull request:
 
 1. **Format:** `cargo fmt --all --check`.
-2. **Clippy and tests:** `cargo clippy --locked --all-targets -- -D warnings`, then `cargo test --locked`, on Linux. The Homage Maps (`content/private/`) are never there: nothing may depend on them.
+2. **Clippy and tests:** `cargo clippy --locked --workspace --all-targets -- -D warnings`, then `cargo test --locked --workspace`, on Linux (the whole workspace, MapEdit included; plain `cargo run`, `build` and the release build are the game alone). The Homage Maps (`content/private/`) are never there: nothing may depend on them.
 
 **Releasing:** bump `version` in `crates/frontline/Cargo.toml`, commit and push to `main`, start the Mac runner (below), then:
 
@@ -364,6 +414,8 @@ Each archive holds the executable, `assets/` (maps, models, fonts: it must stay 
 - `crates/frontline/src/video.rs`: the Video settings (display mode, resolution, vsync, FPS cap, quality, brightness), applying them to the window, the "Keep these settings?" revert timer and the FPS limiter
 - `crates/frontline/src/assets.rs`: files embedded in the binary (faction emblems, rank insignia, camo textures, surface textures; CC0 credits in `assets/textures/CREDITS.md`)
 - `tools/mapgen/`: Python generator for `.map` files (the arena, Crossroads), its building kit and `lint.py`, the flicker linter
+- `crates/frontline/src/lib.rs`: the game's modules as a library; `main.rs` is the game executable around it
+- `crates/mapedit/`: MapEdit, the Map viewer and editor executable on the library's rendering (see "MapEdit"): `mapfile.rs` (the `.map` model: parse, write, brush geometry, primitives), `mapsron.rs` (text edits of `data/maps.ron`), `edit.rs` (working copy, undo, live preview, file commands, cursor and keys), `menu.rs` (the Esc menu), `palette.rs` (what can be placed, and the `P` panel), `remote.rs`, `session.rs`, `camera.rs`, `overlay.rs`; `tools/mapedit-mcp/` drives it from AI tooling
 - `tools/camos/`: generates the weapon camo textures (`camos.py`, Pillow only)
 - `tools/assets/`: imports prop models from raw asset packs (`import_props.py`, also their `bounds.json`)
 - `tools/ci/package.sh`: packs a release build (executable, `assets/`, `data/`, README) into the archive the release workflow publishes

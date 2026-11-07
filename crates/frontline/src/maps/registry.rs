@@ -84,6 +84,17 @@ impl MapRegistry {
         self.maps.get(id)
     }
 
+    /// Edits an entry at run time (MapEdit points a Map at its live preview file, and changes
+    /// its name, look, Game Modes and Factions).
+    pub fn get_mut(&mut self, id: &MapId) -> Option<&mut MapInfo> {
+        self.maps.get_mut(id)
+    }
+
+    /// Adds or replaces an entry at run time (MapEdit registers Maps it creates).
+    pub fn insert(&mut self, id: MapId, info: MapInfo) {
+        self.maps.insert(id, info);
+    }
+
     /// In id order.
     pub fn iter(&self) -> impl Iterator<Item = (&MapId, &MapInfo)> {
         self.maps.iter()

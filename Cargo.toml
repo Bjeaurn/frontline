@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# `cargo run`, `cargo build` and the release build are the game; MapEdit is `-p mapedit`.
+default-members = ["crates/frontline"]
 
 [workspace.package]
 edition = "2024"
