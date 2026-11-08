@@ -23,6 +23,7 @@ lightyear = { workspace = true, features = [
   "interpolation",
 ] }
 bevy_replicon.workspace = true
+rodio.workspace = true
 avian3d.workspace = true
 bevy_trenchbroom.workspace = true
 clap.workspace = true

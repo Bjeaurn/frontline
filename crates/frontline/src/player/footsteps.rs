@@ -30,10 +30,12 @@ const FOOTSTEPS: [&str; 8] = [
     "sounds/footstep_concrete_006.ogg",
     "sounds/footstep_concrete_007.ogg",
 ];
-/// Other players' steps.
-const FOOTSTEP_VOLUME: f32 = 0.6;
+/// Other players' steps: walking is a murmur, sprinting is loud.
+const WALK_VOLUME: f32 = 0.3;
+const SPRINT_VOLUME: f32 = 0.8;
 /// Your own steps: there, but not louder than what you are listening for.
-const OWN_FOOTSTEP_VOLUME: f32 = 0.25;
+const OWN_WALK_VOLUME: f32 = 0.12;
+const OWN_SPRINT_VOLUME: f32 = 0.3;
 /// Footsteps play between `1 - PITCH_JITTER` and `1 + PITCH_JITTER` times their normal speed.
 const PITCH_JITTER: f32 = 0.06;
 /// Footsteps a second at walking speed, and at sprinting speed and above; with the speeds this
@@ -109,13 +111,23 @@ pub(super) fn attach_own_stride(add: On<Add<LocalPlayer>>, mut commands: Command
     commands.entity(add.entity).insert(Stride::default());
 }
 
+/// How far into a sprint a player moving at horizontal `speed` is: 0 at `walk` and below, 1 at
+/// `sprint` and above.
+fn sprint_blend(speed: f32, walk: f32, sprint: f32) -> f32 {
+    ((speed - walk) / (sprint - walk).max(f32::EPSILON)).clamp(0.0, 1.0)
+}
+
 /// Metres between two footsteps at horizontal `speed`: the walking stride (`walk / WALK_RATE`) at
 /// `walk` and below, the sprinting one (`sprint / SPRINT_RATE`) at `sprint` and above.
 fn step_length(speed: f32, walk: f32, sprint: f32) -> f32 {
-    let sprinting = ((speed - walk) / (sprint - walk).max(f32::EPSILON)).clamp(0.0, 1.0);
     let walking = walk / WALK_RATE;
     let running = sprint / SPRINT_RATE;
-    walking + (running - walking) * sprinting
+    walking + (running - walking) * sprint_blend(speed, walk, sprint)
+}
+
+/// The volume of a step at `speed`: `quiet` walking, `loud` sprinting.
+fn gait_volume(speed: f32, walk: f32, sprint: f32, quiet: f32, loud: f32) -> f32 {
+    quiet + (loud - quiet) * sprint_blend(speed, walk, sprint)
 }
 
 /// Plays one random footstep.
@@ -156,13 +168,8 @@ pub(super) fn play_footsteps(
     }
     for (pose, health, perks, mut stride) in &mut players {
         let audible = !health.is_dead() && pose.stance == Stance::Standing;
-        let due = stride.advance(
-            pose.position,
-            dt,
-            audible,
-            data.movement.walk_speed,
-            data.movement.sprint_speed,
-        );
+        let (walk, sprint) = (data.movement.walk_speed, data.movement.sprint_speed);
+        let due = stride.advance(pose.position, dt, audible, walk, sprint);
         if !due || perks.is_some_and(|perks| data.perk_effects(perks.0.iter()).silent_footsteps) {
             continue;
         }
@@ -171,7 +178,7 @@ pub(super) fn play_footsteps(
             &mut cue,
             &sounds,
             &mut rng,
-            FOOTSTEP_VOLUME,
+            gait_volume(stride.speed, walk, sprint, WALK_VOLUME, SPRINT_VOLUME),
             pose.position,
         );
     }
@@ -195,21 +202,22 @@ pub(super) fn play_own_footsteps(
     let Ok((pose, motor, mut stride)) = player.single_mut() else {
         return;
     };
+    let (walk, sprint) = (data.movement.walk_speed, data.movement.sprint_speed);
     let audible = !life.is_dead() && motor.grounded() && pose.stance == Stance::Standing;
-    let due = stride.advance(
-        pose.position,
-        dt,
-        audible,
-        data.movement.walk_speed,
-        data.movement.sprint_speed,
-    );
+    let due = stride.advance(pose.position, dt, audible, walk, sprint);
     if due {
         play_step(
             &mut commands,
             &mut cue,
             &sounds,
             &mut rng,
-            OWN_FOOTSTEP_VOLUME,
+            gait_volume(
+                stride.speed,
+                walk,
+                sprint,
+                OWN_WALK_VOLUME,
+                OWN_SPRINT_VOLUME,
+            ),
             pose.position,
         );
     }
@@ -275,5 +283,15 @@ mod tests {
         let mut stride = Stride::default();
         walk(&mut stride, 0.0, WALK, 0.2);
         assert!(!stride.advance(Vec3::new(200.0, 0.0, 0.0), DT, true, WALK, SPRINT));
+    }
+
+    #[test]
+    fn walking_steps_are_quieter_than_sprinting_ones() {
+        let at = |speed| gait_volume(speed, WALK, SPRINT, WALK_VOLUME, SPRINT_VOLUME);
+        assert_eq!(at(WALK), WALK_VOLUME);
+        assert_eq!(at(SPRINT), SPRINT_VOLUME);
+        assert_eq!(at(2.0), WALK_VOLUME);
+        assert_eq!(at(12.0), SPRINT_VOLUME);
+        assert!(WALK_VOLUME < at(6.5) && at(6.5) < SPRINT_VOLUME);
     }
 }

@@ -378,6 +378,16 @@ def to_model(p: Vec) -> Vec:
     return (-p[2], p[1], p[0])
 
 
+def box_uvs(positions: list[Vec], normals: list[Vec]) -> list[tuple[float, float]]:
+    """UVs by projecting each vertex along the axis its normal points mostly along."""
+    uvs = []
+    for p, n in zip(positions, normals):
+        axis = max(range(3), key=lambda i: abs(n[i]))
+        u, v = [p[i] for i in range(3) if i != axis]
+        uvs.append((u, v))
+    return uvs
+
+
 def write_glb(path: Path, root: str, parts: dict[str, Part]) -> None:
     binary = bytearray()
     views: list[dict] = []
@@ -409,12 +419,16 @@ def write_glb(path: Path, root: str, parts: dict[str, Part]) -> None:
             flat = lambda vs: b"".join(struct.pack("<3f", *v) for v in vs)
             position = accessor(view(flat(model_positions), 34962), 5126, len(positions), "VEC3", (low, high))
             normal = accessor(view(flat(model_normals), 34962), 5126, len(normals), "VEC3")
+            # Box-projected UVs (metres), so every mesh has TEXCOORD_0 like the other models: a
+            # material or a camo that reads UVs must find them (the rifles drew nothing without).
+            pairs = lambda vs: b"".join(struct.pack("<2f", *uv) for uv in vs)
+            texcoord = accessor(view(pairs(box_uvs(model_positions, model_normals)), 34962), 5126, len(positions), "VEC2")
             wide = len(positions) > 65535
             packed = struct.pack(f"<{len(indices)}{'I' if wide else 'H'}", *indices)
             index = accessor(view(packed, 34963), 5125 if wide else 5123, len(indices), "SCALAR")
             primitives.append(
                 {
-                    "attributes": {"POSITION": position, "NORMAL": normal},
+                    "attributes": {"POSITION": position, "NORMAL": normal, "TEXCOORD_0": texcoord},
                     "indices": index,
                     "material": materials.index(material),
                 }

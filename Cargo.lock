@@ -3784,6 +3784,7 @@ dependencies = [
  "clap",
  "dirs",
  "lightyear",
+ "rodio",
  "ron",
  "serde",
  "zip",
