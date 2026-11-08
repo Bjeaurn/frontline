@@ -110,6 +110,7 @@ impl Plugin for MatchHudPlugin {
                         score::update_score,
                         modes::update_mode_strip,
                         modes::update_action_bar,
+                        modes::blink_alerts,
                         modes::update_spectate_text,
                         modes::show_round_banner,
                         modes::show_match_banner,

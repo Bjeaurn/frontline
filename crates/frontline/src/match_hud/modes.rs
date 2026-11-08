@@ -21,6 +21,8 @@ const NEUTRAL: Color = Color::srgb(0.85, 0.85, 0.82);
 const FLAG_SIZE: f32 = 34.0;
 const TRACK: Color = Color::srgba(0.0, 0.0, 0.0, 0.7);
 const BAR_WIDTH: f32 = 280.0;
+/// Blinks a second.
+const BLINK_HZ: f32 = 2.0;
 
 /// Container under the score that is rebuilt when what it shows changes.
 #[derive(Component)]
@@ -37,6 +39,14 @@ pub(super) struct ActionFill;
 
 #[derive(Component)]
 pub(super) struct SpectateText;
+
+/// The track behind the action bar's fill; hidden while there is no progress to show.
+#[derive(Component)]
+pub(super) struct ActionTrack;
+
+/// Blinks (alternately hidden and shown) while `true`: the alert for an enemy capture.
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Blinking(bool);
 
 pub(super) fn spawn_mode_hud(mut commands: Commands, fonts: Res<UiFonts>) {
     commands.spawn((
@@ -68,8 +78,13 @@ pub(super) fn spawn_mode_hud(mut commands: Commands, fonts: Res<UiFonts>) {
         },
         Visibility::Hidden,
         children![
-            (ActionText, ui::label(&fonts, "", 22.0, Color::WHITE)),
             (
+                ActionText,
+                Blinking(false),
+                ui::label(&fonts, "", 22.0, Color::WHITE)
+            ),
+            (
+                ActionTrack,
                 Node {
                     width: px(BAR_WIDTH),
                     height: px(10.0),
@@ -149,6 +164,41 @@ fn progress_bar(parent: &mut ChildSpawnerCommands, width: f32, percent_done: u8,
         ));
 }
 
+/// What the strip shows under a Flag or the HQ: your own team's capture as a progress bar, but
+/// only a blinking alert for an enemy capture or a contest (their progress isn't yours to read).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ZoneBar {
+    Progress(u8, Color),
+    Alert(Color),
+}
+
+fn zone_bar(zone: &ZoneView, local: Option<Team>) -> ZoneBar {
+    if zone.contested {
+        return ZoneBar::Alert(NEUTRAL);
+    }
+    match zone.capturer {
+        Some(team) if Some(team) != local => ZoneBar::Alert(ENEMY_COLOR),
+        capturer => ZoneBar::Progress(zone.progress, side_color(capturer, local)),
+    }
+}
+
+fn zone_bar_node(parent: &mut ChildSpawnerCommands, width: f32, bar: ZoneBar) {
+    match bar {
+        ZoneBar::Progress(percent_done, color) => progress_bar(parent, width, percent_done, color),
+        ZoneBar::Alert(color) => {
+            parent.spawn((
+                Node {
+                    width: px(width),
+                    height: px(6.0),
+                    ..default()
+                },
+                BackgroundColor(color),
+                Blinking(true),
+            ));
+        }
+    }
+}
+
 fn build_strip(
     strip: &mut ChildSpawnerCommands,
     fonts: &UiFonts,
@@ -187,12 +237,7 @@ fn build_strip(
                                 BackgroundColor(color.with_alpha(0.35)),
                                 ui::label(fonts, &flag.label.to_string(), 24.0, Color::WHITE),
                             ));
-                            progress_bar(
-                                column,
-                                FLAG_SIZE,
-                                flag.zone.progress,
-                                side_color(flag.zone.capturer, local),
-                            );
+                            zone_bar_node(column, FLAG_SIZE, zone_bar(&flag.zone, local));
                         });
                     }
                 });
@@ -214,13 +259,8 @@ fn build_strip(
                 ),
             };
             line(strip, fonts, &text, 20.0, color);
-            if hq.position.is_some() && hq.zone.capturer.is_some() {
-                progress_bar(
-                    strip,
-                    BAR_WIDTH * 0.6,
-                    hq.zone.progress,
-                    side_color(hq.zone.capturer, local),
-                );
+            if hq.position.is_some() && (hq.zone.capturer.is_some() || hq.zone.contested) {
+                zone_bar_node(strip, BAR_WIDTH * 0.6, zone_bar(&hq.zone, local));
             }
         }
         ModeView::SearchAndDestroy(sd) => build_sd_strip(strip, fonts, sd, local, me),
@@ -340,8 +380,9 @@ pub(super) fn update_mode_strip(
     *shown = Some(key);
 }
 
-/// What the action bar says: caption, percent done and fill colour.
-type Action = (String, u8, Color);
+/// What the action bar says: caption, percent done (none: no bar, the caption blinks) and fill
+/// colour.
+type Action = (String, Option<u8>, Color);
 
 fn zone_action(zone: &ZoneView, local: Team, name: &str, destroy: bool) -> Option<Action> {
     let verb = if destroy {
@@ -350,7 +391,7 @@ fn zone_action(zone: &ZoneView, local: Team, name: &str, destroy: bool) -> Optio
         "NEUTRALISING"
     };
     if zone.contested {
-        return Some((format!("{name} CONTESTED"), zone.progress, NEUTRAL));
+        return Some((format!("{name} CONTESTED"), None, NEUTRAL));
     }
     match zone.capturer {
         Some(team) if team == local => {
@@ -359,7 +400,7 @@ fn zone_action(zone: &ZoneView, local: Team, name: &str, destroy: bool) -> Optio
             } else {
                 format!("CAPTURING {name}")
             };
-            Some((caption, zone.progress, FRIENDLY_COLOR))
+            Some((caption, Some(zone.progress), FRIENDLY_COLOR))
         }
         Some(_) => {
             let caption = if zone.owner == Some(local) {
@@ -367,13 +408,14 @@ fn zone_action(zone: &ZoneView, local: Team, name: &str, destroy: bool) -> Optio
             } else {
                 format!("LOSING {name}")
             };
-            Some((caption, zone.progress, ENEMY_COLOR))
+            Some((caption, None, ENEMY_COLOR))
         }
         None => None,
     }
 }
 
-/// The bar at the bottom: capture progress while standing in a zone, plant/defuse progress and
+/// The bar at the bottom: capture progress while your team captures a zone you stand in,
+/// a blinking caption while the enemy takes it or it is contested, plant/defuse progress and
 /// hints in Search & Destroy.
 pub(super) fn update_action_bar(
     modes: Query<&ModeView>,
@@ -381,9 +423,10 @@ pub(super) fn update_action_bar(
     data: Res<GameData>,
     local: Query<&PlayerPose, With<LocalPlayer>>,
     me: Query<&PlayerOwner, With<LocalPlayerReplica>>,
-    mut bar: Single<&mut Visibility, With<ActionBar>>,
-    mut text: Single<&mut Text, (With<ActionText>, Without<SpectateText>)>,
-    mut fill: Single<(&mut Node, &mut BackgroundColor), With<ActionFill>>,
+    mut bar: Single<&mut Visibility, (With<ActionBar>, Without<ActionText>, Without<ActionTrack>)>,
+    mut text: Single<(&mut Text, &mut Blinking), (With<ActionText>, Without<SpectateText>)>,
+    mut track: Single<&mut Node, (With<ActionTrack>, Without<ActionFill>)>,
+    mut fill: Single<(&mut Node, &mut BackgroundColor), (With<ActionFill>, Without<ActionTrack>)>,
 ) {
     let action = action(&modes, &life, &data, &local, &me);
     let Some((caption, done, color)) = action else {
@@ -391,12 +434,32 @@ pub(super) fn update_action_bar(
         return;
     };
     bar.set_if_neq(Visibility::Inherited);
+    let (text, blinking) = &mut *text;
     if text.0 != caption {
         text.0 = caption;
     }
+    blinking.set_if_neq(Blinking(done.is_none()));
+    track.display = if done.is_some() {
+        Display::Flex
+    } else {
+        Display::None
+    };
     let (node, background) = &mut *fill;
-    node.width = percent(f32::from(done));
+    node.width = percent(f32::from(done.unwrap_or(0)));
     background.set_if_neq(BackgroundColor(color));
+}
+
+/// Blinks everything marked [`Blinking`]: on a bit over half of each period.
+pub(super) fn blink_alerts(time: Res<Time>, mut blinking: Query<(&mut Visibility, &Blinking)>) {
+    let on = (time.elapsed_secs() * BLINK_HZ).fract() < 0.55;
+    for (mut visibility, blinking) in &mut blinking {
+        let shown = if !blinking.0 || on {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        visibility.set_if_neq(shown);
+    }
 }
 
 fn action(
@@ -434,7 +497,7 @@ fn action(
                 } else {
                     "DEFUSING"
                 };
-                return Some((caption.into(), action.progress, FRIENDLY_COLOR));
+                return Some((caption.into(), Some(action.progress), FRIENDLY_COLOR));
             }
             if sd.phase != SdPhaseView::Live {
                 return None;
@@ -451,10 +514,10 @@ fn action(
                         && carrying
                         && sd.sites.iter().any(|&(_, at)| at_site(at)) =>
                 {
-                    Some(("HOLD F TO PLANT".into(), 0, FRIENDLY_COLOR))
+                    Some(("HOLD F TO PLANT".into(), Some(0), FRIENDLY_COLOR))
                 }
                 BombView::Planted { position, .. } if sd.attackers != team && at_site(position) => {
-                    Some(("HOLD F TO DEFUSE".into(), 0, FRIENDLY_COLOR))
+                    Some(("HOLD F TO DEFUSE".into(), Some(0), FRIENDLY_COLOR))
                 }
                 _ => None,
             }
@@ -568,4 +631,66 @@ pub(super) fn show_match_banner(
     commands
         .entity(banner)
         .insert(DespawnOnExit(AppState::InGame));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn zone(capturer: Option<Team>, progress: u8, contested: bool) -> ZoneView {
+        ZoneView {
+            owner: None,
+            capturer,
+            progress,
+            contested,
+        }
+    }
+
+    #[test]
+    fn only_your_own_teams_capture_shows_progress() {
+        let me = Some(Team::Alpha);
+        assert_eq!(
+            zone_bar(&zone(Some(Team::Alpha), 40, false), me),
+            ZoneBar::Progress(40, FRIENDLY_COLOR)
+        );
+        // An enemy capture, or a contest, is a blinking alert: no progress to read.
+        assert_eq!(
+            zone_bar(&zone(Some(Team::Bravo), 70, false), me),
+            ZoneBar::Alert(ENEMY_COLOR)
+        );
+        assert_eq!(
+            zone_bar(&zone(Some(Team::Alpha), 40, true), me),
+            ZoneBar::Alert(NEUTRAL)
+        );
+        // Nobody capturing: the empty bar as before.
+        assert_eq!(
+            zone_bar(&zone(None, 0, false), me),
+            ZoneBar::Progress(0, NEUTRAL)
+        );
+    }
+
+    #[test]
+    fn standing_in_a_zone_the_enemy_takes_blinks_without_a_percentage() {
+        let enemy_taking = ZoneView {
+            owner: Some(Team::Alpha),
+            ..zone(Some(Team::Bravo), 55, false)
+        };
+        let (caption, progress, color) =
+            zone_action(&enemy_taking, Team::Alpha, "FLAG A", false).unwrap();
+        assert_eq!(caption, "FLAG A UNDER ATTACK");
+        assert_eq!(progress, None);
+        assert_eq!(color, ENEMY_COLOR);
+        let contested =
+            zone_action(&zone(Some(Team::Alpha), 55, true), Team::Alpha, "HQ", true).unwrap();
+        assert_eq!(contested.1, None);
+        // Your own capture keeps its bar.
+        let own = zone_action(
+            &zone(Some(Team::Alpha), 55, false),
+            Team::Alpha,
+            "FLAG A",
+            false,
+        )
+        .unwrap();
+        assert_eq!(own.1, Some(55));
+    }
 }
