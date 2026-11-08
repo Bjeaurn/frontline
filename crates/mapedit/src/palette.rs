@@ -6,9 +6,10 @@ use std::path::Path;
 
 use bevy::math::DVec3;
 use bevy::prelude::*;
+use bevy::text::EditableText;
 use bevy::ui_widgets::Activate;
 use frontline::ui::{
-    ACCENT, AMBER, PANEL, PANEL_BORDER, TEXT_DIM, UiFonts, compact_button, label, rule,
+    ACCENT, AMBER, PANEL, PANEL_BORDER, TEXT_DIM, UiFonts, compact_button, label, rule, text_field,
 };
 use serde_json::{Value, json};
 
@@ -16,12 +17,47 @@ use crate::edit::{Editor, Place, PlaceRequest};
 use crate::mapfile::{Item, MapEntity, PropBounds, Rise, SURFACES};
 use crate::menu::{BlockPicking, InputCapture};
 
+/// What a property's value must look like (what the game's class parses, see
+/// `crates/frontline/src/maps/classes.rs` and bevy_trenchbroom's light classes).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ValueKind {
+    /// Any text.
+    Text,
+    /// One of the property's `choices`.
+    Choice,
+    /// A number of degrees.
+    Angle,
+    /// Game Mode keys (tdm dom hq sd) separated by spaces or commas; empty is every mode.
+    Modes,
+    /// `r g b`, each 0 to 1 (0 to 255 also parses).
+    Colour,
+    /// A number of at least this.
+    Number(f64),
+    /// The asset path of a glTF model.
+    Model,
+}
+
+impl ValueKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            ValueKind::Text => "text",
+            ValueKind::Choice => "choice",
+            ValueKind::Angle => "angle",
+            ValueKind::Modes => "modes",
+            ValueKind::Colour => "colour",
+            ValueKind::Number(_) => "number",
+            ValueKind::Model => "model",
+        }
+    }
+}
+
 /// One property of an entity class.
 pub struct Property {
     pub key: &'static str,
     pub help: &'static str,
     /// The values it accepts, when it is a choice (empty: free text or a number).
     pub choices: &'static [&'static str],
+    pub kind: ValueKind,
 }
 
 /// An entity class a Map can place (`crates/frontline/src/maps/classes.rs`).
@@ -39,6 +75,12 @@ pub struct ClassInfo {
 
 const TEAMS: &[&str] = &["alpha", "bravo", "any"];
 const COLLIDERS: &[&str] = &["none", "box", "convex"];
+const ANGLE: Property = Property {
+    key: "angle",
+    help: "Facing in degrees (0 faces -z, counter-clockwise from above)",
+    choices: &[],
+    kind: ValueKind::Angle,
+};
 
 pub const CLASSES: &[ClassInfo] = &[
     ClassInfo {
@@ -49,17 +91,15 @@ pub const CLASSES: &[ClassInfo] = &[
                 key: "team",
                 help: "Team allowed to spawn here",
                 choices: TEAMS,
+                kind: ValueKind::Choice,
             },
             Property {
                 key: "modes",
                 help: "Game Mode keys (tdm dom hq sd) it serves; empty means every mode",
                 choices: &[],
+                kind: ValueKind::Modes,
             },
-            Property {
-                key: "angle",
-                help: "Facing in degrees",
-                choices: &[],
-            },
+            ANGLE,
         ],
         defaults: &[("team", "any")],
         lift: 0.0,
@@ -72,6 +112,7 @@ pub const CLASSES: &[ClassInfo] = &[
             key: "label",
             help: "Flag label",
             choices: &["A", "B", "C"],
+            kind: ValueKind::Choice,
         }],
         defaults: &[("label", "A")],
         lift: 0.0,
@@ -92,6 +133,7 @@ pub const CLASSES: &[ClassInfo] = &[
             key: "label",
             help: "Site label",
             choices: &["A", "B"],
+            kind: ValueKind::Choice,
         }],
         defaults: &[("label", "A")],
         lift: 0.0,
@@ -113,26 +155,31 @@ pub const CLASSES: &[ClassInfo] = &[
                 key: "color",
                 help: "r g b, 0 to 1",
                 choices: &[],
+                kind: ValueKind::Colour,
             },
             Property {
                 key: "intensity",
                 help: "Bevy light intensity",
                 choices: &[],
+                kind: ValueKind::Number(0.0),
             },
             Property {
                 key: "range",
                 help: "Metres",
                 choices: &[],
+                kind: ValueKind::Number(0.01),
             },
             Property {
                 key: "shadows_enabled",
                 help: "true or false",
                 choices: &["true", "false"],
+                kind: ValueKind::Choice,
             },
             Property {
                 key: "targetname",
                 help: "practical makes it a lamp",
                 choices: &[],
+                kind: ValueKind::Text,
             },
         ],
         defaults: &[
@@ -152,17 +199,15 @@ pub const CLASSES: &[ClassInfo] = &[
                 key: "model",
                 help: "Asset path, e.g. models/downtown/Prop_Bollard.glb",
                 choices: &[],
+                kind: ValueKind::Model,
             },
             Property {
                 key: "collider",
                 help: "How it collides",
                 choices: COLLIDERS,
+                kind: ValueKind::Choice,
             },
-            Property {
-                key: "angle",
-                help: "Facing in degrees",
-                choices: &[],
-            },
+            ANGLE,
         ],
         defaults: &[("collider", "box")],
         lift: 0.0,
@@ -205,7 +250,7 @@ impl ClassInfo {
         if key == "origin" || key == "classname" {
             return Err(format!("`{key}` cannot be set here"));
         }
-        let Some(property) = self.properties.iter().find(|p| p.key == key) else {
+        let Some(property) = self.property(key) else {
             // Unknown keys are legal in a .map (the loader ignores them); say so rather than
             // silently writing a typo.
             let known: Vec<&str> = self.properties.iter().map(|p| p.key).collect();
@@ -215,25 +260,79 @@ impl ClassInfo {
                 known.join(", ")
             ));
         };
-        if !property.choices.is_empty() && !property.choices.contains(&value) {
-            return Err(format!(
-                "`{key}` of `{}` is one of: {}",
-                self.class,
-                property.choices.join(", ")
-            ));
-        }
-        if key == "modes" {
-            for mode in value.split(|c: char| c == ',' || c.is_whitespace()) {
-                if !mode.is_empty() && !crate::overlay::MODE_KEYS.contains(&mode) {
+        let number = |text: &str| {
+            text.trim()
+                .parse::<f64>()
+                .ok()
+                .filter(|n| n.is_finite())
+                .ok_or_else(|| format!("`{key}` of `{}`: \"{text}\" is not a number", self.class))
+        };
+        match property.kind {
+            ValueKind::Text => {}
+            ValueKind::Choice => {
+                if !property.choices.contains(&value) {
                     return Err(format!(
-                        "unknown Game Mode `{mode}`; known: {}",
-                        crate::overlay::MODE_KEYS.join(" ")
+                        "`{key}` of `{}` is one of: {}",
+                        self.class,
+                        property.choices.join(", ")
+                    ));
+                }
+            }
+            ValueKind::Angle => {
+                number(value).map_err(|_| "`angle` is a number of degrees".to_owned())?;
+            }
+            ValueKind::Modes => {
+                for mode in value.split(|c: char| c == ',' || c.is_whitespace()) {
+                    if !mode.is_empty() && !crate::overlay::MODE_KEYS.contains(&mode) {
+                        return Err(format!(
+                            "unknown Game Mode `{mode}`; known: {}",
+                            crate::overlay::MODE_KEYS.join(" ")
+                        ));
+                    }
+                }
+            }
+            ValueKind::Colour => {
+                let parts: Vec<&str> = value.split_whitespace().collect();
+                if parts.len() != 3 {
+                    return Err(format!("`{key}` is three numbers: r g b, 0 to 1"));
+                }
+                for part in parts {
+                    if !(0.0..=255.0).contains(&number(part)?) {
+                        return Err(format!("`{key}`: each of r g b is 0 to 1"));
+                    }
+                }
+            }
+            ValueKind::Number(min) => {
+                if number(value)? < min {
+                    return Err(format!("`{key}` of `{}` is at least {min}", self.class));
+                }
+            }
+            ValueKind::Model => {
+                let path = value.trim();
+                let stem = path.rsplit('/').next().unwrap_or("");
+                if path.is_empty() || !(stem.ends_with(".glb") || stem.ends_with(".gltf")) {
+                    return Err(format!(
+                        "`{key}` is the path of a .glb or .gltf model, e.g. models/downtown/Prop_Bollard.glb"
                     ));
                 }
             }
         }
-        if key == "angle" && value.trim().parse::<f64>().is_err() {
-            return Err("`angle` is a number of degrees".into());
+        Ok(())
+    }
+
+    /// The property called `key`.
+    pub fn property(&self, key: &str) -> Option<&'static Property> {
+        self.properties.iter().find(|p| p.key == key)
+    }
+
+    /// Whether `key` may be taken off an entity of this class (the classname and origin
+    /// cannot, and a prop needs its model).
+    pub fn check_removal(&self, key: &str) -> Result<(), String> {
+        if key == "origin" || key == "classname" {
+            return Err(format!("`{key}` cannot be removed"));
+        }
+        if self.class == "prop" && key == "model" {
+            return Err("a prop needs its `model`".into());
         }
         Ok(())
     }
@@ -381,6 +480,7 @@ pub fn to_json(props: &[PropModel], looks: &[&str], factions: &[(String, String)
                 "key": p.key,
                 "help": p.help,
                 "choices": p.choices,
+                "kind": p.kind.name(),
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
         "props": props.iter().map(|p| json!({
@@ -401,10 +501,17 @@ enum Tab {
     Brushes,
     Entities,
     Props,
+    Prefabs,
 }
 
 impl Tab {
-    const ALL: [Tab; 4] = [Tab::Surfaces, Tab::Brushes, Tab::Entities, Tab::Props];
+    const ALL: [Tab; 5] = [
+        Tab::Surfaces,
+        Tab::Brushes,
+        Tab::Entities,
+        Tab::Props,
+        Tab::Prefabs,
+    ];
 
     fn title(self) -> &'static str {
         match self {
@@ -412,9 +519,14 @@ impl Tab {
             Tab::Brushes => "Brushes",
             Tab::Entities => "Entities",
             Tab::Props => "Props",
+            Tab::Prefabs => "Prefabs",
         }
     }
 }
+
+/// The text field of the Prefabs tab that names the prefab to save.
+#[derive(Component)]
+struct PrefabName;
 
 /// The palette panel, toggled with `P`.
 #[derive(Resource)]
@@ -432,7 +544,9 @@ pub fn show(world: &mut World, open: bool, tab: Option<&str>) -> Result<(), Stri
                 .into_iter()
                 .find(|tab| tab.title().eq_ignore_ascii_case(name))
                 .ok_or_else(|| {
-                    format!("unknown tab \"{name}\"; known: surfaces, brushes, entities, props")
+                    format!(
+                        "unknown tab \"{name}\"; known: surfaces, brushes, entities, props, prefabs"
+                    )
                 })?,
         ),
     };
@@ -449,6 +563,8 @@ enum PaletteAction {
     Tab(Tab),
     Surface(&'static str),
     Place(Place),
+    /// Saves the selection as the prefab the text field names.
+    SavePrefab,
 }
 
 #[derive(Component)]
@@ -482,13 +598,18 @@ fn handle(
     mut state: ResMut<PaletteState>,
     mut editor: ResMut<Editor>,
     mut places: MessageWriter<PlaceRequest>,
+    names: Query<&EditableText, With<PrefabName>>,
 ) {
     for action in actions.read() {
         match action.clone() {
             PaletteAction::Tab(tab) => state.tab = tab,
             PaletteAction::Surface(name) => {
                 // Paints the selected brush; new brushes use it from now on.
-                let on_brush = matches!(editor.selection, Some(Item::Brush { .. }));
+                let on_brush = editor
+                    .selection
+                    .items()
+                    .iter()
+                    .any(|item| matches!(item, Item::Brush { .. }));
                 let result = if on_brush {
                     editor.set_surface(None, name)
                 } else {
@@ -507,6 +628,15 @@ fn handle(
                     place,
                     at_cursor: false,
                 });
+            }
+            PaletteAction::SavePrefab => {
+                let name = names
+                    .iter()
+                    .next()
+                    .map(|text| text.value().to_string())
+                    .unwrap_or_default();
+                let result = editor.save_prefab(None, name.trim(), true);
+                editor.report(&result);
             }
         }
     }
@@ -557,13 +687,14 @@ fn rebuild(
     fonts: Option<Res<UiFonts>>,
     assets: Res<AssetServer>,
     roots: Query<Entity, With<PaletteRoot>>,
-    mut shown_surface: Local<&'static str>,
+    mut shown: Local<(&'static str, usize)>,
 ) {
     let surface = editor.surface.name;
-    if !state.is_changed() && *shown_surface == surface {
+    let prefabs = editor.prefab_list.len();
+    if !state.is_changed() && *shown == (surface, prefabs) {
         return;
     }
-    *shown_surface = surface;
+    *shown = (surface, prefabs);
     for root in &roots {
         commands.entity(root).despawn();
     }
@@ -613,7 +744,7 @@ fn rebuild(
             &fonts,
             tabs,
             tab.title(),
-            90.0,
+            72.0,
             PaletteAction::Tab(tab),
         );
     }
@@ -834,6 +965,75 @@ fn rebuild(
                 note(&mut commands, &fonts, row, size, 13.0, TEXT_DIM);
             }
         }
+        Tab::Prefabs => {
+            note(
+                &mut commands,
+                &fonts,
+                root,
+                "A prefab is a saved selection: a .map file in prefabs/ of the game's assets. Click one to place it where the camera looks. Ctrl+C / Ctrl+V copy and paste at the cursor; Ctrl+Shift+D makes an array.".into(),
+                14.0,
+                TEXT_DIM,
+            );
+            if editor.prefab_list.is_empty() {
+                note(
+                    &mut commands,
+                    &fonts,
+                    root,
+                    "No prefabs yet: select something, name it below and save it.".into(),
+                    14.0,
+                    AMBER,
+                );
+            }
+            for info in &editor.prefab_list {
+                let label = if info.private {
+                    format!("{} (private)", info.name)
+                } else {
+                    info.name.clone()
+                };
+                action_button(
+                    &mut commands,
+                    &fonts,
+                    root,
+                    &label,
+                    380.0,
+                    PaletteAction::Place(Place::Prefab(info.name.clone())),
+                );
+            }
+            commands.spawn((ChildOf(root), rule(PANEL_BORDER)));
+            let row = commands
+                .spawn((
+                    ChildOf(root),
+                    Node {
+                        align_items: AlignItems::Center,
+                        column_gap: px(8.0),
+                        ..default()
+                    },
+                ))
+                .id();
+            commands
+                .spawn((ChildOf(row), PrefabName, text_field(&fonts, "", 48)))
+                .insert((
+                    Node {
+                        width: px(200.0),
+                        padding: UiRect::axes(px(8.0), px(3.0)),
+                        border: UiRect::all(px(1.0)),
+                        ..default()
+                    },
+                    TextFont {
+                        font: fonts.regular.clone().into(),
+                        font_size: FontSize::Px(18.0),
+                        ..default()
+                    },
+                ));
+            action_button(
+                &mut commands,
+                &fonts,
+                row,
+                "Save selection",
+                150.0,
+                PaletteAction::SavePrefab,
+            );
+        }
     }
 }
 
@@ -951,10 +1151,10 @@ mod tests {
                 bounds: Some((DVec3::new(-0.2, 0.0, -0.2), DVec3::new(0.2, 1.0, 0.2))),
             }],
         );
-        editor.selection = Some(Item::Brush {
+        editor.selection = crate::selection::Selection::from(Some(Item::Brush {
             entity: 0,
             brush: 0,
-        });
+        }));
         app.insert_resource(editor)
             .insert_resource(UiFonts {
                 regular: Handle::default(),
@@ -1019,7 +1219,7 @@ mod tests {
         );
         assert_eq!(editor.surface.name, "brick");
         // Without a brush selected, it only picks the surface of new brushes.
-        app.world_mut().resource_mut::<Editor>().selection = None;
+        app.world_mut().resource_mut::<Editor>().selection.clear();
         click(&mut app, "wood");
         let editor = app.world().resource::<Editor>();
         assert_eq!(

@@ -1,18 +1,22 @@
-//! Settings, from the main menu or the pause menu, in four tabs:
+//! Settings, from the main menu or the pause menu, in tabs:
 //! - Video (`video`): display mode, resolution, vsync, FPS cap, quality, brightness. All but the
 //!   display mode and resolution apply live; those two wait for APPLY, which then asks "Keep
 //!   these settings?".
 //! - Audio: master volume.
 //! - Controls (`controls`): sensitivity, ADS and scope multipliers, invert Y and the key-rebinding list.
-//! - Gameplay: name, field of view, Auto reload and the CoD4 folder for Homage Map textures
+//! - Gameplay: field of view, Auto reload and the CoD4 folder for Homage Map textures
 //!   (docs/adr/0004; CHECK applies it at once so the status line can say what was found).
+//! - Profile (`profiles`, main menu only): the list of Profiles, SWITCH, NEW, RENAME and DELETE.
+//!   The player's name is the active Profile's name, so RENAME is how it is changed. It acts at
+//!   once, independent of APPLY and BACK.
 //!
-//! All four tabs exist at once (the others are hidden), so what was typed or dragged on one
+//! All tabs exist at once (the others are hidden), so what was typed or dragged on one
 //! survives a visit to another. APPLY saves everything (`flow` writes the file) and goes back,
 //! unless the display mode or resolution changed: then it applies them, asks "Keep these
 //! settings?" and saves on KEEP. BACK (or Esc) discards, including the live video changes.
 
 mod controls;
+mod profiles;
 mod video;
 
 use bevy::ecs::system::SystemParam;
@@ -25,13 +29,13 @@ use super::rules_editor::{EditorOrigin, RulesOrigin};
 use crate::cod4::{Cod4, parse_path_input};
 use crate::flow::{Handedness, MenuScreen, Overlay, Settings};
 use crate::player::input::{Bindings, Rebinding};
+use crate::profile::Profile;
 use crate::ui::{
     ACCENT, ArrowIcon, TEXT, TEXT_DIM, UiFonts, backdrop, button, compact_button, label, panel,
     slider, text_field, title,
 };
 use crate::video::{ActiveVideo, BRIGHTNESS_RANGE, PendingRevert, StagedDisplay};
 
-const MAX_NAME_CHARS: usize = 24;
 const MAX_PATH_CHARS: usize = 300;
 const SENSITIVITY_RANGE: (f32, f32) = (0.0005, 0.006);
 const ADS_SENSITIVITY_RANGE: (f32, f32) = (0.25, 1.5);
@@ -63,6 +67,16 @@ pub(super) struct SettingsPlugin;
 impl Plugin for SettingsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ActiveTab>()
+            .add_systems(
+                Update,
+                (
+                    profiles::refresh,
+                    profiles::show_name_state,
+                    profiles::confirm_on_enter,
+                )
+                    .chain()
+                    .run_if(resource_exists::<profiles::ProfileTab>),
+            )
             .add_systems(OnEnter(MenuScreen::Settings), spawn_menu_settings)
             .add_systems(OnEnter(Overlay::Settings), spawn_overlay_settings)
             .add_systems(OnExit(MenuScreen::Settings), leave)
@@ -94,10 +108,26 @@ enum Tab {
     Audio,
     Controls,
     Gameplay,
+    Profile,
 }
 
 impl Tab {
-    const ALL: [Tab; 4] = [Tab::Video, Tab::Audio, Tab::Controls, Tab::Gameplay];
+    /// Every tab; the Profile tab comes last, after the ones the pause menu also offers.
+    const ALL: [Tab; 5] = [
+        Tab::Video,
+        Tab::Audio,
+        Tab::Controls,
+        Tab::Gameplay,
+        Tab::Profile,
+    ];
+
+    /// The tabs `origin` offers: Profiles aren't switched, created or deleted over a Match.
+    fn shown(origin: Origin) -> &'static [Tab] {
+        match origin {
+            Origin::MainMenu => &Self::ALL,
+            Origin::Pause => &Self::ALL[..4],
+        }
+    }
 
     fn label(self) -> &'static str {
         match self {
@@ -105,6 +135,7 @@ impl Tab {
             Tab::Audio => "Audio",
             Tab::Controls => "Controls",
             Tab::Gameplay => "Gameplay",
+            Tab::Profile => "Profile",
         }
     }
 }
@@ -143,9 +174,6 @@ struct AutoReloadValue;
 /// The Handedness picker's text.
 #[derive(Component)]
 struct HandednessValue;
-
-#[derive(Component)]
-struct NameField;
 
 /// The CoD4 path text field.
 #[derive(Component)]
@@ -234,6 +262,7 @@ fn spawn_menu_settings(
     fonts: Res<UiFonts>,
     icon: Res<ArrowIcon>,
     settings: Res<Settings>,
+    profile: Res<Profile>,
     video: Res<ActiveVideo>,
     tab: Res<ActiveTab>,
 ) {
@@ -242,6 +271,7 @@ fn spawn_menu_settings(
         &fonts,
         &icon,
         &settings,
+        &profile,
         &video,
         tab.0,
         Origin::MainMenu,
@@ -253,6 +283,7 @@ fn spawn_overlay_settings(
     fonts: Res<UiFonts>,
     icon: Res<ArrowIcon>,
     settings: Res<Settings>,
+    profile: Res<Profile>,
     video: Res<ActiveVideo>,
     tab: Res<ActiveTab>,
 ) {
@@ -261,6 +292,7 @@ fn spawn_overlay_settings(
         &fonts,
         &icon,
         &settings,
+        &profile,
         &video,
         tab.0,
         Origin::Pause,
@@ -280,17 +312,27 @@ fn leave(
     commands.remove_resource::<PendingRevert>();
     commands.remove_resource::<StagedDisplay>();
     commands.remove_resource::<Draft>();
+    commands.remove_resource::<profiles::ProfileTab>();
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_settings(
     mut commands: Commands,
     fonts: &UiFonts,
     icon: &ArrowIcon,
     settings: &Settings,
+    profile: &Profile,
     video: &ActiveVideo,
     active_tab: Tab,
     origin: Origin,
 ) {
+    // The tab last shown may be one this screen doesn't offer (Profile, from the pause menu).
+    let active_tab = if Tab::shown(origin).contains(&active_tab) {
+        active_tab
+    } else {
+        Tab::Video
+    };
+    commands.insert_resource(ActiveTab(active_tab));
     commands.insert_resource(StagedDisplay(video.0.display()));
     commands.insert_resource(Draft {
         invert_y: settings.invert_y,
@@ -329,7 +371,7 @@ fn spawn_settings(
             },
         ))
         .id();
-    for tab in Tab::ALL {
+    for &tab in Tab::shown(origin) {
         commands
             .spawn((
                 ChildOf(bar),
@@ -356,27 +398,32 @@ fn spawn_settings(
             },
         ))
         .id();
-    let tab_panels = Tab::ALL.map(|tab| {
-        commands
-            .spawn((
-                ChildOf(tabs),
-                TabPanel(tab),
-                Name::new(tab.label()),
-                Node {
-                    width: percent(100.0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(10.0),
-                    display: if tab == active_tab {
-                        Display::Flex
-                    } else {
-                        Display::None
+    let tab_panels: Vec<Entity> = Tab::shown(origin)
+        .iter()
+        .map(|&tab| {
+            commands
+                .spawn((
+                    ChildOf(tabs),
+                    TabPanel(tab),
+                    Name::new(tab.label()),
+                    Node {
+                        width: percent(100.0),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: px(10.0),
+                        display: if tab == active_tab {
+                            Display::Flex
+                        } else {
+                            Display::None
+                        },
+                        ..default()
                     },
-                    ..default()
-                },
-            ))
-            .id()
-    });
-    let [video_tab, audio_tab, controls_tab, gameplay_tab] = tab_panels;
+                ))
+                .id()
+        })
+        .collect();
+    // The first four are the tabs every origin has, in `Tab::ALL` order.
+    let (video_tab, audio_tab, controls_tab, gameplay_tab) =
+        (tab_panels[0], tab_panels[1], tab_panels[2], tab_panels[3]);
 
     video::spawn_video_tab(&mut commands, fonts, icon, video_tab, settings, video);
 
@@ -421,9 +468,13 @@ fn spawn_settings(
         icon,
         gameplay_tab,
         settings,
+        profile,
         video,
         origin,
     );
+    if let Some(&profile_tab) = tab_panels.get(4) {
+        profiles::spawn_tab(&mut commands, profile_tab);
+    }
 
     let buttons = commands
         .spawn((
@@ -464,14 +515,26 @@ fn spawn_gameplay_tab(
     icon: &ArrowIcon,
     tab: Entity,
     settings: &Settings,
+    profile: &Profile,
     video: &ActiveVideo,
     origin: Origin,
 ) {
-    let name_row = setting_row(commands, fonts, tab, "Name");
+    // The name is the active Profile's; it is changed on the Profile tab, which the pause menu
+    // doesn't have (a Match's name can't change under it).
+    let name_row = setting_row(commands, fonts, tab, "Profile");
+    commands.spawn((ChildOf(name_row), label(fonts, &profile.name, 24.0, TEXT)));
+    let name_hint_row = setting_row(commands, fonts, tab, "");
     commands.spawn((
-        ChildOf(name_row),
-        NameField,
-        text_field(fonts, &settings.name, MAX_NAME_CHARS),
+        ChildOf(name_hint_row),
+        label(
+            fonts,
+            match origin {
+                Origin::MainMenu => "Your name. Switch, rename or delete it on the Profile tab.",
+                Origin::Pause => "Your name. Switch or rename it from Settings in the main menu.",
+            },
+            18.0,
+            TEXT_DIM,
+        ),
     ));
 
     slider_row(commands, fonts, tab, SettingSlider::Fov, settings, video);
@@ -748,7 +811,6 @@ fn apply_brightness(
 /// staged display is what APPLY puts on the window first).
 #[derive(SystemParam)]
 struct Form<'w, 's> {
-    name: Single<'w, 's, &'static EditableText, With<NameField>>,
     cod4_path: Single<'w, 's, &'static EditableText, With<Cod4Field>>,
     sliders: Query<'w, 's, (&'static SettingSlider, &'static SliderValue)>,
     draft: Res<'w, Draft>,
@@ -778,10 +840,6 @@ impl Form<'_, '_> {
     /// "Keep these settings?" is kept when `keep_display`, otherwise left unsaved.
     fn commit(&mut self, keep_display: bool) {
         let mut edited = self.settings.clone();
-        let name = self.name.value().to_string();
-        if !name.trim().is_empty() {
-            edited.name = name.trim().to_owned();
-        }
         edited.cod4_path = parse_path_input(&self.cod4_path.value().to_string());
         for (kind, value) in &self.sliders {
             match kind {

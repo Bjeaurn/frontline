@@ -8,13 +8,18 @@
 
 mod camera;
 mod edit;
+mod inspector;
 mod mapfile;
 mod mapsron;
 mod menu;
 mod overlay;
 mod palette;
+mod playtest;
+mod prefab;
 mod remote;
+mod selection;
 mod session;
+mod transform;
 
 use std::path::PathBuf;
 
@@ -29,6 +34,7 @@ use frontline::{assets, atmosphere, data, maps, materials, ui, world};
 
 use crate::camera::{CameraPlugin, StartView, View};
 use crate::edit::EditPlugin;
+use crate::inspector::InspectorPlugin;
 use crate::menu::MenuPlugin;
 use crate::overlay::{MODE_KEYS, Overlay, OverlayPlugin};
 use crate::palette::PalettePlugin;
@@ -182,6 +188,7 @@ fn main() -> AppExit {
             OverlayPlugin,
             MenuPlugin,
             PalettePlugin,
+            InspectorPlugin,
             EditPlugin {
                 assets: assets_dir(),
             },

@@ -12,7 +12,7 @@ use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::text::{EditableText, LetterSpacing, TextCursorStyle};
-use bevy::ui::Pressed;
+use bevy::ui::{InteractionDisabled, Pressed};
 use bevy::ui_widgets::{
     Button, Slider, SliderRange, SliderThumb, SliderValue, TextInput, observe, slider_self_update,
 };
@@ -78,7 +78,12 @@ impl Plugin for UiPlugin {
         .insert_resource(icon)
         .add_systems(
             Update,
-            (style_buttons, place_slider_thumbs, banner::animate_banners),
+            (
+                style_buttons,
+                dim_disabled_buttons,
+                place_slider_thumbs,
+                banner::animate_banners,
+            ),
         );
     }
 }
@@ -318,19 +323,23 @@ pub fn backdrop() -> impl Bundle {
 }
 
 /// Restyles every menu button from its hover/press state (few buttons, so every frame is fine).
+/// A button with `InteractionDisabled` (it doesn't activate) keeps its idle look.
 fn style_buttons(
     mut buttons: Query<
         (
             &Hovered,
             Has<Pressed>,
+            Has<InteractionDisabled>,
             &mut BackgroundColor,
             &mut BorderColor,
         ),
         With<MenuButton>,
     >,
 ) {
-    for (hovered, pressed, mut background, mut border) in &mut buttons {
-        let (fill, edge) = if pressed {
+    for (hovered, pressed, disabled, mut background, mut border) in &mut buttons {
+        let (fill, edge) = if disabled {
+            (BUTTON, BUTTON_EDGE)
+        } else if pressed {
             (BUTTON_PRESS, AMBER)
         } else if hovered.0 {
             (BUTTON_HOVER, AMBER)
@@ -339,6 +348,28 @@ fn style_buttons(
         };
         background.set_if_neq(BackgroundColor(fill));
         border.set_if_neq(BorderColor::all(edge));
+    }
+}
+
+/// Greys the label of a button while it is `InteractionDisabled` and gives it back its colour
+/// when it is enabled again.
+fn dim_disabled_buttons(
+    disabled: Query<&Children, (With<MenuButton>, Added<InteractionDisabled>)>,
+    mut enabled: RemovedComponents<InteractionDisabled>,
+    buttons: Query<&Children, With<MenuButton>>,
+    mut texts: Query<&mut TextColor>,
+) {
+    for (children, color) in disabled.iter().map(|children| (children, TEXT_DIM)).chain(
+        enabled
+            .read()
+            .filter_map(|button| buttons.get(button).ok())
+            .map(|children| (children, TEXT)),
+    ) {
+        for child in children {
+            if let Ok(mut text) = texts.get_mut(*child) {
+                text.0 = color;
+            }
+        }
     }
 }
 

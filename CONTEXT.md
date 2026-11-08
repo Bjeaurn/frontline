@@ -124,6 +124,10 @@ _Avoid_: Remake, port, copy
 An original **Map** that reuses the structure of classic Call of Duty maps (lanes, sightlines, central contested area) with its own layout and name.
 _Avoid_: Inspired map, clone
 
+**Prefab**:
+A saved selection of brushes and entities (a `.map` file in `prefabs/`) that MapEdit places into any **Map**, with its anchor, the middle of its footprint at its lowest point, where it is wanted.
+_Avoid_: Template, blueprint, group
+
 ### Movement
 
 **Mantle**:
@@ -299,8 +303,8 @@ What a **Weapon** must do to unlock a **Camo**: a number of kills or headshot ki
 _Avoid_: Mastery, achievement
 
 **Profile**:
-A player's name, **Loadouts**, **XP** and per-**Weapon** kill counts and **Weapon XP**, owned by the player and carried to whichever server they join; the server awards **XP** and the client stores it.
-_Avoid_: Account, save, user
+A player's name, **Loadouts**, **XP** and per-**Weapon** kill counts and **Weapon XP**, owned by the player and carried to whichever server they join; the server awards **XP** and the client stores it. An install holds several (up to eight), each its own file, and one is active: the active **Profile**'s name is the player's name that others see (scoreboard, chat), so changing the name is renaming the **Profile**. The first boot asks for a name before anything else; players switch, create, rename and delete **Profiles** in Settings from the main menu, never over a **Match**.
+_Avoid_: Account, save, user, player name (as a separate setting)
 
 **Assist**:
 Credit to a player who damaged an enemy that someone else killed during that enemy's life, paid **XP** in proportion to the damage dealt.
@@ -326,7 +330,8 @@ _Avoid_: Combo, double/triple (as the general term)
 - Only the M16A4 offers the **Grenade Launcher**; its rounds, like a thrown **Grenade**, are simulated by the server
 - A **Primary** has an Optic, a Muzzle and an Underbarrel **Attachment Slot**, each optionally filled, but carries two **Attachments** at most (three with Gunfighter); a scoped Primary (the sniper rifle) has no Optic slot, and a **Secondary** has no Attachment Slots
 - Each **Weapon** offers its own **Attachments**, each unlocked at a **Weapon Level**; the sniper rifle offers no Optics
-- A **Profile** belongs to one player and is independent of any **Host**
+- A **Profile** belongs to one player and is independent of any **Host**; one player has several, exactly one is active, and a player never switches **Profile** during a **Match**
+- The name other players see is the active **Profile**'s name, unique among that player's **Profiles** (compared without regard to case)
 - A **Profile** holds three custom and three default **Loadouts**; the default ones are read-only and the custom ones are edited through **Create a Class**
 - A player's **Level** follows from the **XP** in their **Profile**; custom **Loadouts** and each **Unlock** wait for their **Level**
 - A **Weapon Level** follows from the **Weapon XP** in the **Profile** and unlocks that **Weapon**'s **Attachments**; its **Camos** are unlocked separately by their **Challenges**, counted in kills

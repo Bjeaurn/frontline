@@ -41,7 +41,8 @@ pub use classes::{
     AmmoCrate, BombSite, DomFlag, HqSite, Prop, PropCollider, SpawnPoint, SpawnTeam,
 };
 pub use registry::{
-    DEFAULT_MAP, MapId, MapInfo, MapRegistry, private_dir, register_private_source,
+    DEFAULT_MAP, MapId, MapInfo, MapRegistry, add_map_file, map_file_id, private_dir,
+    register_map_file_source, register_private_source,
 };
 
 use crate::cli::Mode;

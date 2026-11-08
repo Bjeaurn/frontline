@@ -125,6 +125,7 @@ enum MenuAction {
     /// Run a command that was waiting for the answer to "discard changes?".
     Discard(Command),
     SaveThen(Command),
+    Playtest,
     Quit,
 }
 
@@ -385,6 +386,9 @@ fn handle_actions(
             MenuAction::SaveThen(command) => {
                 commands.write(Command::SaveAnd(Box::new(command)));
             }
+            MenuAction::Playtest => {
+                commands.write(Command::Playtest);
+            }
             MenuAction::Quit => {
                 commands.write(Command::Quit { discard: false });
             }
@@ -627,10 +631,11 @@ fn main_screen(ui: &mut Ui, panel: Entity, editor: &Editor, name: &str) {
     ui.big_button(panel, "Save As...", MenuAction::Goto(Screen::SaveAs));
     ui.big_button(panel, "New Map...", MenuAction::Goto(Screen::New));
     ui.big_button(panel, "Map settings...", MenuAction::Goto(Screen::Settings));
+    ui.big_button(panel, "Playtest (F5)", MenuAction::Playtest);
     ui.big_button(panel, "Quit MapEdit", MenuAction::Quit);
     ui.text(
         panel,
-        "Esc closes. P palette. Arrows, PgUp/PgDn move the selection; Alt+arrows resize; Tab cycles the surface; Delete; Ctrl+D duplicate, Ctrl+Z / Ctrl+Y undo / redo, Ctrl+S save.",
+        "Esc closes. P palette. Click selects (Shift/Ctrl+click adds, drag a box); arrows, PgUp/PgDn move the selection; Alt+arrows move a face; J/K turn; Tab cycles the surface; Delete; Ctrl+D duplicate, Ctrl+C / Ctrl+V copy / paste, Ctrl+Z / Ctrl+Y undo / redo, Ctrl+S save, F5 playtest.",
         14.0,
         TEXT_DIM,
     );

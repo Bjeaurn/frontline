@@ -14,7 +14,7 @@ use frontline::maps::{
 };
 
 use crate::camera::FlyCamera;
-use crate::edit::{Command, Editor};
+use crate::edit::{Command, Editor, Interaction};
 use crate::menu::{BlockPicking, InputCapture};
 use crate::overlay::Overlay;
 
@@ -206,6 +206,7 @@ fn spawn_hud(mut commands: Commands) {
 fn update_hud(
     session: Res<Session>,
     editor: Res<Editor>,
+    interaction: Res<Interaction>,
     overlay: Res<Overlay>,
     idle: Res<IdleMap>,
     look: Res<LookOverride>,
@@ -263,8 +264,33 @@ fn update_hud(
             overlay.mode.unwrap_or("all"),
         ));
     }
-    if let Some(item) = editor.selection {
-        lines.push(format!("selected {}", editor.describe(item)));
+    if !editor.selection.is_empty() {
+        lines.push(format!(
+            "selected {}",
+            editor.describe_many(editor.selection.items())
+        ));
+        if let Some((min, max)) = editor.selection_bounds() {
+            // The size in metres and in cells of the grid, and where it stands.
+            let (size, g) = (max - min, editor.grid);
+            lines.push(format!(
+                "size {:.2} x {:.2} x {:.2} m = {:.2} x {:.2} x {:.2} grid cells of {g} m   x {:.2}..{:.2}  y {:.2}..{:.2}  z {:.2}..{:.2}",
+                size.x,
+                size.y,
+                size.z,
+                size.x / g,
+                size.y / g,
+                size.z / g,
+                min.x,
+                max.x,
+                min.y,
+                max.y,
+                min.z,
+                max.z,
+            ));
+        }
+    }
+    if let Some(readout) = &interaction.readout {
+        lines.push(format!("dragging {readout}"));
     }
     lines.push(format!(
         "grid {} m  new brushes {}  undo {}  redo {}{}",
@@ -302,8 +328,9 @@ fn update_hud(
                 .into(),
         );
         lines.push("[ ] map  , . look  R reload from disk  1-5 mode filter  C colliders  X through walls  L labels  F12 shot  H help".into());
-        lines.push("Esc menu  P palette  click select  arrows PgUp/PgDn move (Shift 4x)  Alt+arrows grow (+Shift shrink)  Tab texture".into());
-        lines.push("B box  Shift+B ramp  Del delete  Ctrl+D copy  Ctrl+Z/Y undo/redo  Ctrl+S save  G grid  J/K turn".into());
+        lines.push("Esc menu  P palette  click select (Shift/Ctrl+click adds)  drag a box (top view, or Alt+drag)  Ctrl+A all (+Shift: same kind)  Alt+drag a face of the selected brush".into());
+        lines.push("arrows PgUp/PgDn move (Shift 4x)  Alt+arrows move a face (+Shift in)  J/K turn 15 (Shift 90)  M / Shift+M mirror  Tab texture  Del delete  B box  Shift+B ramp".into());
+        lines.push("Ctrl+D copy  Ctrl+Shift+D array of 3  Ctrl+C / Ctrl+V copy, paste at cursor  Ctrl+Z/Y undo/redo  Ctrl+S save  F5 playtest  G grid".into());
     }
     **text = lines.join("\n");
 }

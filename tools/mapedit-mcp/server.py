@@ -12,12 +12,17 @@ mapedit_entities, mapedit_screenshot (writes a PNG and returns its path; read th
 at it) and mapedit_quit.
 
 Editing tools (build a Map): mapedit_new_map, mapedit_save, mapedit_save_as, mapedit_map_settings,
-mapedit_palette (what can be placed), mapedit_items (what the Map holds), mapedit_select,
-mapedit_move, mapedit_resize, mapedit_delete, mapedit_duplicate, mapedit_set_texture,
-mapedit_set_property, mapedit_add_brush, mapedit_add_entity, mapedit_undo, mapedit_redo and
-mapedit_ui (show the Esc menu or the palette panel). Edits change a working copy; nothing reaches
-the Map's file before mapedit_save. A typical session: mapedit_launch, mapedit_new_map (or open an
-existing Map), a few mapedit_add_brush / mapedit_add_entity, mapedit_screenshot to look, mapedit_save.
+mapedit_palette (what can be placed), mapedit_items (what the Map holds), mapedit_select (one
+item, several, a box, all of a kind), mapedit_move, mapedit_resize (one face), mapedit_delete,
+mapedit_duplicate, mapedit_set_texture, mapedit_rotate, mapedit_mirror, mapedit_array,
+mapedit_copy, mapedit_paste, mapedit_save_prefab, mapedit_prefabs, mapedit_place_prefab,
+mapedit_get_entity, mapedit_set_entity_property, mapedit_add_brush, mapedit_add_entity,
+mapedit_undo, mapedit_redo, mapedit_ui (show the Esc menu or the palette panel) and
+mapedit_playtest (start the game on the Map as edited). The selection is a list: every edit tool
+takes `item`, `items` or the whole selection and does it as ONE undo step. Edits change a working
+copy; nothing reaches the Map's file before mapedit_save. A typical session: mapedit_launch,
+mapedit_new_map (or open an existing Map), a few mapedit_add_brush / mapedit_add_entity,
+mapedit_screenshot to look, mapedit_save.
 
 Environment: MAPEDIT_PORT (default 15702); MAPEDIT_BIN, a built `mapedit` executable to start
 instead of `cargo run -p mapedit` from the repository root.
@@ -143,7 +148,12 @@ ITEM = {
     "properties": {"entity": {"type": "integer"}, "brush": {"type": "integer"}},
     "required": ["entity"],
 }
-SURFACE = {"type": "string", "enum": ["concrete", "plaster", "metal", "corrugated", "wood", "ground", "brick"]}
+ITEMS = {
+    "type": "array",
+    "description": "Several items (see `item`); they become the selection first. Without `item` or `items` the whole selection is the target, and the edit is ONE undo step.",
+    "items": ITEM,
+}
+SURFACE = {"type": "string", "enum": ["concrete", "plaster", "metal", "corrugated", "wood", "ground", "brick", "grass"]}
 
 
 def method(name: str, description: str, properties: dict | None = None, required: list | None = None, rpc: str | None = None) -> dict:
@@ -200,28 +210,91 @@ EDIT_TOOLS = [
     ),
     method(
         "select",
-        "Select something (it is highlighted in the view and is the default target of the edit tools): an `item`, or the first thing a `ray` {origin, direction} hits, or what is under window pixel `screen` [x, y]; `clear: true` deselects.",
-        {"item": ITEM, "ray": {"type": "object", "properties": {"origin": VEC3, "direction": VEC3}}, "screen": {"type": "array", "items": NUMBER}, "clear": {"type": "boolean"}},
+        "Set the selection (a list; highlighted in the view; the default target of the edit tools). One of: `item`; `items` (a list); `box` {min, max, flat?} (everything wholly inside that box in metres; `flat` ignores height); `screen_box` [x0, y0, x1, y1] (wholly inside that window rectangle, like a drag); `all: true`; `kind` (brush or entity); `class` (spawn_point, prop, ...); `surface` (every brush painted with it); `like` (an item: everything of its class or surface); the first thing a `ray` {origin, direction} hits; what is under window pixel `screen` [x, y]; or `clear: true`. `mode`: replace (default), add, or toggle (what shift-click does).",
+        {
+            "item": ITEM,
+            "items": ITEMS,
+            "box": {"type": "object", "properties": {"min": VEC3, "max": VEC3, "flat": {"type": "boolean"}}, "required": ["min", "max"]},
+            "screen_box": {"type": "array", "items": NUMBER, "minItems": 4, "maxItems": 4},
+            "all": {"type": "boolean"},
+            "kind": {"type": "string", "enum": ["brush", "entity"]},
+            "class": {"type": "string"},
+            "surface": SURFACE,
+            "like": ITEM,
+            "ray": {"type": "object", "properties": {"origin": VEC3, "direction": VEC3}},
+            "screen": {"type": "array", "items": NUMBER},
+            "clear": {"type": "boolean"},
+            "mode": {"type": "string", "enum": ["replace", "add", "toggle"]},
+        },
     ),
-    method("move", "Move an item by delta [x,y,z] metres (game space: y up, -z north).", {"item": ITEM, "delta": VEC3}, ["delta"]),
+    method("move", "Move the target (the whole selection by default) by delta [x,y,z] metres (game space: y up, -z north). One undo step.", {"item": ITEM, "items": ITEMS, "delta": VEC3}, ["delta"]),
     method(
         "resize",
-        "Resize a brush: give `min` and `max` (its new bounding box, metres), or `axis` (x, y, z), `side` (+ or -) and `amount` (metres that face moves outward; negative moves it inward). Exact for boxes and ramps.",
-        {"item": ITEM, "min": VEC3, "max": VEC3, "axis": {"type": "string", "enum": ["x", "y", "z"]}, "side": {"type": "string", "enum": ["+", "-"]}, "amount": NUMBER},
+        "Move ONE face of one brush, every other face staying put: `face` is an index, a side (\"+x\", \"-x\", \"+y\", \"-y\", \"+z\", \"-z\": the face that looks that way, sliding along that axis, so a ramp's slope goes straight up) or a direction [x,y,z]; `amount` is metres, outward when positive; `snap` puts an axis-aligned face on the grid. Or give `min` and `max` to scale the whole brush to that bounding box (metres).",
+        {"item": ITEM, "face": {"type": ["integer", "string", "array"]}, "amount": NUMBER, "snap": {"type": "boolean"}, "min": VEC3, "max": VEC3},
     ),
-    method("delete", "Delete an item (the worldspawn itself stays).", {"item": ITEM}),
-    method("duplicate", "Copy an item, moved by offset (default 1 m in +x); the copy is selected.", {"item": ITEM, "offset": VEC3}),
+    method("delete", "Delete the target (the whole selection by default; the worldspawn itself stays). One undo step.", {"item": ITEM, "items": ITEMS}),
+    method("duplicate", "Copy the target (the whole selection by default), moved by offset (default 1 m in +x); the copies are selected.", {"item": ITEM, "items": ITEMS, "offset": VEC3}),
     method(
         "set_texture",
-        "Paint a brush (all its faces) with a surface; the texture keeps its real-world scale. The surface also becomes the default for new brushes.",
-        {"item": ITEM, "surface": SURFACE},
+        "Paint the brushes of the target (the whole selection by default) with a surface; the texture keeps its real-world scale. The surface also becomes the default for new brushes.",
+        {"item": ITEM, "items": ITEMS, "surface": SURFACE},
         ["surface"],
     ),
     method(
-        "set_property",
-        "Set an entity key/value, e.g. team (alpha bravo any), modes (\"tdm dom\"), angle (degrees, 0 faces north), label, model, collider. An empty value removes the key.",
-        {"item": ITEM, "key": {"type": "string"}, "value": {"type": ["string", "number", "boolean"]}},
-        ["key", "value"],
+        "rotate",
+        "Turn the target (the whole selection by default) counter-clockwise seen from above by `degrees` (any angle; the keys use 15) about the vertical axis through `pivot` [x, z] (default: the middle of its bounding box). Brush planes turn exactly, textures turn with the faces, entities that face somewhere (spawn_point, prop) turn their angle. One undo step.",
+        {"item": ITEM, "items": ITEMS, "degrees": NUMBER, "pivot": {"type": "array", "items": NUMBER, "minItems": 2, "maxItems": 3}},
+        ["degrees"],
+    ),
+    method(
+        "mirror",
+        "Mirror the target about the plane perpendicular to `axis` (x flips left-right, z flips front-back) at coordinate `at` (default: the middle of the target). With `copy: true` the mirror images are added and selected and the originals stay.",
+        {"item": ITEM, "items": ITEMS, "axis": {"type": "string", "enum": ["x", "z"]}, "at": NUMBER, "copy": {"type": "boolean"}},
+        ["axis"],
+    ),
+    method(
+        "array",
+        "Linear array: `count` copies of the target, the k-th moved by k * offset [x,y,z] metres; the copies are selected.",
+        {"item": ITEM, "items": ITEMS, "count": {"type": "integer"}, "offset": VEC3},
+        ["count", "offset"],
+    ),
+    method("copy", "Put the target (the whole selection by default) on the clipboard.", {"item": ITEM, "items": ITEMS}),
+    method(
+        "paste",
+        "Paste the clipboard: its anchor (the middle of its footprint at its lowest point) goes to `position` [x,y,z], or the copy moves by `offset` (default 1 m in +x). The pasted items are selected.",
+        {"position": VEC3, "offset": VEC3},
+    ),
+    method(
+        "save_prefab",
+        "Save the target (the whole selection by default) as a prefab: prefabs/<name>.map in the game's assets (content/private/prefabs for a private Map), a Valve 220 .map TrenchBroom opens too. Refuses to replace one unless `overwrite`.",
+        {"item": ITEM, "items": ITEMS, "name": {"type": "string", "description": "letters, digits, _ and -"}, "overwrite": {"type": "boolean"}},
+        ["name"],
+    ),
+    method("prefabs", "List the prefabs (name, private) and the folders they live in."),
+    method(
+        "place_prefab",
+        "Place a prefab with its anchor (the middle of its footprint at its lowest point) at `position` [x,y,z], turned by `rotate` degrees about it. The placed items are selected.",
+        {"name": {"type": "string"}, "position": VEC3, "rotate": NUMBER},
+        ["name", "position"],
+    ),
+    method(
+        "get_entity",
+        "Read a point entity: class, position, angle, key/values, and what its class accepts (every property with its kind, choices, default and current value).",
+        {"item": ITEM},
+    ),
+    method(
+        "set_entity_property",
+        "Change entities (the target; the whole selection by default) as one undo step, checked against what the class accepts: `key` and `value` (null or \"\" removes the key), and/or `properties` {key: value}, `position` [x,y,z] (one entity), `angle` (degrees, 0 faces north). E.g. team (alpha bravo any), modes (\"tdm dom\"), label, model (must exist), collider (none box convex), a light's color (\"1 0.9 0.7\"), intensity, range, shadows_enabled, targetname (practical).",
+        {
+            "item": ITEM,
+            "items": ITEMS,
+            "key": {"type": "string"},
+            "value": {"type": ["string", "number", "boolean", "null"]},
+            "properties": {"type": "object"},
+            "position": VEC3,
+            "angle": NUMBER,
+        },
     ),
     method(
         "add_brush",
@@ -247,9 +320,13 @@ EDIT_TOOLS = [
     method("undo", "Undo the last edit."),
     method("redo", "Redo the last undone edit."),
     method(
+        "playtest",
+        "Write the Map as edited next to its file and start the game on it (frontline --host --map-file ...; the executable next to MapEdit, or MAPEDIT_GAME). Opens a game window.",
+    ),
+    method(
         "ui",
-        "Show the Esc menu (menu: main, load, save_as, new, settings, close) and/or the palette panel (palette: true/false, tab: surfaces, brushes, entities, props), e.g. to put them in a screenshot.",
-        {"menu": {"type": "string", "enum": ["main", "load", "save_as", "new", "settings", "close"]}, "palette": {"type": "boolean"}, "tab": {"type": "string", "enum": ["surfaces", "brushes", "entities", "props"]}},
+        "Show the Esc menu (menu: main, load, save_as, new, settings, close) and/or the palette panel (palette: true/false, tab: surfaces, brushes, entities, props, prefabs), e.g. to put them in a screenshot. The entity panel shows itself at the bottom left while one entity is selected.",
+        {"menu": {"type": "string", "enum": ["main", "load", "save_as", "new", "settings", "close"]}, "palette": {"type": "boolean"}, "tab": {"type": "string", "enum": ["surfaces", "brushes", "entities", "props", "prefabs"]}},
     ),
 ]
 

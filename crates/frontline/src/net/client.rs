@@ -21,7 +21,6 @@ use super::protocol::{
     ShotChannel, ShotTracer, ThrowGrenade, XpAward,
 };
 use crate::data::GameData;
-use crate::flow::Settings;
 use crate::gear::Perks;
 use crate::profile::Profile;
 use crate::shared::{
@@ -144,14 +143,14 @@ fn random_client_id() -> u64 {
 fn on_connected(
     trigger: On<Add<Connected>>,
     mut clients: Query<(&LocalId, &mut MessageSender<Hello>), With<Client>>,
-    settings: Res<Settings>,
+    profile: Res<Profile>,
 ) {
     let Ok((local_id, mut sender)) = clients.get_mut(trigger.entity) else {
         return;
     };
     info!("Connected to server as {}", local_id.0);
     sender.send::<ControlChannel>(Hello {
-        name: settings.name.clone(),
+        name: profile.name.clone(),
     });
 }
 

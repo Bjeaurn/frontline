@@ -14,6 +14,7 @@ use super::rules_editor::{EditorOrigin, RulesOrigin};
 use crate::data::{DEFAULT_MATCH_RULES, GameData, GameModeId};
 use crate::flow::{FlowCommand, MenuScreen, Settings};
 use crate::maps::{MapId, MapRegistry};
+use crate::profile::Profile;
 use crate::rotation::{HostSetup, LimitOverride, MAX_PLAYERS, RotationEntry};
 use crate::ui::{
     ACCENT, ArrowIcon, TEXT, TEXT_DIM, UiFonts, arrow_button, backdrop, button, compact_button,
@@ -169,6 +170,7 @@ pub(super) fn spawn_host_setup(
     mut commands: Commands,
     fonts: Res<UiFonts>,
     settings: Res<Settings>,
+    profile: Res<Profile>,
     registry: Res<MapRegistry>,
     data: Res<GameData>,
     icon: Res<ArrowIcon>,
@@ -195,7 +197,7 @@ pub(super) fn spawn_host_setup(
     }
     setup.max_players = setup.max_players.clamp(MIN_PLAYERS as usize, MAX_PLAYERS);
     if setup.server_name.trim().is_empty() {
-        setup.server_name = format!("{}'s Server", settings.name);
+        setup.server_name = format!("{}'s Server", profile.name);
     }
     let draft = Draft { limit_mode, setup };
     let server_name = draft.setup.server_name.clone();

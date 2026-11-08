@@ -23,10 +23,12 @@
 //!
 //! Editing (the working copy is a parsed `.map`; nothing reaches the Map's file before `save`;
 //! after each edit the view reloads within about half a second, `status.editor.synced` says when).
-//! Positions are game space: metres, y up, -z forward; yaw/angle in degrees, 0 faces -z. An
-//! `item` is `{"entity": 0, "brush": 12}` (brush 12 of entity 0, the worldspawn) or
-//! `{"entity": 5}` (a point entity); every method taking one defaults to the selection. Item
-//! indices shift when something is deleted. Every edit answers `{message, selection, dirty, ...}`.
+//! Positions are game space: metres, y up, -z forward; yaw/angle in degrees, 0 faces -z and
+//! counts counter-clockwise seen from above. An `item` is `{"entity": 0, "brush": 12}` (brush 12
+//! of entity 0, the worldspawn) or `{"entity": 5}` (a point entity). **The selection is a list**
+//! of items; every edit takes `item` (that one), `items` (a list: it becomes the selection first)
+//! or neither (the whole selection), and does the whole thing as ONE undo step. Item indices
+//! shift when something is deleted. Every edit answers `{message, selection (a list), dirty, ...}`.
 //!
 //! - `mapedit/new_map` `{id, name?, discard?}`: creates `maps/<id>.map` (a 60 x 60 m floor, two
 //!   spawns per Team, a worldspawn with a look), lists it in `data/maps.ron` for Team Deathmatch
@@ -39,19 +41,47 @@
 //!   hq sd; empty = every mode), factions? [alpha_id, bravo_id]}`: applies and answers the current
 //!   settings (call with no fields to read them); `save` persists them.
 //! - `mapedit/palette`: what can be placed: surfaces, primitives, entity classes with their
-//!   properties, prop models with bounds, looks, Game Modes, Factions.
+//!   properties (with their value kinds), prop models with bounds, looks, Game Modes, Factions.
 //! - `mapedit/items` `{kind? ("brush"|"entity"|"all"), class?, near? [x,y,z], radius?, offset?,
 //!   limit? (default 100)}`: the brushes and point entities of the working copy, with bounds,
 //!   surface or class and properties, and `total`.
-//! - `mapedit/select` `{item}` | `{ray: {origin, direction}}` | `{screen: [x, y]}` (pixels of the
-//!   window) | `{clear: true}`: sets the selection (highlighted in the view).
-//! - `mapedit/move` `{item?, delta [x,y,z]}`, `mapedit/resize` `{item?, min, max}` (a brush's new
-//!   bounding box) or `{item?, axis "x"|"y"|"z", side "+"|"-", amount}` (moves that face outward;
-//!   negative inward), `mapedit/delete` `{item?}`, `mapedit/duplicate` `{item?, offset? [x,y,z]}`
-//!   (default 1 m in +x; the copy is selected), `mapedit/set_texture` `{item?, surface}` (a surface
-//!   name of the palette; a brush's faces get its real-world texture scale),
-//!   `mapedit/set_property` `{item?, key, value}` (entity key/values such as `team`, `angle`;
-//!   empty value removes the key).
+//! - `mapedit/select`: sets the selection (highlighted in the view). One of `item`, `items`,
+//!   `ray: {origin, direction}`, `screen: [x, y]` (pixels of the window: the item there),
+//!   `box: {min [x,y,z], max [x,y,z], flat?}` (the items wholly inside; `flat` ignores height),
+//!   `screen_box: [x0, y0, x1, y1]` (the items wholly inside that window rectangle: a box
+//!   drag), `all: true`, `kind` ("brush"|"entity"), `class` (`spawn_point`...), `surface`
+//!   (`concrete`...), `like: item` (everything of that item's class or surface), or
+//!   `clear: true`. `mode` is "replace" (default), "add" or "toggle" (shift-click).
+//! - `mapedit/move` `{delta [x,y,z]}`: nudges the selection. `mapedit/resize` `{face, amount,
+//!   snap?}` moves ONE face of one brush, every other face staying put: `face` is an index, a
+//!   side ("+x", "-x", "+y", "-y", "+z", "-z": the face that looks that way, sliding along that
+//!   axis, so a ramp's slope goes straight up) or a direction `[x, y, z]`; `amount` is metres,
+//!   outward when positive; `snap` puts an axis-aligned face on the grid. `{min, max}` instead
+//!   scales the whole brush to that bounding box. `mapedit/delete`; `mapedit/duplicate`
+//!   `{offset? [x,y,z]}` (default 1 m in +x; the copies are selected); `mapedit/set_texture`
+//!   `{surface}` (a surface name of the palette; a brush's faces get its real-world texture
+//!   scale; entities in the selection are skipped).
+//! - `mapedit/rotate` `{degrees, pivot? [x, z]}`: turns the selection counter-clockwise about the
+//!   vertical axis through the pivot (default: the middle of its bounding box). Any angle; the
+//!   keys use 15 degree steps. Brush planes turn in `f64`, textures turn with the faces (their
+//!   Valve 220 axes and offsets turn too, so nothing swims), entities that face somewhere turn
+//!   their `angle`. `mapedit/mirror` `{axis "x"|"z", at?, copy?}` mirrors about the plane
+//!   perpendicular to the axis at that coordinate (default: the middle of the selection);
+//!   `copy` keeps the originals and selects the mirror images. `mapedit/array` `{count, offset}`:
+//!   `count` copies, each `offset` further than the one before (selected).
+//! - `mapedit/copy` puts the selection on the clipboard; `mapedit/paste` `{position? | offset?}`
+//!   pastes it with its anchor (the middle of its footprint at its lowest point) at `position`,
+//!   or moved by `offset` (default 1 m in +x); the pasted items are selected.
+//!   `mapedit/save_prefab` `{name, overwrite?}` saves the selection as `prefabs/<name>.map` of
+//!   the game's assets (`content/private/prefabs/` for a private Map); `mapedit/prefabs` lists
+//!   them; `mapedit/place_prefab` `{name, position, rotate?}` puts one with its anchor at
+//!   `position`, turned by `rotate` degrees.
+//! - `mapedit/get_entity` `{item?}`: an entity's class, position, angle, key/values, and what its
+//!   class accepts (each property with kind, choices, default and current value).
+//!   `mapedit/set_entity_property` `{key, value}` (a null or empty value removes the key), or
+//!   `{properties: {key: value}}`, and/or `{position [x,y,z]}` and `{angle}`: checked against what
+//!   the entity's class accepts (a prop's `model` must exist, `team` is alpha, bravo or any, a
+//!   light's `color` is `r g b`...) and applied to every selected entity as one step.
 //! - `mapedit/add_brush` `{shape ("box"|"wedge"|"wall"|"slab"|"ramp"), min [x,y,z], max [x,y,z]
 //!   (or centre + size), surface?, rise? ("+x"|"-x"|"+z"|"-z", wedge and ramp)}`: adds a brush to
 //!   the worldspawn and selects it. `wall`, `slab` and `ramp` are the palette primitives; with
@@ -60,10 +90,12 @@
 //!   entity classes (`spawn_point` with `team`, `modes`; `dom_flag` `label`; `hq_site`; `bomb_site`
 //!   `label`; `ammo_crate`; `light_point`; `prop` with `model`, `collider`).
 //! - `mapedit/undo`, `mapedit/redo`.
+//! - `mapedit/playtest`: writes the working copy next to the Map's file and starts the game on it
+//!   (`frontline --host --map-file ...`, the executable next to MapEdit or `MAPEDIT_GAME`).
 //! - `mapedit/ui` `{menu? ("main"|"load"|"save_as"|"new"|"settings"|"close"), palette? (bool),
-//!   tab? ("surfaces"|"brushes"|"entities"|"props")}`: shows the Esc menu or the palette panel,
-//!   e.g. for a screenshot.
-
+//!   tab? ("surfaces"|"brushes"|"entities"|"props"|"prefabs")}`: shows the Esc menu or the palette
+//!   panel, e.g. for a screenshot. The entity panel (left, bottom) shows itself while a single
+//!   entity is selected.
 use std::path::PathBuf;
 
 use bevy::ecs::message::Messages;
@@ -82,11 +114,13 @@ use serde_json::{Value, json};
 use frontline::data::GameData;
 
 use crate::camera::{FlyCamera, GoTo, View};
-use crate::edit::{Command, Editor, Failure, SettingsChange, execute};
+use crate::edit::{Command, Editor, EntityChange, FaceRef, Failure, SettingsChange, execute};
 use crate::mapfile::{Brush, Item, Rise};
 use crate::overlay::{MODE_KEYS, Overlay};
 use crate::palette;
+use crate::selection::{Combine, Kind};
 use crate::session::Reload;
+use crate::transform::MirrorAxis;
 
 pub struct ControlPlugin {
     pub port: u16,
@@ -117,10 +151,20 @@ impl Plugin for ControlPlugin {
                 .with_method_main("mapedit/delete", delete)
                 .with_method_main("mapedit/duplicate", duplicate)
                 .with_method_main("mapedit/set_texture", set_texture)
-                .with_method_main("mapedit/set_property", set_property)
+                .with_method_main("mapedit/rotate", rotate)
+                .with_method_main("mapedit/mirror", mirror)
+                .with_method_main("mapedit/array", array)
+                .with_method_main("mapedit/copy", copy)
+                .with_method_main("mapedit/paste", paste)
+                .with_method_main("mapedit/save_prefab", save_prefab)
+                .with_method_main("mapedit/prefabs", prefabs)
+                .with_method_main("mapedit/place_prefab", place_prefab)
+                .with_method_main("mapedit/get_entity", get_entity)
+                .with_method_main("mapedit/set_entity_property", set_entity_property)
                 .with_method_main("mapedit/add_brush", add_brush)
                 .with_method_main("mapedit/add_entity", add_entity)
                 .with_method_main("mapedit/ui", ui)
+                .with_method_main("mapedit/playtest", playtest)
                 .with_method_main("mapedit/undo", undo)
                 .with_method_main("mapedit/redo", redo),
             RemoteHttpPlugin::default().with_port(self.port),
@@ -439,23 +483,53 @@ fn item_json(item: Item) -> Value {
     }
 }
 
-fn item_arg(args: &Value, key: &str) -> BrpResult<Option<Item>> {
-    let value = match args.get(key) {
-        None | Some(Value::Null) => return Ok(None),
-        Some(value) => value,
-    };
+fn items_json(items: &[Item]) -> Value {
+    Value::Array(items.iter().copied().map(item_json).collect())
+}
+
+fn item_of(value: &Value) -> BrpResult<Item> {
     let entity = value
         .get("entity")
         .and_then(Value::as_u64)
-        .ok_or_else(|| invalid("`item` is {\"entity\": n} or {\"entity\": n, \"brush\": m}"))?
+        .ok_or_else(|| invalid("an item is {\"entity\": n} or {\"entity\": n, \"brush\": m}"))?
         as usize;
-    Ok(Some(match value.get("brush").and_then(Value::as_u64) {
+    Ok(match value.get("brush").and_then(Value::as_u64) {
         Some(brush) => Item::Brush {
             entity,
             brush: brush as usize,
         },
         None => Item::Entity(entity),
-    }))
+    })
+}
+
+fn item_arg(args: &Value, key: &str) -> BrpResult<Option<Item>> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => item_of(value).map(Some),
+    }
+}
+
+fn items_arg(args: &Value, key: &str) -> BrpResult<Option<Vec<Item>>> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(list)) => list.iter().map(item_of).collect::<BrpResult<_>>().map(Some),
+        Some(_) => Err(invalid(format!(
+            "`{key}` is a list of items: [{{\"entity\": 0, \"brush\": 3}}, ...]"
+        ))),
+    }
+}
+
+/// What an edit acts on: `item`, or `items` (which become the selection first), else the
+/// selection itself (`None`).
+fn target_arg(world: &mut World, args: &Value) -> BrpResult<Option<Item>> {
+    if let Some(items) = items_arg(args, "items")? {
+        world
+            .resource_mut::<Editor>()
+            .select_items(&items, Combine::Replace)
+            .map_err(invalid)?;
+        return Ok(None);
+    }
+    item_arg(args, "item")
 }
 
 fn dvec3(value: &Value, name: &str) -> BrpResult<DVec3> {
@@ -473,6 +547,22 @@ fn dvec3_json(v: DVec3) -> Value {
     json!([v.x, v.y, v.z])
 }
 
+fn number(args: &Value, name: &str) -> BrpResult<f64> {
+    args.get(name)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| invalid(format!("`{name}` (a number) is required")))
+}
+
+/// A key/value of an entity as text: strings, numbers and booleans.
+fn text_value(value: &Value, what: &str) -> BrpResult<String> {
+    match value {
+        Value::String(text) => Ok(text.clone()),
+        Value::Number(n) => Ok(n.to_string()),
+        Value::Bool(b) => Ok(b.to_string()),
+        _ => Err(invalid(format!("`{what}` is a string, number or boolean"))),
+    }
+}
+
 fn editor_status(world: &World) -> Value {
     let editor = world.resource::<Editor>();
     let (brushes, entities) = editor.map.as_ref().map_or((0, 0), |map| {
@@ -481,6 +571,7 @@ fn editor_status(world: &World) -> Value {
             map.entities.len().saturating_sub(1),
         )
     });
+    let bounds = editor.selection_bounds();
     json!({
         "open": editor.map.is_some(),
         "problem": editor.problem,
@@ -490,8 +581,13 @@ fn editor_status(world: &World) -> Value {
         "settings_dirty": editor.settings_dirty,
         "revision": editor.revision,
         "synced": editor.synced(),
-        "selection": editor.selection.map(item_json),
-        "selection_text": editor.selection.map(|item| editor.describe(item)),
+        "selection": items_json(editor.selection.items()),
+        "selection_count": editor.selection.len(),
+        "selection_text": (!editor.selection.is_empty()).then(|| editor.describe_many(editor.selection.items())),
+        "selection_min": bounds.map(|(min, _)| dvec3_json(min)),
+        "selection_max": bounds.map(|(_, max)| dvec3_json(max)),
+        "selection_size": bounds.map(|(min, max)| dvec3_json(max - min)),
+        "clipboard": editor.clipboard.as_ref().map(|c| c.items().len()),
         "grid": editor.grid,
         "surface": editor.surface.name,
         "can_undo": editor.can_undo(),
@@ -512,7 +608,7 @@ fn edit_reply(world: &mut World, result: Result<String, String>) -> BrpResult {
     match result {
         Ok(message) => Ok(json!({
             "message": message,
-            "selection": editor.selection.map(item_json),
+            "selection": items_json(editor.selection.items()),
             "dirty": editor.dirty(),
             "revision": editor.revision,
             "synced": editor.synced(),
@@ -729,12 +825,89 @@ fn items(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
     Ok(json!({ "total": total, "offset": offset, "items": page }))
 }
 
+/// The kind of items a `select` call names, when it names one.
+fn kind_arg(args: &Value) -> BrpResult<Option<Kind>> {
+    if flag(args, "all") {
+        return Ok(Some(Kind::Everything));
+    }
+    if let Some(kind) = args.get("kind").and_then(Value::as_str) {
+        return match kind {
+            "all" => Ok(Some(Kind::Everything)),
+            "brush" | "brushes" => Ok(Some(Kind::Brushes)),
+            "entity" | "entities" => Ok(Some(Kind::Entities)),
+            other => Err(invalid(format!(
+                "unknown `kind` \"{other}\"; known: all, brush, entity (or give `class` or `surface`)"
+            ))),
+        };
+    }
+    if let Some(class) = args.get("class").and_then(Value::as_str) {
+        return Ok(Some(Kind::Class(class.to_owned())));
+    }
+    if let Some(name) = args.get("surface").and_then(Value::as_str) {
+        if crate::mapfile::surface(name).is_none() {
+            return Err(invalid(format!(
+                "unknown surface \"{name}\"; see mapedit/palette"
+            )));
+        }
+        return Ok(Some(Kind::Surface(name.to_owned())));
+    }
+    Ok(item_arg(args, "like")?.map(Kind::Like))
+}
+
 fn select(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
     let args = params(args);
+    let how = match args.get("mode").and_then(Value::as_str) {
+        None => Combine::Replace,
+        Some(key) => Combine::from_key(key)
+            .ok_or_else(|| invalid("`mode` is \"replace\", \"add\" or \"toggle\""))?,
+    };
+    let kind = kind_arg(&args)?;
     let result = if flag(&args, "clear") {
         world.resource_mut::<Editor>().select(None)
+    } else if let Some(items) = items_arg(&args, "items")? {
+        world.resource_mut::<Editor>().select_items(&items, how)
     } else if let Some(item) = item_arg(&args, "item")? {
-        world.resource_mut::<Editor>().select(Some(item))
+        world.resource_mut::<Editor>().select_items(&[item], how)
+    } else if let Some(area) = args.get("box") {
+        let (min, max) = (dvec3(area, "min")?, dvec3(area, "max")?);
+        let flat = flag(area, "flat");
+        let mut editor = world.resource_mut::<Editor>();
+        editor
+            .find_in_box(min, max, flat)
+            .and_then(|items| editor.select_items(&items, how))
+    } else if let Some(rect) = args.get("screen_box").and_then(Value::as_array) {
+        let numbers: Vec<f32> = rect
+            .iter()
+            .filter_map(Value::as_f64)
+            .map(|n| n as f32)
+            .collect();
+        let [x0, y0, x1, y1] = numbers[..] else {
+            return Err(invalid("`screen_box` is [x0, y0, x1, y1] in window pixels"));
+        };
+        let (low, high) = (
+            Vec2::new(x0.min(x1), y0.min(y1)),
+            Vec2::new(x0.max(x1), y0.max(y1)),
+        );
+        let mut cameras = world.query_filtered::<(&Camera, &GlobalTransform), With<FlyCamera>>();
+        let (camera, transform) = cameras.single(world).map_err(|_| invalid("no camera"))?;
+        let (camera, transform) = (camera.clone(), *transform);
+        let mut editor = world.resource_mut::<Editor>();
+        editor
+            .find_where(|min, max| {
+                crate::selection::corners_inside(
+                    min,
+                    max,
+                    |p| camera.world_to_viewport(&transform, p.as_vec3()).ok(),
+                    low,
+                    high,
+                )
+            })
+            .and_then(|items| editor.select_items(&items, how))
+    } else if let Some(kind) = kind {
+        let mut editor = world.resource_mut::<Editor>();
+        editor
+            .find_kind(&kind)
+            .and_then(|items| editor.select_items(&items, how))
     } else {
         let (origin, direction) = if let Some(ray) = args.get("ray") {
             (dvec3(ray, "origin")?, dvec3(ray, "direction")?)
@@ -754,80 +927,117 @@ fn select(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
             (ray.origin.as_dvec3(), ray.direction.as_dvec3())
         } else {
             return Err(invalid(
-                "give `item`, `ray` {origin, direction}, `screen` [x, y] or `clear: true`",
+                "give `item`, `items`, `box`, `screen_box`, `all`, `kind`, `class`, `surface`, `like`, `ray` {origin, direction}, `screen` [x, y] or `clear: true`",
             ));
         };
         let mut editor = world.resource_mut::<Editor>();
         match editor.pick(origin, direction) {
-            Some(hit) => editor.select(Some(hit.item)).map(|text| {
+            Some(hit) => editor.select_items(&[hit.item], how).map(|text| {
                 format!(
                     "{text}; hit {:.2} m away on the face towards {:.0}, {:.0}, {:.0}",
                     hit.distance, hit.normal.x, hit.normal.y, hit.normal.z
                 )
             }),
             None => {
-                editor.selection = None;
-                Err("the ray hit nothing; selection cleared".into())
+                if how == Combine::Replace {
+                    editor.selection.clear();
+                }
+                Err("the ray hit nothing".into())
             }
         }
     };
-    let selected = world.resource::<Editor>().selection;
+    let editor = world.resource::<Editor>();
     match result {
-        Ok(message) => Ok(json!({ "message": message, "selection": selected.map(item_json) })),
+        Ok(message) => Ok(json!({
+            "message": message,
+            "selection": items_json(editor.selection.items()),
+            "selection_count": editor.selection.len(),
+        })),
         Err(message) => Err(invalid(message)),
     }
 }
 
 fn move_item(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
     let args = params(args);
-    let item = item_arg(&args, "item")?;
+    let item = target_arg(world, &args)?;
     let delta = dvec3(&args, "delta")?;
     let result = world.resource_mut::<Editor>().move_item(item, delta);
     edit_reply(world, result)
 }
 
+/// A face of a brush, as a call names it: its index, a side (`+x`, `-y`...), or a direction.
+fn face_arg(value: &Value) -> BrpResult<FaceRef> {
+    match value {
+        Value::Number(n) => n
+            .as_u64()
+            .map(|i| FaceRef::Index(i as usize))
+            .ok_or_else(|| invalid("a face index is a whole number")),
+        Value::String(side) => {
+            let (sign, axis) = side.split_at(side.len().min(1));
+            let sign = match sign {
+                "+" => 1.0,
+                "-" => -1.0,
+                _ => {
+                    return Err(invalid(
+                        "`face` is an index, a side (\"+x\", \"-x\", \"+y\", \"-y\", \"+z\", \"-z\") or a direction [x, y, z]",
+                    ));
+                }
+            };
+            let direction = match axis {
+                "x" => DVec3::X,
+                "y" => DVec3::Y,
+                "z" => DVec3::Z,
+                _ => {
+                    return Err(invalid(
+                        "a side is \"+x\", \"-x\", \"+y\", \"-y\", \"+z\" or \"-z\"",
+                    ));
+                }
+            };
+            Ok(FaceRef::Towards(direction * sign))
+        }
+        Value::Array(_) => {
+            let direction = dvec3(&json!({ "face": value }), "face")?;
+            if direction.length() < 1e-9 {
+                return Err(invalid("a direction cannot be [0, 0, 0]"));
+            }
+            Ok(FaceRef::Towards(direction))
+        }
+        _ => Err(invalid(
+            "`face` is an index, a side or a direction [x, y, z]",
+        )),
+    }
+}
+
 fn resize(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
     let args = params(args);
-    let item = item_arg(&args, "item")?;
+    let item = target_arg(world, &args)?;
     let result = if args.get("min").is_some() {
         let (min, max) = (dvec3(&args, "min")?, dvec3(&args, "max")?);
         world.resource_mut::<Editor>().resize(item, min, max)
-    } else {
-        let axis = match args.get("axis").and_then(Value::as_str) {
-            Some("x") => 0,
-            Some("y") => 1,
-            Some("z") => 2,
-            _ => {
-                return Err(invalid(
-                    "give `min` and `max`, or `axis` (x, y, z), `side` (+, -) and `amount`",
-                ));
-            }
-        };
-        let positive = match args.get("side").and_then(Value::as_str) {
-            Some("+") => true,
-            Some("-") => false,
-            _ => return Err(invalid("`side` is \"+\" or \"-\"")),
-        };
-        let amount = args
-            .get("amount")
-            .and_then(Value::as_f64)
-            .ok_or_else(|| invalid("`amount` (metres) is required"))?;
+    } else if let Some(face) = args.get("face") {
+        let face = face_arg(face)?;
+        let amount = number(&args, "amount")?;
         world
             .resource_mut::<Editor>()
-            .resize_face(item, axis, positive, amount)
+            .move_face(item, face, amount, flag(&args, "snap"))
+    } else {
+        return Err(invalid(
+            "give `face` (index, \"+x\".. or [x, y, z]) and `amount` to move one face, or `min` and `max` to scale the brush to a box",
+        ));
     };
     edit_reply(world, result)
 }
 
 fn delete(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
-    let item = item_arg(&params(args), "item")?;
+    let args = params(args);
+    let item = target_arg(world, &args)?;
     let result = world.resource_mut::<Editor>().delete(item);
     edit_reply(world, result)
 }
 
 fn duplicate(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
     let args = params(args);
-    let item = item_arg(&args, "item")?;
+    let item = target_arg(world, &args)?;
     let offset = if args.get("offset").is_some() {
         dvec3(&args, "offset")?
     } else {
@@ -839,7 +1049,7 @@ fn duplicate(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
 
 fn set_texture(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
     let args = params(args);
-    let item = item_arg(&args, "item")?;
+    let item = target_arg(world, &args)?;
     let surface = args
         .get("surface")
         .and_then(Value::as_str)
@@ -848,25 +1058,214 @@ fn set_texture(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
     edit_reply(world, result)
 }
 
-fn set_property(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
+fn rotate(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
     let args = params(args);
-    let item = item_arg(&args, "item")?;
-    let key = args
-        .get("key")
-        .and_then(Value::as_str)
-        .ok_or_else(|| invalid("`key` is required"))?;
-    let value = match args.get("value") {
-        Some(Value::String(text)) => text.clone(),
-        Some(Value::Number(n)) => n.to_string(),
-        Some(Value::Bool(b)) => b.to_string(),
-        _ => return Err(invalid("`value` is a string, number or boolean")),
+    let item = target_arg(world, &args)?;
+    let degrees = number(&args, "degrees")?;
+    let pivot = match args.get("pivot").and_then(Value::as_array) {
+        None => None,
+        Some(list) => {
+            let numbers: Vec<f64> = list.iter().filter_map(Value::as_f64).collect();
+            match numbers[..] {
+                [x, z] => Some(DVec3::new(x, 0.0, z)),
+                [x, y, z] => Some(DVec3::new(x, y, z)),
+                _ => return Err(invalid("`pivot` is [x, z] (or [x, y, z]) in metres")),
+            }
+        }
     };
-    let result = world
-        .resource_mut::<Editor>()
-        .set_property(item, key, &value);
+    let result = world.resource_mut::<Editor>().turn(item, degrees, pivot);
     edit_reply(world, result)
 }
 
+fn mirror(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let args = params(args);
+    let item = target_arg(world, &args)?;
+    let axis = args
+        .get("axis")
+        .and_then(Value::as_str)
+        .and_then(MirrorAxis::from_key)
+        .ok_or_else(|| invalid("`axis` is \"x\" or \"z\" (the plane is perpendicular to it)"))?;
+    let at = args.get("at").and_then(Value::as_f64);
+    let result = world
+        .resource_mut::<Editor>()
+        .mirror(item, axis, at, flag(&args, "copy"));
+    edit_reply(world, result)
+}
+
+fn array(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let args = params(args);
+    let item = target_arg(world, &args)?;
+    let count = args
+        .get("count")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| invalid("`count` (a whole number of copies) is required"))?
+        as usize;
+    let offset = dvec3(&args, "offset")?;
+    let result = world.resource_mut::<Editor>().array(item, count, offset);
+    edit_reply(world, result)
+}
+
+fn copy(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let args = params(args);
+    let item = target_arg(world, &args)?;
+    let result = world.resource_mut::<Editor>().copy(item);
+    edit_reply(world, result)
+}
+
+fn paste(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let args = params(args);
+    let mut editor = world.resource_mut::<Editor>();
+    let result = if args.get("position").is_some() {
+        // The clipboard's anchor (the middle of its footprint, at its lowest point) goes there.
+        let point = dvec3(&args, "position")?;
+        match editor.clipboard_anchor() {
+            Some(anchor) => editor.paste(point - anchor),
+            None => Err("the clipboard is empty (copy first)".into()),
+        }
+    } else if args.get("offset").is_some() {
+        editor.paste(dvec3(&args, "offset")?)
+    } else {
+        editor.paste(DVec3::X)
+    };
+    edit_reply(world, result)
+}
+
+fn save_prefab(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let args = params(args);
+    let item = target_arg(world, &args)?;
+    let name = args
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("`name` is required: letters, digits, _ and -"))?;
+    let result = world
+        .resource_mut::<Editor>()
+        .save_prefab(item, name, flag(&args, "overwrite"));
+    edit_reply(world, result)
+}
+
+fn prefabs(In(_): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let editor = world.resource::<Editor>();
+    let list: Vec<Value> = editor
+        .prefabs()
+        .into_iter()
+        .map(|p| json!({ "name": p.name, "private": p.private }))
+        .collect();
+    Ok(json!({
+        "prefabs": list,
+        "folder": editor.paths.prefab_folder(false).ok(),
+        "private_folder": editor.paths.prefab_folder(true).ok(),
+    }))
+}
+
+fn place_prefab(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let args = params(args);
+    let name = args
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| invalid("`name` is required (see mapedit/prefabs)"))?;
+    let position = dvec3(&args, "position")?;
+    let degrees = args.get("rotate").and_then(Value::as_f64).unwrap_or(0.0);
+    let result = world
+        .resource_mut::<Editor>()
+        .place_prefab(name, position, degrees);
+    edit_reply(world, result)
+}
+
+fn get_entity(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let args = params(args);
+    let item = target_arg(world, &args)?;
+    let editor = world.resource::<Editor>();
+    let item = editor.resolve(item).map_err(invalid)?;
+    let Item::Entity(index) = item else {
+        return Err(invalid(
+            "that is a brush; use mapedit/items for brushes (entities have properties)",
+        ));
+    };
+    let map = editor.map.as_ref().expect("resolved");
+    let entity = &map.entities[index];
+    let class = palette::class(entity.classname());
+    let properties: serde_json::Map<String, Value> = entity
+        .props
+        .iter()
+        .filter(|(k, _)| !matches!(k.as_str(), "classname" | "origin"))
+        .map(|(k, v)| (k.clone(), json!(v)))
+        .collect();
+    // What the class accepts: each property with its kind, choices, default and current value.
+    let schema = class.map(|class| {
+        class
+            .properties
+            .iter()
+            .map(|p| {
+                json!({
+                    "key": p.key,
+                    "help": p.help,
+                    "kind": p.kind.name(),
+                    "choices": p.choices,
+                    "default": class.defaults.iter().find(|(k, _)| *k == p.key).map(|(_, v)| *v),
+                    "value": entity.get(p.key),
+                })
+            })
+            .collect::<Vec<_>>()
+    });
+    let bounds = map.bounds(item, &editor.prop_bounds);
+    Ok(json!({
+        "item": item_json(item),
+        "class": entity.classname(),
+        "known_class": class.is_some(),
+        "purpose": class.map(|c| c.purpose),
+        "position": entity.origin().map(dvec3_json),
+        "angle": entity.get("angle").map(|_| entity.angle()),
+        "properties": properties,
+        "schema": schema,
+        "min": bounds.map(|(min, _)| dvec3_json(min)),
+        "max": bounds.map(|(_, max)| dvec3_json(max)),
+    }))
+}
+
+fn set_entity_property(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let args = params(args);
+    let item = target_arg(world, &args)?;
+    let mut change = EntityChange::default();
+    // `value: null` (or "") takes the key off.
+    let mut set = |key: &str, value: &Value| -> BrpResult<()> {
+        let text = match value {
+            Value::Null => String::new(),
+            other => text_value(other, key)?,
+        };
+        change.set.push((key.to_owned(), text));
+        Ok(())
+    };
+    if let Some(key) = args.get("key").and_then(Value::as_str) {
+        set(key, args.get("value").unwrap_or(&Value::Null))?;
+    }
+    if let Some(object) = args.get("properties").and_then(Value::as_object) {
+        for (key, value) in object {
+            set(key, value)?;
+        }
+    }
+    if args.get("position").is_some() {
+        change.position = Some(dvec3(&args, "position")?);
+    }
+    if let Some(angle) = args.get("angle").or_else(|| args.get("yaw")) {
+        change.angle = Some(
+            angle
+                .as_f64()
+                .ok_or_else(|| invalid("`angle` is a number of degrees"))?,
+        );
+    }
+    if change.set.is_empty() && change.position.is_none() && change.angle.is_none() {
+        return Err(invalid(
+            "give `key` and `value`, `properties` {key: value}, `position` or `angle`",
+        ));
+    }
+    let result = world.resource_mut::<Editor>().edit_entity(item, change);
+    edit_reply(world, result)
+}
+
+fn playtest(In(_): In<Option<Value>>, world: &mut World) -> BrpResult {
+    let message = run(world, Command::Playtest)?;
+    Ok(json!({ "message": message }))
+}
 fn add_brush(In(args): In<Option<Value>>, world: &mut World) -> BrpResult {
     let args = params(args);
     let shape = args

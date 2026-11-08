@@ -23,6 +23,9 @@ fn main() -> AppExit {
     app.insert_resource(mode.clone());
     // Asset sources must exist before `AssetPlugin` is added.
     maps::register_private_source(&mut app);
+    if let Some(path) = cli.map_file() {
+        maps::register_map_file_source(&mut app, path);
+    }
     match mode {
         Mode::Dedicated { .. } => {
             app.add_plugins((
@@ -62,6 +65,12 @@ fn main() -> AppExit {
         idle: cli.map(),
         write_trenchbroom_config: cli.write_trenchbroom_config(),
     });
+    if let Some(path) = cli.map_file()
+        && let Err(err) = maps::add_map_file(&mut app, path)
+    {
+        error!("{err} (--map-file)");
+        return AppExit::error();
+    }
     let config = match cli.server_config() {
         Ok(config) => config,
         Err(err) => {

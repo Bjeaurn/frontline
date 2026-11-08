@@ -38,7 +38,11 @@ use crate::mapfile::{
 use crate::mapsron::{self, Entry};
 use crate::menu::{BlockPicking, InputCapture, MenuState};
 use crate::palette::{self, PropModel};
+use crate::playtest;
+use crate::prefab;
+use crate::selection::{self, Combine, Kind, Selection};
 use crate::session::Reload;
+use crate::transform::{self, MirrorAxis, Motion, TURN_STEP};
 
 const UNDO_LIMIT: usize = 200;
 const PREVIEW_PREFIX: &str = ".mapedit-";
@@ -119,6 +123,35 @@ impl Paths {
         }
     }
 
+    /// The folder prefabs are saved in: `prefabs/` of the game's assets, or of the private
+    /// content folder for a private Map (Homage content never goes in the public one).
+    pub fn prefab_folder(&self, private: bool) -> Result<PathBuf, String> {
+        if private {
+            Ok(self
+                .private
+                .as_ref()
+                .ok_or("the private content folder is missing")?
+                .join("prefabs"))
+        } else {
+            Ok(self.assets.join("prefabs"))
+        }
+    }
+
+    /// Every prefab, the public ones first.
+    pub fn prefab_list(&self) -> Vec<PrefabInfo> {
+        let mut all = Vec::new();
+        for private in [false, true] {
+            if let Ok(dir) = self.prefab_folder(private) {
+                all.extend(
+                    prefab::list(&dir)
+                        .into_iter()
+                        .map(|name| PrefabInfo { name, private }),
+                );
+            }
+        }
+        all
+    }
+
     fn target(&self, id: &str, private: bool) -> Result<Target, String> {
         if private {
             let dir = self
@@ -156,7 +189,40 @@ pub struct Notice {
 
 struct Snapshot {
     map: MapFile,
-    selection: Option<Item>,
+    selection: Selection,
+}
+
+/// Which face of a brush an edit means.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FaceRef {
+    /// By index into the brush's faces.
+    Index(usize),
+    /// The face that looks most nearly in this direction (game space); it slides along that
+    /// direction.
+    Towards(DVec3),
+}
+
+/// A change of an entity's key/values, facing and position, applied as one edit.
+#[derive(Clone, Debug, Default)]
+pub struct EntityChange {
+    /// `(key, value)` pairs; an empty value removes the key.
+    pub set: Vec<(String, String)>,
+    pub position: Option<DVec3>,
+    /// The facing in degrees.
+    pub angle: Option<f64>,
+}
+
+/// A prefab on disk.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrefabInfo {
+    pub name: String,
+    /// From the private content folder (never committed to the public repository).
+    pub private: bool,
+}
+
+/// Whether an entity class faces somewhere, so that turning it turns its `angle`.
+fn faces(class: &str) -> bool {
+    palette::class(class).is_some_and(|c| c.faces)
 }
 
 /// The editing session of the open Map.
@@ -193,7 +259,7 @@ pub struct Editor {
     last_write: f64,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
-    pub selection: Option<Item>,
+    pub selection: Selection,
     pub hover: Option<Item>,
     /// The surface new brushes get.
     pub surface: &'static Surface,
@@ -201,10 +267,15 @@ pub struct Editor {
     pub notice: Option<Notice>,
     pub props: Vec<PropModel>,
     pub prop_bounds: PropBounds,
+    /// What Ctrl+C copied: a fragment (see [`prefab`]).
+    pub clipboard: Option<MapFile>,
+    /// The prefabs on disk, for the palette (refreshed when one is saved).
+    pub prefab_list: Vec<PrefabInfo>,
 }
 
 impl Editor {
     pub fn new(paths: Paths, props: Vec<PropModel>) -> Self {
+        let prefab_list = paths.prefab_list();
         Editor {
             paths,
             look_names: Vec::new(),
@@ -226,12 +297,14 @@ impl Editor {
             last_write: f64::MIN,
             undo: Vec::new(),
             redo: Vec::new(),
-            selection: None,
+            selection: Selection::default(),
             hover: None,
             surface: &SURFACES[0],
             grid: GRIDS[0],
             notice: None,
             prop_bounds: palette::prop_bounds(&props),
+            clipboard: None,
+            prefab_list,
             props,
         }
     }
@@ -316,16 +389,32 @@ impl Editor {
         })
     }
 
-    /// `item`, or the selection, checked to exist.
-    pub fn resolve(&self, item: Option<Item>) -> Result<Item, String> {
+    /// The items an edit acts on: `item` when given, else the whole selection; each checked to
+    /// exist.
+    pub fn targets(&self, item: Option<Item>) -> Result<Vec<Item>, String> {
         self.require_map()?;
-        let item = item
-            .or(self.selection)
-            .ok_or("nothing is selected (click a brush or entity, or pass `item`)")?;
-        if self.map.as_ref().is_some_and(|map| map.contains(item)) {
-            Ok(item)
-        } else {
-            Err(format!("there is no {item}"))
+        let items: Vec<Item> = match item {
+            Some(item) => vec![item],
+            None => self.selection.items().to_vec(),
+        };
+        if items.is_empty() {
+            return Err("nothing is selected (click a brush or entity, or pass `item`)".into());
+        }
+        let map = self.map.as_ref().expect("checked");
+        match items.iter().find(|item| !map.contains(**item)) {
+            Some(missing) => Err(format!("there is no {missing}")),
+            None => Ok(items),
+        }
+    }
+
+    /// Exactly one item: `item`, or the selection when that is a single item.
+    pub fn resolve(&self, item: Option<Item>) -> Result<Item, String> {
+        match self.targets(item)?.as_slice() {
+            [one] => Ok(*one),
+            many => Err(format!(
+                "{} items are selected; this needs exactly one",
+                many.len()
+            )),
         }
     }
 
@@ -342,7 +431,7 @@ impl Editor {
             Ok(value) => {
                 self.undo.push(Snapshot {
                     map: before,
-                    selection: self.selection,
+                    selection: self.selection.clone(),
                 });
                 if self.undo.len() > UNDO_LIMIT {
                     self.undo.remove(0);
@@ -358,19 +447,82 @@ impl Editor {
         }
     }
 
+    /// Makes `item` (or nothing) the selection.
     pub fn select(&mut self, item: Option<Item>) -> Result<String, String> {
         self.require_map()?;
         match item {
             None => {
-                self.selection = None;
+                self.selection.clear();
                 Ok("Selection cleared".into())
             }
-            Some(item) => {
-                self.resolve(Some(item))?;
-                self.selection = Some(item);
-                Ok(format!("Selected {}", self.describe(item)))
-            }
+            Some(item) => self.select_items(&[item], Combine::Replace),
         }
+    }
+
+    /// Picks `items` into the selection (replacing it, adding to it, or toggling them).
+    pub fn select_items(&mut self, items: &[Item], how: Combine) -> Result<String, String> {
+        self.require_map()?;
+        let map = self.map.as_ref().expect("checked");
+        if let Some(missing) = items.iter().find(|item| !map.contains(**item)) {
+            return Err(format!("there is no {missing}"));
+        }
+        // A brush entity stands for its brushes.
+        let units = map.units(items).or_else(|err| {
+            if items.is_empty() {
+                Ok(Vec::new())
+            } else {
+                Err(err)
+            }
+        })?;
+        self.selection.combine(how, &units);
+        Ok(self.selection_text())
+    }
+
+    /// What the selection holds, in a line.
+    pub fn selection_text(&self) -> String {
+        match self.selection.items() {
+            [] => "Selection cleared".into(),
+            [one] => format!("Selected {}", self.describe(*one)),
+            many => format!("Selected {}", self.describe_many(many)),
+        }
+    }
+
+    /// The items of a kind (see [`Kind`]).
+    pub fn find_kind(&self, kind: &Kind) -> Result<Vec<Item>, String> {
+        self.require_map()?;
+        Ok(selection::of_kind(
+            self.map.as_ref().expect("checked"),
+            kind,
+        ))
+    }
+
+    /// The items whose bounding box `test` accepts.
+    pub fn find_where(&self, test: impl Fn(DVec3, DVec3) -> bool) -> Result<Vec<Item>, String> {
+        self.require_map()?;
+        let map = self.map.as_ref().expect("checked");
+        Ok(selection::where_bounds(map, &self.prop_bounds, test))
+    }
+
+    /// The items that lie wholly inside the box `min`..`max`; `flat` ignores height.
+    pub fn find_in_box(&self, min: DVec3, max: DVec3, flat: bool) -> Result<Vec<Item>, String> {
+        self.find_where(|lo, hi| selection::box_inside((lo, hi), (min, max), flat))
+    }
+
+    /// The box around the selection (game space).
+    pub fn selection_bounds(&self) -> Option<(DVec3, DVec3)> {
+        self.map
+            .as_ref()?
+            .bounds_of(self.selection.items(), &self.prop_bounds)
+    }
+
+    /// Makes freshly added items the selection.
+    fn select_added(&mut self, items: Vec<Item>) {
+        let units = self
+            .map
+            .as_ref()
+            .and_then(|map| map.units(&items).ok())
+            .unwrap_or(items);
+        self.selection = Selection::from(units);
     }
 
     /// One line about an item: its kind, size and place.
@@ -420,91 +572,194 @@ impl Editor {
         }
     }
 
+    /// One line about several items: how many of what, and the box around them.
+    pub fn describe_many(&self, items: &[Item]) -> String {
+        if let [one] = items {
+            return self.describe(*one);
+        }
+        let brushes = items
+            .iter()
+            .filter(|item| matches!(item, Item::Brush { .. }))
+            .count();
+        let round = |v: f64| (v * 100.0).round() / 100.0 + 0.0;
+        let size = self
+            .map
+            .as_ref()
+            .and_then(|map| map.bounds_of(items, &self.prop_bounds))
+            .map_or(String::new(), |(min, max)| {
+                let size = max - min;
+                format!(
+                    ", {} x {} x {} m at {}, {}, {}",
+                    round(size.x),
+                    round(size.y),
+                    round(size.z),
+                    round(min.x),
+                    round(min.y),
+                    round(min.z)
+                )
+            });
+        format!(
+            "{} items ({brushes} brushes, {} entities{size})",
+            items.len(),
+            items.len() - brushes
+        )
+    }
+
     pub fn move_item(&mut self, item: Option<Item>, delta: DVec3) -> Result<String, String> {
-        let item = self.resolve(item)?;
-        self.edit(|map| map.translate(item, delta))?;
+        let items = self.targets(item)?;
+        self.edit(|map| map.translate_many(&items, delta))?;
+        let what = match items.as_slice() {
+            [one] => one.to_string(),
+            many => format!("{} items", many.len()),
+        };
         Ok(format!(
-            "Moved {} by {}, {}, {} m",
-            item, delta.x, delta.y, delta.z
+            "Moved {what} by {}, {}, {} m",
+            delta.x, delta.y, delta.z
         ))
     }
 
-    /// Resizes a brush to the bounding box `min`..`max`.
+    /// Scales a brush so its bounding box becomes `min`..`max`.
     pub fn resize(&mut self, item: Option<Item>, min: DVec3, max: DVec3) -> Result<String, String> {
         let item = self.resolve(item)?;
         self.edit(|map| map.resize(item, min, max))?;
         Ok(format!("Resized {}", self.describe(item)))
     }
 
-    /// Moves the face of a brush on the `positive` side of `axis` (0 x, 1 y, 2 z) outward by
-    /// `amount` metres (inward when negative).
-    pub fn resize_face(
+    /// Moves one face of a brush (see [`Brush::move_face`]): every other face stays where it
+    /// is. `FaceRef::Towards` slides the face along that axis (a ramp's slope straight up),
+    /// `FaceRef::Index` along its own normal. `amount` is metres, outward when positive; with
+    /// `snap` an axis-aligned face ends up on the grid.
+    pub fn move_face(
         &mut self,
         item: Option<Item>,
-        axis: usize,
-        positive: bool,
+        face: FaceRef,
         amount: f64,
+        snap: bool,
     ) -> Result<String, String> {
         let item = self.resolve(item)?;
-        let (mut min, mut max) = self
+        let Item::Brush { entity, brush } = item else {
+            return Err("only brushes have faces to move".into());
+        };
+        let (index, direction, amount) = self.face_move(entity, brush, face, amount, snap)?;
+        self.edit(|map| map.entities[entity].brushes[brush].move_face(index, direction, amount))?;
+        Ok(format!("Moved face {index} of {}", self.describe(item)))
+    }
+
+    /// Resolves a face move: the face index, the direction it slides, the (snapped) amount.
+    pub fn face_move(
+        &self,
+        entity: usize,
+        brush: usize,
+        face: FaceRef,
+        amount: f64,
+        snap: bool,
+    ) -> Result<(usize, DVec3, f64), String> {
+        if !amount.is_finite() {
+            return Err("`amount` is a number of metres".into());
+        }
+        let b = self
             .map
             .as_ref()
-            .and_then(|map| map.bounds(item, &self.prop_bounds))
-            .ok_or("that item has no size")?;
-        if matches!(item, Item::Entity(_)) {
-            return Err("only brushes can be resized".into());
+            .and_then(|map| map.brush(entity, brush))
+            .ok_or("there is no such brush")?;
+        let (index, direction) = match face {
+            FaceRef::Index(index) => {
+                let normal = b
+                    .face_normal(index)
+                    .ok_or_else(|| format!("the brush has no face {index}"))?;
+                (index, normal)
+            }
+            FaceRef::Towards(direction) => {
+                let index = b
+                    .face_towards(direction)
+                    .ok_or("no face of the brush looks that way")?;
+                (index, direction.normalize_or_zero())
+            }
+        };
+        let mut amount = amount;
+        let normal = b.face_normal(index).unwrap_or(DVec3::ZERO);
+        let axis = (0..3).find(|a| normal[*a].abs() > 0.999 && direction[*a].abs() > 0.999);
+        if let (true, Some(axis)) = (snap, axis) {
+            let at = mapfile::tb_to_game(b.faces[index].points[0])[axis];
+            let sign = direction[axis].signum();
+            let target = ((at + amount * sign) / self.grid).round() * self.grid;
+            amount = (target - at) * sign;
         }
-        if positive {
-            max[axis] += amount;
-        } else {
-            min[axis] -= amount;
-        }
-        self.resize(Some(item), min, max)
+        Ok((index, direction, (amount * 1e5).round() / 1e5))
     }
 
     pub fn delete(&mut self, item: Option<Item>) -> Result<String, String> {
-        let item = self.resolve(item)?;
-        let what = self.describe(item);
-        self.edit(|map| map.delete(item))?;
-        self.selection = None;
+        let items = self.targets(item)?;
+        let what = match items.as_slice() {
+            [one] => self.describe(*one),
+            many => format!("{} items", many.len()),
+        };
+        self.edit(|map| map.delete_many(&items))?;
+        // Indices after the deleted ones moved.
+        self.selection.clear();
         Ok(format!("Deleted {what}"))
     }
 
     pub fn duplicate(&mut self, item: Option<Item>, offset: DVec3) -> Result<String, String> {
-        let item = self.resolve(item)?;
-        let copy = self.edit(|map| map.duplicate(item, offset))?;
-        self.selection = Some(copy);
-        Ok(format!("Duplicated into {}", self.describe(copy)))
+        let items = self.targets(item)?;
+        let copies = self.edit(|map| map.duplicate_many(&items, offset))?;
+        self.select_added(copies);
+        Ok(match self.selection.items() {
+            [one] => format!("Duplicated into {}", self.describe(*one)),
+            many => format!("Duplicated {} items", many.len()),
+        })
     }
 
-    /// Paints `item` with `surface` and makes it the surface of new brushes.
+    /// `count` copies of the items, each `offset` further than the one before; the copies
+    /// are selected.
+    pub fn array(
+        &mut self,
+        item: Option<Item>,
+        count: usize,
+        offset: DVec3,
+    ) -> Result<String, String> {
+        let items = self.targets(item)?;
+        let copies = self.edit(|map| map.linear_array(&items, count, offset))?;
+        self.select_added(copies);
+        Ok(format!(
+            "Made {count} copies of {} item(s), {} m apart",
+            items.len(),
+            (offset.length() * 1000.0).round() / 1000.0
+        ))
+    }
+
+    /// Paints the brushes among the items with `surface` and makes it the surface of new
+    /// brushes.
     pub fn set_surface(&mut self, item: Option<Item>, surface: &str) -> Result<String, String> {
         let surface = mapfile::surface(surface).ok_or_else(|| {
             let names: Vec<&str> = SURFACES.iter().map(|s| s.name).collect();
             format!("unknown surface \"{surface}\"; known: {}", names.join(", "))
         })?;
-        let item = self.resolve(item)?;
-        self.edit(|map| map.set_surface(item, surface))?;
+        let items = self.targets(item)?;
+        self.edit(|map| map.set_surface_many(&items, surface))?;
         self.surface = surface;
-        Ok(format!("Painted {} with {}", item, surface.name))
+        Ok(match items.as_slice() {
+            [one] => format!("Painted {} with {}", one, surface.name),
+            many => format!("Painted {} items with {}", many.len(), surface.name),
+        })
     }
 
-    /// The next (or previous) surface of the selected brush.
+    /// The next (or previous) surface of the first selected brush, for all of them.
     pub fn cycle_surface(&mut self, item: Option<Item>, step: i32) -> Result<String, String> {
-        let item = self.resolve(item)?;
-        let current = match item {
+        let items = self.targets(item)?;
+        let current = items.iter().find_map(|item| match item {
             Item::Brush { entity, brush } => self
                 .map
                 .as_ref()
-                .and_then(|m| m.brush(entity, brush))
+                .and_then(|m| m.brush(*entity, *brush))
                 .and_then(Brush::surface),
             Item::Entity(_) => None,
-        };
+        });
         let at = current
             .and_then(|s| SURFACES.iter().position(|x| x.name == s.name))
             .map_or(0, |i| i as i32);
         let next = (at + step).rem_euclid(SURFACES.len() as i32) as usize;
-        self.set_surface(Some(item), SURFACES[next].name)
+        self.set_surface(item, SURFACES[next].name)
     }
 
     /// Adds a box (`min`..`max`, metres) to the worldspawn and selects it.
@@ -516,7 +771,7 @@ impl Editor {
             ));
         }
         let item = self.edit(|map| Ok(map.add_brush(Brush::cuboid(min, max, surface))))?;
-        self.selection = Some(item);
+        self.selection = Selection::from(Some(item));
         Ok(format!("Added {}", self.describe(item)))
     }
 
@@ -535,7 +790,7 @@ impl Editor {
             ));
         }
         let item = self.edit(|map| Ok(map.add_brush(Brush::wedge(low, high, rise, surface))))?;
-        self.selection = Some(item);
+        self.selection = Selection::from(Some(item));
         Ok(format!("Added {}", self.describe(item)))
     }
 
@@ -555,58 +810,301 @@ impl Editor {
             )
         })?;
         let entity: MapEntity = info.instantiate(position, angle, props)?;
+        if let Some(model) = entity.get("model") {
+            self.check_model(model)?;
+        }
         let item = self.edit(|map| Ok(map.add_entity(entity)))?;
-        self.selection = Some(item);
+        self.selection = Selection::from(Some(item));
         Ok(format!("Added {}", self.describe(item)))
     }
 
-    /// Sets a property of a point entity (`angle`, `team`, `model`, ...).
+    /// A prop's model must be one the Map can load: a known model, or one of the private
+    /// content folder.
+    fn check_model(&self, model: &str) -> Result<(), String> {
+        if self.props.is_empty()
+            || model.starts_with("private://")
+            || self.props.iter().any(|p| p.model == model)
+        {
+            return Ok(());
+        }
+        Err(format!(
+            "unknown model \"{model}\"; the Props tab of the palette lists the models (models/<pack>/<name>.glb)"
+        ))
+    }
+
+    /// Whether `value` is acceptable for `key` of an entity of `class`; an empty value removes
+    /// the key (then it must be removable).
+    pub fn check_property(&self, class: &str, key: &str, value: &str) -> Result<(), String> {
+        let Some(info) = palette::class(class) else {
+            // A class the palette does not know (a hand-made Map's): only the basics.
+            return if matches!(key, "classname" | "origin") {
+                Err(format!("`{key}` cannot be set here"))
+            } else {
+                Ok(())
+            };
+        };
+        if value.is_empty() {
+            return info.check_removal(key);
+        }
+        info.check(key, value)?;
+        if key == "model" {
+            self.check_model(value)?;
+        }
+        Ok(())
+    }
+
+    /// Changes entities (the selection, or `item`): key/values, facing, position; all checked
+    /// first against what the entity's class accepts, then applied as one undo step.
+    pub fn edit_entity(
+        &mut self,
+        item: Option<Item>,
+        change: EntityChange,
+    ) -> Result<String, String> {
+        let items = self.targets(item)?;
+        if items.contains(&Item::Entity(0)) {
+            return Err("the worldspawn's name and look are Map settings".into());
+        }
+        let map = self.map.as_ref().expect("checked");
+        let units = map.units(&items)?;
+        let mut indices = Vec::new();
+        for unit in &units {
+            match unit {
+                Item::Entity(index) => indices.push(*index),
+                Item::Brush { .. } => {
+                    return Err("only entities have properties; use set_texture for a brush".into());
+                }
+            }
+        }
+        if change.position.is_some() && indices.len() != 1 {
+            return Err("a position can be set on one entity at a time".into());
+        }
+        let mut set = change.set.clone();
+        if let Some(angle) = change.angle {
+            if !angle.is_finite() {
+                return Err("`angle` is a number of degrees".into());
+            }
+            set.push((
+                "angle".to_owned(),
+                mapfile::format_number(transform::normal_angle(angle)),
+            ));
+        }
+        if let Some(position) = change.position
+            && !position.is_finite()
+        {
+            return Err("`position` is [x, y, z] in metres".into());
+        }
+        for &index in &indices {
+            let class = map.entities[index].classname().to_owned();
+            for (key, value) in &set {
+                self.check_property(&class, key, value)?;
+            }
+        }
+        self.edit(|map| {
+            for &index in &indices {
+                let entity = &mut map.entities[index];
+                for (key, value) in &set {
+                    if value.is_empty() {
+                        entity.remove(key);
+                    } else {
+                        entity.set(key, value);
+                    }
+                }
+                if let Some(position) = change.position {
+                    entity.set_origin(position);
+                }
+            }
+            Ok(())
+        })?;
+        Ok(match (indices.as_slice(), set.as_slice()) {
+            ([one], [(key, _)]) if change.position.is_none() => {
+                format!("Set {key} of {}", self.describe(Item::Entity(*one)))
+            }
+            ([one], _) => format!("Changed {}", self.describe(Item::Entity(*one))),
+            (many, _) => format!("Changed {} entities", many.len()),
+        })
+    }
+
+    /// Sets a property of entities (`angle`, `team`, `model`, ...); an empty value removes it.
     pub fn set_property(
         &mut self,
         item: Option<Item>,
         key: &str,
         value: &str,
     ) -> Result<String, String> {
-        let item = self.resolve(item)?;
-        let Item::Entity(index) = item else {
-            return Err("only entities have properties; use set_texture for a brush".into());
-        };
-        if index == 0 {
-            return Err("the worldspawn's name and look are Map settings".into());
-        }
-        let class = self
-            .map
-            .as_ref()
-            .and_then(|m| m.entities.get(index))
-            .map(|e| e.classname().to_owned())
-            .unwrap_or_default();
-        if let Some(info) = palette::class(&class) {
-            info.check(key, value)?;
-        }
-        self.edit(|map| {
-            let entity = &mut map.entities[index];
-            if value.is_empty() {
-                entity.remove(key);
-            } else {
-                entity.set(key, value);
-            }
-            Ok(())
-        })?;
-        Ok(format!("Set {key} of {}", self.describe(item)))
+        self.edit_entity(
+            item,
+            EntityChange {
+                set: vec![(key.to_owned(), value.to_owned())],
+                ..EntityChange::default()
+            },
+        )
     }
 
-    /// Turns an entity by `degrees`.
-    pub fn rotate(&mut self, item: Option<Item>, degrees: f64) -> Result<String, String> {
-        let item = self.resolve(item)?;
-        let Item::Entity(index) = item else {
-            return Err("only entities turn".into());
+    /// Turns the items counter-clockwise (seen from above) by `degrees` about the vertical axis
+    /// through `pivot` (x and z), by default the middle of their bounding box. Brushes keep
+    /// their textures on their faces; entities that face somewhere turn their `angle`.
+    pub fn turn(
+        &mut self,
+        item: Option<Item>,
+        degrees: f64,
+        pivot: Option<DVec3>,
+    ) -> Result<String, String> {
+        if !degrees.is_finite() {
+            return Err("`degrees` is a number".into());
+        }
+        let items = self.targets(item)?;
+        let pivot = match pivot {
+            Some(pivot) => pivot,
+            None => {
+                let (min, max) = self
+                    .map
+                    .as_ref()
+                    .and_then(|map| map.bounds_of(&items, &self.prop_bounds))
+                    .ok_or("the items have no size")?;
+                (min + max) / 2.0
+            }
         };
-        let angle = self.map.as_ref().map_or(0.0, |m| m.entities[index].angle());
-        self.set_property(
-            Some(item),
-            "angle",
-            &format!("{}", (angle + degrees).rem_euclid(360.0)),
-        )
+        let transform = Motion::Turn { degrees, pivot };
+        self.edit(|map| map.transform_many(&items, &transform, &faces))?;
+        Ok(format!(
+            "Turned {} item(s) {} degrees about {:.2}, {:.2}",
+            items.len(),
+            (degrees * 1e4).round() / 1e4,
+            pivot.x,
+            pivot.z
+        ))
+    }
+
+    /// Mirrors the items in the plane perpendicular to `axis` at coordinate `at` (default: the
+    /// middle of their bounding box). With `copy` the mirror images are added and selected, and
+    /// the originals stay.
+    pub fn mirror(
+        &mut self,
+        item: Option<Item>,
+        axis: MirrorAxis,
+        at: Option<f64>,
+        copy: bool,
+    ) -> Result<String, String> {
+        let items = self.targets(item)?;
+        let at = match at {
+            Some(at) if at.is_finite() => at,
+            Some(_) => return Err("`at` is a coordinate in metres".into()),
+            None => {
+                let (min, max) = self
+                    .map
+                    .as_ref()
+                    .and_then(|map| map.bounds_of(&items, &self.prop_bounds))
+                    .ok_or("the items have no size")?;
+                (min[axis.index()] + max[axis.index()]) / 2.0
+            }
+        };
+        let transform = Motion::Mirror { axis, at };
+        if copy {
+            let copies = self.edit(|map| {
+                let copies = map.duplicate_many(&items, DVec3::ZERO)?;
+                map.transform_many(&copies, &transform, &faces)?;
+                Ok(copies)
+            })?;
+            self.select_added(copies);
+        } else {
+            self.edit(|map| map.transform_many(&items, &transform, &faces))?;
+        }
+        Ok(format!(
+            "Mirrored {} item(s) about {} = {:.2}{}",
+            items.len(),
+            axis.key(),
+            at,
+            if copy { " (copies)" } else { "" }
+        ))
+    }
+
+    /// Copies the items to the clipboard.
+    pub fn copy(&mut self, item: Option<Item>) -> Result<String, String> {
+        let items = self.targets(item)?;
+        let fragment = self.map.as_ref().expect("checked").extract(&items)?;
+        let count = fragment.items().len();
+        self.clipboard = Some(fragment);
+        Ok(format!("Copied {count} item(s)"))
+    }
+
+    /// Pastes the clipboard moved by `offset`; the pasted items are selected.
+    pub fn paste(&mut self, offset: DVec3) -> Result<String, String> {
+        let fragment = self
+            .clipboard
+            .clone()
+            .ok_or("the clipboard is empty (copy first)")?;
+        let added = self.edit(|map| Ok(map.insert_fragment(&fragment, offset)))?;
+        self.select_added(added);
+        Ok(format!("Pasted {} item(s)", self.selection.len()))
+    }
+
+    /// Where the clipboard's anchor (see [`prefab::anchor`]) is now, for pasting it elsewhere.
+    pub fn clipboard_anchor(&self) -> Option<DVec3> {
+        let bounds = self.clipboard.as_ref()?.content_bounds(&self.prop_bounds)?;
+        Some(prefab::anchor(bounds))
+    }
+
+    /// Pastes the clipboard so that its anchor lands on `point`, in whole grid steps across
+    /// the ground.
+    pub fn paste_at(&mut self, point: DVec3) -> Result<String, String> {
+        let anchor = self
+            .clipboard_anchor()
+            .ok_or("the clipboard is empty (copy first)")?;
+        self.paste(prefab::paste_offset(anchor, point, self.grid))
+    }
+
+    /// Saves the items as prefab `name` (see [`Paths::prefab_folder`]).
+    pub fn save_prefab(
+        &mut self,
+        item: Option<Item>,
+        name: &str,
+        overwrite: bool,
+    ) -> Result<String, String> {
+        let items = self.targets(item)?;
+        let fragment = self.map.as_ref().expect("checked").extract(&items)?;
+        let dir = self.paths.prefab_folder(self.private)?;
+        let path = prefab::save(&dir, name, &fragment, &self.prop_bounds, overwrite)?;
+        self.prefab_list = self.paths.prefab_list();
+        Ok(format!("Saved prefab {name} to {}", path.display()))
+    }
+
+    /// The prefabs there are, public ones then private ones.
+    pub fn prefabs(&self) -> Vec<PrefabInfo> {
+        self.paths.prefab_list()
+    }
+
+    /// Places prefab `name` with its anchor at `point`, turned by `degrees` about it; the
+    /// placed items are selected.
+    pub fn place_prefab(
+        &mut self,
+        name: &str,
+        point: DVec3,
+        degrees: f64,
+    ) -> Result<String, String> {
+        self.require_map()?;
+        let info = self
+            .prefabs()
+            .into_iter()
+            .find(|p| p.name == name)
+            .ok_or_else(|| {
+                let names: Vec<String> = self.prefabs().into_iter().map(|p| p.name).collect();
+                format!("no prefab \"{name}\"; known: {}", names.join(", "))
+            })?;
+        let mut fragment = prefab::load(&self.paths.prefab_folder(info.private)?, name)?;
+        if degrees != 0.0 {
+            let items = fragment.items();
+            let turn = Motion::Turn {
+                degrees,
+                pivot: DVec3::ZERO,
+            };
+            fragment.transform_many(&items, &turn, &faces)?;
+        }
+        let added = self.edit(|map| Ok(map.insert_fragment(&fragment, point)))?;
+        self.select_added(added);
+        Ok(format!(
+            "Placed prefab {name} ({} item(s))",
+            self.selection.len()
+        ))
     }
 
     pub fn undo(&mut self) -> Result<String, String> {
@@ -615,7 +1113,7 @@ impl Editor {
         let current = self.map.take().expect("checked");
         self.redo.push(Snapshot {
             map: current,
-            selection: self.selection,
+            selection: self.selection.clone(),
         });
         self.map = Some(snapshot.map);
         self.restore_selection(snapshot.selection);
@@ -629,7 +1127,7 @@ impl Editor {
         let current = self.map.take().expect("checked");
         self.undo.push(Snapshot {
             map: current,
-            selection: self.selection,
+            selection: self.selection.clone(),
         });
         self.map = Some(snapshot.map);
         self.restore_selection(snapshot.selection);
@@ -637,9 +1135,11 @@ impl Editor {
         Ok("Redone".into())
     }
 
-    fn restore_selection(&mut self, selection: Option<Item>) {
-        self.selection =
-            selection.filter(|item| self.map.as_ref().is_some_and(|map| map.contains(*item)));
+    fn restore_selection(&mut self, selection: Selection) {
+        self.selection = selection;
+        if let Some(map) = &self.map {
+            self.selection.retain(|item| map.contains(item));
+        }
     }
 
     /// Item under a ray (game space).
@@ -733,7 +1233,7 @@ impl Editor {
         self.dirty = false;
         self.undo.clear();
         self.redo.clear();
-        self.selection = None;
+        self.selection.clear();
         self.hover = None;
     }
 
@@ -933,6 +1433,8 @@ pub enum Command {
         discard: bool,
     },
     Settings(SettingsChange),
+    /// Starts the game on the Map as edited (see [`crate::playtest`]).
+    Playtest,
     Quit {
         discard: bool,
     },
@@ -1019,6 +1521,7 @@ pub fn execute(world: &mut World, command: Command) -> Result<String, Failure> {
         Command::SaveAs { id, name } => save_as(world, &id, &name),
         Command::NewMap { id, name, discard } => new_map(world, &id, &name, discard),
         Command::Settings(change) => settings(world, change),
+        Command::Playtest => playtest(world),
         Command::Quit { discard } => {
             if world.resource::<Editor>().dirty() && !discard {
                 return Err(Failure::Dirty);
@@ -1031,6 +1534,31 @@ pub fn execute(world: &mut World, command: Command) -> Result<String, Failure> {
     }
 }
 
+/// Writes the working copy where the game can read it and starts the game on it.
+fn playtest(world: &mut World) -> Result<String, Failure> {
+    let editor = world.resource::<Editor>();
+    editor.require_map()?;
+    let map = editor.map.as_ref().expect("checked");
+    let source = editor.source.as_ref().ok_or("the Map has no file")?;
+    let stem = source
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .ok_or("the Map has no file name")?;
+    let file = source.with_file_name(format!("{PREVIEW_PREFIX}play-{stem}.map"));
+    std::fs::write(&file, map.to_text())
+        .map_err(|err| format!("cannot write {}: {err}", file.display()))?;
+    let own = std::env::current_exe().map_err(|err| format!("cannot find MapEdit: {err}"))?;
+    let game = playtest::game_executable(std::env::var_os(playtest::GAME_ENV), &own)?;
+    let assets = editor.paths.assets.clone();
+    let root = assets.parent().unwrap_or(&assets);
+    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let pid = playtest::launch(&game, &file, &root)?;
+    Ok(format!(
+        "Playtest started (process {pid}): {} on {}",
+        game.display(),
+        file.display()
+    ))
+}
 fn open(world: &mut World, id: MapId, discard: bool) -> Result<String, Failure> {
     {
         let registry = world.resource::<MapRegistry>();
@@ -1474,9 +2002,10 @@ impl Plugin for EditPlugin {
         let paths = Paths::live(self.assets.clone());
         paths.remove_stale_previews();
         app.insert_resource(Editor::new(paths, palette::load_props(&self.assets)))
+            .init_resource::<Interaction>()
             .add_message::<Command>()
             .add_message::<PlaceRequest>()
-            .add_systems(Startup, open_initial)
+            .add_systems(Startup, (open_initial, spawn_box_rect))
             .add_systems(
                 Update,
                 (
@@ -1487,6 +2016,7 @@ impl Plugin for EditPlugin {
                     sync_view,
                     age_notice,
                     draw_selection,
+                    show_box_rect,
                 )
                     .chain(),
             );
@@ -1596,6 +2126,8 @@ pub enum Place {
         props: Vec<(String, String)>,
     },
     Prop(String),
+    /// A prefab by name.
+    Prefab(String),
 }
 
 #[derive(Message, Clone, Debug)]
@@ -1603,6 +2135,71 @@ pub struct PlaceRequest {
     pub place: Place,
     /// Place at the cursor ray rather than the middle of the screen.
     pub at_cursor: bool,
+}
+
+/// Pixels the cursor travels with the button down before a click is a drag.
+const DRAG_PIXELS: f32 = 5.0;
+/// A camera pitch (radians) below this is a top view.
+const TOP_PITCH: f32 = -1.1;
+
+/// What the left mouse button is doing.
+#[derive(Clone, Debug)]
+enum Drag {
+    /// Went down: a click selects on release; it turns into a box when it travels and `box_ok`.
+    Press {
+        start: Vec2,
+        hit: Option<Item>,
+        box_ok: bool,
+    },
+    /// A rubber band, in window pixels.
+    Box { start: Vec2, now: Vec2 },
+    /// A face of the selected brush follows the cursor along its normal; `amount` is the
+    /// snapped distance moved so far, in metres.
+    Face {
+        entity: usize,
+        brush: usize,
+        face: usize,
+        centre: DVec3,
+        normal: DVec3,
+        grab: f64,
+        amount: f64,
+    },
+}
+
+/// The state of the mouse editing: a drag in progress, and the line about it for the HUD.
+#[derive(Resource, Default)]
+pub struct Interaction {
+    drag: Option<Drag>,
+    pub readout: Option<String>,
+}
+
+impl Interaction {
+    /// The rubber band of a box selection (corners in window pixels).
+    pub fn box_rect(&self) -> Option<(Vec2, Vec2)> {
+        match self.drag {
+            Some(Drag::Box { start, now }) => Some((start.min(now), start.max(now))),
+            _ => None,
+        }
+    }
+
+    /// The face being dragged: brush, face index and metres moved.
+    fn face_drag(&self) -> Option<(usize, usize, usize, f64)> {
+        match self.drag {
+            Some(Drag::Face {
+                entity,
+                brush,
+                face,
+                amount,
+                ..
+            }) => Some((entity, brush, face, amount)),
+            _ => None,
+        }
+    }
+
+    fn cancel(&mut self) {
+        self.drag = None;
+        self.readout = None;
+    }
 }
 
 /// The cursor's ray into the world (game space), and whether the cursor is over a panel.
@@ -1641,14 +2238,61 @@ fn cardinal(v: Vec3) -> DVec3 {
     }
 }
 
+/// How far along the line through `point` in the direction of the unit vector `axis` the
+/// pointer ray (`origin`, `direction`) passes closest to it, measured from `point`: what a
+/// drag along an axis follows. `None` when the ray runs parallel to the axis.
+fn along_axis(point: DVec3, axis: DVec3, origin: DVec3, direction: DVec3) -> Option<f64> {
+    let w = point - origin;
+    let (b, c) = (axis.dot(direction), direction.dot(direction));
+    let (d, e) = (axis.dot(w), direction.dot(w));
+    let denominator = c - b * b;
+    (denominator.abs() > 1e-9).then(|| (b * e - c * d) / denominator)
+}
+
+/// A click: selects what was hit (a modifier key toggles it in and out of the selection
+/// instead), or clears the selection on empty space.
+fn click(editor: &mut Editor, hit: Option<Item>, toggle: bool) {
+    let how = if toggle {
+        Combine::Toggle
+    } else {
+        Combine::Replace
+    };
+    let items: Vec<Item> = hit.into_iter().collect();
+    match editor.select_items(&items, how) {
+        Ok(text) => {
+            if !editor.selection.is_empty() {
+                editor.say(text);
+            }
+        }
+        Err(text) => editor.complain(text),
+    }
+}
+
+/// Selects what a rubber band of the window rectangle `low`..`high` wholly encloses.
+fn select_in_rect(
+    editor: &mut Editor,
+    camera: &Camera,
+    transform: &GlobalTransform,
+    (low, high): (Vec2, Vec2),
+    how: Combine,
+) {
+    let project = |p: DVec3| camera.world_to_viewport(transform, p.as_vec3()).ok();
+    let result = editor
+        .find_where(|min, max| selection::corners_inside(min, max, project, low, high))
+        .and_then(|items| editor.select_items(&items, how));
+    editor.report(&result);
+}
+
+#[allow(clippy::too_many_arguments)]
 fn edit_input(
     mut keyboard: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
     capture: Res<InputCapture>,
     mut editor: ResMut<Editor>,
+    mut interaction: ResMut<Interaction>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    cameras: Query<(&Camera, &GlobalTransform), With<FlyCamera>>,
+    cameras: Query<(&Camera, &GlobalTransform, &FlyCamera)>,
     blockers: Query<(&ComputedNode, &UiGlobalTransform), With<BlockPicking>>,
     mut commands: MessageWriter<Command>,
     mut places: MessageWriter<PlaceRequest>,
@@ -1656,35 +2300,170 @@ fn edit_input(
     let events: Vec<KeyboardInput> = keyboard.read().cloned().collect();
     editor.hover = None;
     if capture.blocked() || editor.map.is_none() {
+        interaction.cancel();
         return;
     }
-    let (Ok(window), Ok((camera, camera_transform))) = (windows.single(), cameras.single()) else {
+    if keys.just_pressed(KeyCode::Escape) {
+        interaction.cancel();
+    }
+    let (Ok(window), Ok((camera, camera_transform, fly))) = (windows.single(), cameras.single())
+    else {
         return;
     };
     let looking = buttons.pressed(MouseButton::Right);
-
-    // The cursor: hover, and a click selects.
-    if !looking
-        && let Some((origin, direction, over_ui)) =
-            cursor_ray(window, camera, camera_transform, &blockers)
-        && !over_ui
-    {
-        let hit = editor.pick(origin, direction).map(|hit| hit.item);
-        editor.hover = hit;
-        if buttons.just_pressed(MouseButton::Left) {
-            editor.selection = hit;
-            if let Some(item) = hit {
-                let text = format!("Selected {}", editor.describe(item));
-                editor.say(text);
-            }
-        }
-    }
 
     let held = |a: KeyCode, b: KeyCode| keys.pressed(a) || keys.pressed(b);
     let shift = held(KeyCode::ShiftLeft, KeyCode::ShiftRight);
     let alt = held(KeyCode::AltLeft, KeyCode::AltRight);
     let command = held(KeyCode::ControlLeft, KeyCode::ControlRight)
         || held(KeyCode::SuperLeft, KeyCode::SuperRight);
+
+    // The mouse: hover; a press starts a click, a box or a face drag; a release finishes it.
+    let ray = cursor_ray(window, camera, camera_transform, &blockers);
+    let free_ray =
+        ray.and_then(|(origin, direction, over_ui)| (!over_ui).then_some((origin, direction)));
+    let cursor = window.cursor_position();
+    if looking {
+        interaction.cancel();
+    } else {
+        if interaction.drag.is_none() {
+            editor.hover = free_ray
+                .and_then(|(origin, direction)| editor.pick(origin, direction))
+                .map(|hit| hit.item);
+        }
+        if buttons.just_pressed(MouseButton::Left)
+            && let (Some((origin, direction)), Some(cursor)) = (free_ray, cursor)
+        {
+            let hit = editor.pick(origin, direction).map(|hit| hit.item);
+            // Alt on a face of the one selected brush grabs the face.
+            let face = alt
+                .then(|| editor.selection.single())
+                .flatten()
+                .and_then(|item| match item {
+                    Item::Brush { entity, brush } => Some((entity, brush)),
+                    Item::Entity(_) => None,
+                })
+                .and_then(|(entity, brush)| {
+                    let b = editor.map.as_ref()?.brush(entity, brush)?;
+                    let (_, _, face) = b.ray_face(origin, direction)?;
+                    let (centre, normal) = (b.face_centre(face)?, b.face_normal(face)?);
+                    let grab = along_axis(centre, normal, origin, direction)?;
+                    Some(Drag::Face {
+                        entity,
+                        brush,
+                        face,
+                        centre,
+                        normal,
+                        grab,
+                        amount: 0.0,
+                    })
+                });
+            interaction.readout = None;
+            interaction.drag = Some(face.unwrap_or(Drag::Press {
+                start: cursor,
+                hit,
+                box_ok: alt || (hit.is_none() && fly.pitch < TOP_PITCH),
+            }));
+        }
+    }
+    if let Some(drag) = interaction.drag.clone() {
+        let down = buttons.pressed(MouseButton::Left) || buttons.just_released(MouseButton::Left);
+        if !down || !window.focused {
+            interaction.cancel();
+        } else {
+            match drag {
+                Drag::Press {
+                    start,
+                    box_ok: true,
+                    ..
+                } => {
+                    if let Some(now) = cursor
+                        && now.distance(start) > DRAG_PIXELS
+                    {
+                        interaction.drag = Some(Drag::Box { start, now });
+                    }
+                }
+                Drag::Press { .. } => {}
+                Drag::Box { start, .. } => {
+                    if let Some(now) = cursor {
+                        interaction.drag = Some(Drag::Box { start, now });
+                    }
+                }
+                Drag::Face {
+                    entity,
+                    brush,
+                    face,
+                    centre,
+                    normal,
+                    grab,
+                    ..
+                } => {
+                    if let Some((origin, direction, _)) = ray
+                        && let Some(at) = along_axis(centre, normal, origin, direction)
+                    {
+                        match editor.face_move(entity, brush, FaceRef::Index(face), at - grab, true)
+                        {
+                            Ok((_, _, amount)) => {
+                                interaction.readout = Some(format!(
+                                    "face {face}: {amount:+} m (grid {} m)",
+                                    editor.grid
+                                ));
+                                interaction.drag = Some(Drag::Face {
+                                    entity,
+                                    brush,
+                                    face,
+                                    centre,
+                                    normal,
+                                    grab,
+                                    amount,
+                                });
+                            }
+                            Err(text) => editor.complain(text),
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if buttons.just_released(MouseButton::Left)
+        && let Some(drag) = interaction.drag.take()
+    {
+        interaction.readout = None;
+        match drag {
+            Drag::Press { hit, .. } => click(&mut editor, hit, shift || command),
+            Drag::Box { start, now } => {
+                let how = if shift || command {
+                    Combine::Add
+                } else {
+                    Combine::Replace
+                };
+                select_in_rect(
+                    &mut editor,
+                    camera,
+                    camera_transform,
+                    (start.min(now), start.max(now)),
+                    how,
+                );
+            }
+            Drag::Face {
+                entity,
+                brush,
+                face,
+                amount,
+                ..
+            } => {
+                if amount.abs() > 1e-9 {
+                    let result = editor.move_face(
+                        Some(Item::Brush { entity, brush }),
+                        FaceRef::Index(face),
+                        amount,
+                        true,
+                    );
+                    editor.report(&result);
+                }
+            }
+        }
+    }
 
     // Camera-relative axes, snapped to the world's.
     let forward = cardinal(Vec3::from(camera_transform.forward()));
@@ -1705,14 +2484,14 @@ fn edit_input(
             _ => None,
         };
         let result = if let Some(direction) = direction {
-            if editor.selection.is_none() {
+            if editor.selection.is_empty() {
                 continue;
             }
             if alt {
-                // Alt grows the side the arrow points to; Alt+Shift shrinks it.
-                let axis = (0..3).find(|a| direction[*a] != 0.0).unwrap_or(0);
+                // Alt moves the face the arrow points to out by a grid step (Alt+Shift: in),
+                // keeping every other face where it is.
                 let amount = if shift { -editor.grid } else { editor.grid };
-                editor.resize_face(None, axis, direction[axis] > 0.0, amount)
+                editor.move_face(None, FaceRef::Towards(direction), amount, true)
             } else {
                 editor.move_item(None, direction * step)
             }
@@ -1722,11 +2501,44 @@ fn edit_input(
                 KeyCode::KeyZ => editor.undo(),
                 KeyCode::KeyY => editor.redo(),
                 KeyCode::KeyD => {
-                    if editor.selection.is_none() {
+                    if editor.selection.is_empty() {
                         continue;
                     }
-                    let offset = right * (editor.grid * 4.0);
-                    editor.duplicate(None, offset)
+                    if shift {
+                        // Three copies side by side, each next to the one before.
+                        let axis = if right.x != 0.0 { 0 } else { 2 };
+                        let width = editor
+                            .selection_bounds()
+                            .map_or(1.0, |(min, max)| (max - min)[axis]);
+                        let width = if width < 0.05 { 1.0 } else { width };
+                        editor.array(None, 3, right * width)
+                    } else {
+                        let offset = right * (editor.grid * 4.0);
+                        editor.duplicate(None, offset)
+                    }
+                }
+                KeyCode::KeyC => {
+                    if editor.selection.is_empty() {
+                        continue;
+                    }
+                    editor.copy(None)
+                }
+                KeyCode::KeyV => match free_ray {
+                    Some((origin, direction)) => {
+                        let (point, _) = editor.target(origin, direction);
+                        editor.paste_at(point)
+                    }
+                    None => editor.paste(right),
+                },
+                KeyCode::KeyA => {
+                    // All of it; with Shift, all of the kind of what was picked last.
+                    let kind = match editor.selection.primary() {
+                        Some(item) if shift => Kind::Like(item),
+                        _ => Kind::Everything,
+                    };
+                    editor
+                        .find_kind(&kind)
+                        .and_then(|items| editor.select_items(&items, Combine::Replace))
                 }
                 KeyCode::KeyS => {
                     commands.write(Command::Save);
@@ -1737,13 +2549,13 @@ fn edit_input(
         } else {
             match event.key_code {
                 KeyCode::Delete | KeyCode::Backspace => {
-                    if editor.selection.is_none() {
+                    if editor.selection.is_empty() {
                         continue;
                     }
                     editor.delete(None)
                 }
                 KeyCode::Tab => {
-                    if editor.selection.is_none() {
+                    if editor.selection.is_empty() {
                         continue;
                     }
                     editor.cycle_surface(None, if shift { -1 } else { 1 })
@@ -1756,22 +2568,35 @@ fn edit_input(
                     continue;
                 }
                 KeyCode::KeyJ | KeyCode::KeyK => {
-                    if editor.selection.is_none() {
+                    if editor.selection.is_empty() {
                         continue;
                     }
-                    editor.rotate(
+                    let degrees = if shift { 90.0 } else { TURN_STEP };
+                    editor.turn(
                         None,
                         if event.key_code == KeyCode::KeyK {
-                            45.0
+                            degrees
                         } else {
-                            -45.0
+                            -degrees
                         },
+                        None,
                     )
+                }
+                KeyCode::KeyM => {
+                    if editor.selection.is_empty() {
+                        continue;
+                    }
+                    let axis = if shift { MirrorAxis::Z } else { MirrorAxis::X };
+                    editor.mirror(None, axis, None, false)
                 }
                 KeyCode::KeyG => {
                     let at = GRIDS.iter().position(|g| *g == editor.grid).unwrap_or(0);
                     editor.grid = GRIDS[(at + 1) % GRIDS.len()];
                     Ok(format!("Grid {} m", editor.grid))
+                }
+                KeyCode::F5 => {
+                    commands.write(Command::Playtest);
+                    continue;
                 }
                 _ => continue,
             }
@@ -1830,46 +2655,163 @@ fn place(
                 let position = editor.entity_position("prop", point, normal);
                 editor.add_entity("prop", position, None, &[("model".to_owned(), model)])
             }
+            Place::Prefab(name) => {
+                let position = editor.entity_position("prefab", point, normal);
+                editor.place_prefab(&name, position, 0.0)
+            }
         };
         editor.report(&result);
     }
 }
 
-fn draw_selection(mut gizmos: Gizmos, editor: Res<Editor>) {
+// ------------------------------------------------------------------------------- drawing
+
+const SELECTED: Color = Color::srgb(1.0, 0.85, 0.1);
+const HANDLE: Color = Color::srgb(1.0, 0.55, 0.1);
+const PREVIEW: Color = Color::srgb(0.3, 0.95, 0.9);
+
+/// The outline of a brush, as lines along its faces.
+fn outline_brush(gizmos: &mut Gizmos, brush: &Brush, color: Color) {
+    for polygon in brush.polygons() {
+        if polygon.len() < 2 {
+            continue;
+        }
+        let mut points: Vec<Vec3> = polygon.iter().map(|p| tb_to_game(*p).as_vec3()).collect();
+        points.push(points[0]);
+        gizmos.linestrip(points, color);
+    }
+}
+
+fn outline_box(gizmos: &mut Gizmos, min: Vec3, max: Vec3, color: Color) {
+    gizmos.cube(
+        Transform::from_translation((min + max) / 2.0).with_scale(max - min),
+        color,
+    );
+}
+
+fn draw_selection(mut gizmos: Gizmos, editor: Res<Editor>, interaction: Res<Interaction>) {
     let Some(map) = &editor.map else {
         return;
     };
-    let mut outline = |item: Item, color: Color| match item {
+    let outline = |gizmos: &mut Gizmos, item: Item, color: Color| match item {
         Item::Brush { entity, brush } => {
             if let Some(brush) = map.brush(entity, brush) {
-                for polygon in brush.polygons() {
-                    if polygon.len() < 2 {
-                        continue;
-                    }
-                    let mut points: Vec<Vec3> =
-                        polygon.iter().map(|p| tb_to_game(*p).as_vec3()).collect();
-                    points.push(points[0]);
-                    gizmos.linestrip(points, color);
-                }
+                outline_brush(gizmos, brush, color);
             }
         }
         Item::Entity(_) => {
             if let Some((min, max)) = map.bounds(item, &editor.prop_bounds) {
-                let (min, max) = (min.as_vec3(), max.as_vec3());
-                gizmos.cube(
-                    Transform::from_translation((min + max) / 2.0).with_scale(max - min),
-                    color,
-                );
+                outline_box(gizmos, min.as_vec3(), max.as_vec3(), color);
             }
         }
     };
     if let Some(hover) = editor.hover
-        && Some(hover) != editor.selection
+        && !editor.selection.contains(hover)
     {
-        outline(hover, Color::srgba(1.0, 1.0, 1.0, 0.5));
+        outline(&mut gizmos, hover, Color::srgba(1.0, 1.0, 1.0, 0.5));
     }
-    if let Some(selected) = editor.selection {
-        outline(selected, Color::srgb(1.0, 0.85, 0.1));
+    for item in editor.selection.items() {
+        outline(&mut gizmos, *item, SELECTED);
+    }
+    let Some((min, max)) = editor.selection_bounds() else {
+        return;
+    };
+    if editor.selection.len() > 1 {
+        outline_box(&mut gizmos, min.as_vec3(), max.as_vec3(), PREVIEW);
+    }
+    // The grid the selection snaps to, on the plane of its underside.
+    let g = editor.grid;
+    let cells = |lo: f64, hi: f64| {
+        let first = (lo / g).floor() - 2.0;
+        let last = (hi / g).ceil() + 2.0;
+        let (first, last) = if last - first > 48.0 {
+            let mid = ((lo + hi) / 2.0 / g).round();
+            (mid - 24.0, mid + 24.0)
+        } else {
+            (first, last)
+        };
+        (first * g, last * g)
+    };
+    let ((x0, x1), (z0, z1)) = (cells(min.x, max.x), cells(min.z, max.z));
+    let y = min.y as f32 + 0.01;
+    let faint = Color::srgba(1.0, 1.0, 1.0, 0.16);
+    let mut x = x0;
+    while x <= x1 + 1e-9 {
+        gizmos.line(
+            Vec3::new(x as f32, y, z0 as f32),
+            Vec3::new(x as f32, y, z1 as f32),
+            faint,
+        );
+        x += g;
+    }
+    let mut z = z0;
+    while z <= z1 + 1e-9 {
+        gizmos.line(
+            Vec3::new(x0 as f32, y, z as f32),
+            Vec3::new(x1 as f32, y, z as f32),
+            faint,
+        );
+        z += g;
+    }
+    // A lone brush shows its faces as handles: a stalk along the normal with a knob.
+    if let Some(Item::Brush { entity, brush }) = editor.selection.single()
+        && let Some(b) = map.brush(entity, brush)
+    {
+        for face in 0..b.faces.len() {
+            if let (Some(centre), Some(normal)) = (b.face_centre(face), b.face_normal(face)) {
+                let (from, to) = (centre.as_vec3(), (centre + normal * 0.4).as_vec3());
+                gizmos.line(from, to, HANDLE);
+                gizmos.sphere(Isometry3d::from_translation(to), 0.07, HANDLE);
+            }
+        }
+        // What the face being dragged will give.
+        if let Some((e, br, face, amount)) = interaction.face_drag()
+            && (e, br) == (entity, brush)
+            && let Some(direction) = b.face_normal(face)
+        {
+            let mut preview = b.clone();
+            if preview.move_face(face, direction, amount).is_ok() {
+                outline_brush(&mut gizmos, &preview, PREVIEW);
+            }
+        }
+    }
+}
+
+/// The rubber band of a box selection, as a screen rectangle.
+#[derive(Component)]
+struct BoxRect;
+
+fn spawn_box_rect(mut commands: Commands) {
+    commands.spawn((
+        BoxRect,
+        GlobalZIndex(4),
+        Node {
+            position_type: PositionType::Absolute,
+            border: UiRect::all(px(1.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(1.0, 0.85, 0.1, 0.12)),
+        BorderColor::all(SELECTED),
+        Visibility::Hidden,
+    ));
+}
+
+fn show_box_rect(
+    interaction: Res<Interaction>,
+    mut rect: Query<(&mut Node, &mut Visibility), With<BoxRect>>,
+) {
+    let Ok((mut node, mut visibility)) = rect.single_mut() else {
+        return;
+    };
+    match interaction.box_rect() {
+        Some((low, high)) => {
+            node.left = px(low.x);
+            node.top = px(low.y);
+            node.width = px(high.x - low.x);
+            node.height = px(high.y - low.y);
+            *visibility = Visibility::Visible;
+        }
+        None => *visibility = Visibility::Hidden,
     }
 }
 
@@ -2535,6 +3477,7 @@ mod tests {
         app.insert_resource(editor)
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<Interaction>()
             .init_resource::<InputCapture>()
             .add_message::<KeyboardInput>()
             .add_message::<Command>()
@@ -2688,11 +3631,11 @@ mod tests {
         let editor = app.world().resource::<Editor>();
         assert_eq!(editor.map.as_ref().unwrap().entities[0].brushes.len(), 2);
         assert_eq!(
-            editor.selection,
-            Some(Item::Brush {
+            editor.selection.items(),
+            [Item::Brush {
                 entity: 0,
                 brush: 1
-            }),
+            }],
             "the copy is selected"
         );
         // Delete the copy, undo brings it back, redo removes it again.
@@ -2708,7 +3651,7 @@ mod tests {
                 .len(),
             1
         );
-        assert_eq!(app.world().resource::<Editor>().selection, None);
+        assert!(app.world().resource::<Editor>().selection.is_empty());
         tap(&mut app, KeyCode::KeyZ, &[KeyCode::ControlLeft]);
         assert_eq!(
             app.world()
@@ -2722,7 +3665,7 @@ mod tests {
             2
         );
         assert!(
-            app.world().resource::<Editor>().selection.is_some(),
+            !app.world().resource::<Editor>().selection.is_empty(),
             "the selection comes back with it"
         );
         tap(
@@ -2756,7 +3699,7 @@ mod tests {
             1
         );
 
-        // Entities turn with J and K.
+        // Entities turn with J and K, 15 degrees a press.
         let spawn = Item::Entity(1);
         app.world_mut()
             .resource_mut::<Editor>()
@@ -2773,7 +3716,7 @@ mod tests {
                 .unwrap()
                 .entities[1]
                 .angle(),
-            45.0
+            15.0
         );
         // Ctrl+S asks for a save, B for a box.
         tap(&mut app, KeyCode::KeyS, &[KeyCode::ControlLeft]);
@@ -2845,5 +3788,427 @@ mod tests {
                 .y
                 < 3.0
         );
+    }
+
+    // ---- the selection as a list, turning, entities, clipboard, prefabs
+
+    fn world() -> MapFile {
+        let concrete = mapfile::surface("concrete").unwrap();
+        let mut map = MapFile::with_worldspawn("T", "x");
+        for x in [0.0, 4.0, 8.0] {
+            map.add_brush(Brush::cuboid(
+                DVec3::new(x, 0.0, 0.0),
+                DVec3::new(x + 2.0, 2.0, 2.0),
+                concrete,
+            ));
+        }
+        map.add_entity(MapEntity::point(
+            "spawn_point",
+            DVec3::new(1.0, 0.0, 5.0),
+            Some(0.0),
+            &[("team", "alpha")],
+        ));
+        map.add_entity(MapEntity::point(
+            "spawn_point",
+            DVec3::new(5.0, 0.0, 5.0),
+            Some(0.0),
+            &[("team", "bravo")],
+        ));
+        map
+    }
+
+    fn editor_with(map: MapFile) -> Editor {
+        Editor::for_tests(map, Vec::new())
+    }
+
+    #[test]
+    fn every_edit_of_a_selection_is_one_undo_step() {
+        let mut editor = editor_with(world());
+        let all = editor.find_kind(&Kind::Everything).unwrap();
+        assert_eq!(all.len(), 5);
+        editor.select_items(&all, Combine::Replace).unwrap();
+
+        editor.move_item(None, DVec3::new(0.0, 1.0, 0.0)).unwrap();
+        assert_eq!(editor.undo.len(), 1, "five items, one step");
+        let map = editor.map.as_ref().unwrap();
+        for brush in 0..3 {
+            assert!((map.brush(0, brush).unwrap().aabb().unwrap().0.y - 1.0).abs() < 1e-3);
+        }
+        assert!((map.entities[1].origin().unwrap().y - 1.0).abs() < 1e-3);
+
+        // Paint: the brushes change, the spawns are skipped.
+        editor.set_surface(None, "brick").unwrap();
+        assert_eq!(editor.undo.len(), 2);
+        let map = editor.map.as_ref().unwrap();
+        assert!((0..3).all(|b| map.brush(0, b).unwrap().surface().unwrap().name == "brick"));
+
+        // Turn about the middle of the five: brushes turn, spawns face another way.
+        editor.turn(None, 90.0, None).unwrap();
+        assert_eq!(editor.undo.len(), 3);
+        assert_eq!(editor.map.as_ref().unwrap().entities[1].angle(), 90.0);
+
+        // Duplicate selects the copies; delete removes them; undo brings each back whole.
+        editor.duplicate(None, DVec3::new(0.0, 0.0, 20.0)).unwrap();
+        assert_eq!(editor.selection.len(), 5);
+        assert_eq!(editor.map.as_ref().unwrap().entities[0].brushes.len(), 6);
+        editor.delete(None).unwrap();
+        assert_eq!(editor.map.as_ref().unwrap().entities[0].brushes.len(), 3);
+        assert!(editor.selection.is_empty());
+        assert_eq!(editor.undo.len(), 5);
+        editor.undo().unwrap();
+        assert_eq!(editor.map.as_ref().unwrap().entities[0].brushes.len(), 6);
+        assert_eq!(editor.selection.len(), 5, "the selection comes back");
+        editor.undo().unwrap();
+        editor.undo().unwrap();
+        editor.undo().unwrap();
+        editor.undo().unwrap();
+        assert_eq!(
+            *editor.map.as_ref().unwrap(),
+            world(),
+            "five undos, as it was"
+        );
+        editor.redo().unwrap();
+        assert_eq!(editor.undo.len(), 1);
+    }
+
+    #[test]
+    fn picks_combine_and_stale_items_are_refused() {
+        let mut editor = editor_with(world());
+        let brush = |n| Item::Brush {
+            entity: 0,
+            brush: n,
+        };
+        editor.select_items(&[brush(0)], Combine::Replace).unwrap();
+        editor.select_items(&[brush(2)], Combine::Toggle).unwrap();
+        editor.select_items(&[brush(0)], Combine::Toggle).unwrap();
+        assert_eq!(editor.selection.items(), [brush(2)]);
+        assert!(editor.select_items(&[brush(9)], Combine::Add).is_err());
+        assert_eq!(
+            editor.selection.items(),
+            [brush(2)],
+            "a refused pick changes nothing"
+        );
+        // A box wholly around the first two brushes (not the third) and the first spawn.
+        let found = editor
+            .find_in_box(
+                DVec3::new(-1.0, -1.0, -1.0),
+                DVec3::new(7.0, 3.0, 6.0),
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            found,
+            [brush(0), brush(1), Item::Entity(1), Item::Entity(2)]
+        );
+        // One brush alone is not "exactly one" when three are selected.
+        let all = editor.find_kind(&Kind::Brushes).unwrap();
+        editor.select_items(&all, Combine::Replace).unwrap();
+        assert!(editor.resolve(None).is_err());
+        assert!(
+            editor
+                .move_face(None, FaceRef::Index(0), 1.0, false)
+                .is_err()
+        );
+        assert!(editor.targets(Some(Item::Entity(7))).is_err());
+    }
+
+    #[test]
+    fn entity_edits_are_checked_against_the_class_and_leave_no_step_when_refused() {
+        let mut editor = editor_with(world());
+        editor
+            .select_items(&[Item::Entity(1), Item::Entity(2)], Combine::Replace)
+            .unwrap();
+        // Both at once, one step.
+        editor.set_property(None, "team", "any").unwrap();
+        assert_eq!(editor.undo.len(), 1);
+        let map = editor.map.as_ref().unwrap();
+        assert_eq!(map.entities[1].get("team"), Some("any"));
+        assert_eq!(map.entities[2].get("team"), Some("any"));
+        // Refused: the class says so, nothing changes, no step.
+        for (key, value) in [
+            ("team", "red"),
+            ("modes", "ctf"),
+            ("angle", "north"),
+            ("colour", "red"),
+            ("origin", "0 0 0"),
+            ("classname", "prop"),
+        ] {
+            assert!(
+                editor.set_property(None, key, value).is_err(),
+                "{key}={value}"
+            );
+        }
+        assert_eq!(editor.undo.len(), 1);
+        // A position needs one entity; facing and position go in one step.
+        assert!(
+            editor
+                .edit_entity(
+                    None,
+                    EntityChange {
+                        position: Some(DVec3::X),
+                        ..EntityChange::default()
+                    }
+                )
+                .is_err()
+        );
+        editor.select(Some(Item::Entity(1))).unwrap();
+        editor
+            .edit_entity(
+                None,
+                EntityChange {
+                    set: vec![("modes".into(), "tdm sd".into())],
+                    position: Some(DVec3::new(3.0, 0.0, 4.0)),
+                    angle: Some(-90.0),
+                },
+            )
+            .unwrap();
+        assert_eq!(editor.undo.len(), 2);
+        let e = &editor.map.as_ref().unwrap().entities[1];
+        assert_eq!(e.get("modes"), Some("tdm sd"));
+        assert_eq!(e.angle(), 270.0);
+        assert!((e.origin().unwrap() - DVec3::new(3.0, 0.0, 4.0)).length() < 1e-3);
+        // Removing a key is checked too: an empty value takes `modes` off again.
+        editor.set_property(None, "modes", "").unwrap();
+        assert_eq!(editor.map.as_ref().unwrap().entities[1].get("modes"), None);
+        // A prop needs its model, and the model must be one that exists.
+        let mut props = MapFile::with_worldspawn("T", "x");
+        props.add_entity(MapEntity::point(
+            "prop",
+            DVec3::ZERO,
+            None,
+            &[("model", "models/downtown/Prop_Bollard.glb")],
+        ));
+        let model = PropModel {
+            model: "models/downtown/Prop_Bollard.glb".into(),
+            bounds: None,
+        };
+        let mut editor = Editor::for_tests(props, vec![model]);
+        editor.select(Some(Item::Entity(1))).unwrap();
+        assert!(
+            editor.set_property(None, "model", "").is_err(),
+            "cannot be removed"
+        );
+        assert!(
+            editor
+                .set_property(None, "model", "models/nowhere/Nothing.glb")
+                .is_err()
+        );
+        assert!(editor.set_property(None, "model", "notamodel").is_err());
+        assert!(editor.set_property(None, "collider", "sphere").is_err());
+        editor.set_property(None, "collider", "convex").unwrap();
+        editor
+            .set_property(None, "model", "private://models/secret.glb")
+            .unwrap();
+        assert!(
+            editor
+                .add_entity(
+                    "prop",
+                    DVec3::ZERO,
+                    None,
+                    &[("model".into(), "models/nowhere/Nothing.glb".into())]
+                )
+                .is_err()
+        );
+        // A light: colour is three numbers, range is positive.
+        editor
+            .add_entity("light_point", DVec3::ZERO, None, &[])
+            .unwrap();
+        assert!(editor.set_property(None, "color", "1 0.5").is_err());
+        assert!(editor.set_property(None, "color", "1 0.5 x").is_err());
+        assert!(editor.set_property(None, "range", "0").is_err());
+        assert!(editor.set_property(None, "range", "12.5").is_ok());
+        assert!(editor.set_property(None, "shadows_enabled", "yes").is_err());
+    }
+
+    #[test]
+    fn faces_move_on_the_grid_and_a_turned_box_stays_a_turned_box() {
+        let mut editor = editor_with(world());
+        let brush = Item::Brush {
+            entity: 0,
+            brush: 0,
+        };
+        editor.select(Some(brush)).unwrap();
+        // Grid 0.25: the east face at 2.0 grows by 0.3 and lands on 2.25 when asked to snap.
+        editor
+            .move_face(None, FaceRef::Towards(DVec3::X), 0.3, true)
+            .unwrap();
+        let (_, max) = editor
+            .map
+            .as_ref()
+            .unwrap()
+            .bounds(brush, &editor.prop_bounds)
+            .unwrap();
+        assert!((max.x - 2.25).abs() < 1e-3, "{}", max.x);
+        editor
+            .move_face(None, FaceRef::Towards(DVec3::X), 0.3, false)
+            .unwrap();
+        let (_, max) = editor
+            .map
+            .as_ref()
+            .unwrap()
+            .bounds(brush, &editor.prop_bounds)
+            .unwrap();
+        assert!((max.x - 2.55).abs() < 1e-3, "{}", max.x);
+        assert!(
+            editor
+                .move_face(None, FaceRef::Towards(DVec3::X), -9.0, false)
+                .is_err()
+        );
+        assert_eq!(editor.undo.len(), 2, "the refused move left no step");
+        // Turn 30 degrees, then push a face out along its own normal: still a closed box.
+        editor.turn(None, 30.0, None).unwrap();
+        let b = editor.map.as_ref().unwrap().brush(0, 0).unwrap().clone();
+        assert!(b.is_solid());
+        let face = b
+            .face_towards(DVec3::new(
+                30f64.to_radians().cos(),
+                0.0,
+                -30f64.to_radians().sin(),
+            ))
+            .unwrap();
+        let before = b.vertices().len();
+        editor
+            .move_face(None, FaceRef::Index(face), 0.5, false)
+            .unwrap();
+        let b = editor.map.as_ref().unwrap().brush(0, 0).unwrap();
+        assert!(b.is_solid() && b.vertices().len() == before);
+    }
+
+    #[test]
+    fn copy_paste_arrays_and_prefabs_work_on_the_selection() {
+        let dir = std::env::temp_dir().join(format!("mapedit-editor-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut editor = Editor::new(
+            Paths {
+                assets: dir.clone(),
+                registry: PathBuf::new(),
+                private: None,
+            },
+            Vec::new(),
+        );
+        editor.map = Some(world());
+        editor
+            .select_items(
+                &[
+                    Item::Brush {
+                        entity: 0,
+                        brush: 0,
+                    },
+                    Item::Entity(1),
+                ],
+                Combine::Replace,
+            )
+            .unwrap();
+        assert!(editor.paste(DVec3::X).is_err(), "nothing copied yet");
+        editor.copy(None).unwrap();
+        // Paste with the anchor on a point: whole grid steps across, exact in height.
+        let anchor = editor.clipboard_anchor().unwrap();
+        // The footprint spans z 0 to 5.4 (the spawn's box), so its middle snaps to 2.75.
+        assert!(
+            (anchor - DVec3::new(1.0, 0.0, 2.75)).length() < 1e-9,
+            "{anchor}"
+        );
+        editor.paste_at(DVec3::new(20.1, 0.5, 30.0)).unwrap();
+        assert_eq!(editor.selection.len(), 2);
+        let map = editor.map.as_ref().unwrap();
+        let pasted = editor.selection.items()[0];
+        let (min, _) = map.bounds(pasted, &editor.prop_bounds).unwrap();
+        assert!(
+            (min - DVec3::new(19.0, 0.5, 27.25)).length() < 1e-3,
+            "{min}"
+        );
+        assert_eq!(editor.undo.len(), 1, "a paste is one step");
+
+        // An array of the pasted pair: count copies, k * step.
+        editor.array(None, 2, DVec3::new(0.0, 0.0, 4.0)).unwrap();
+        assert_eq!(editor.selection.len(), 4);
+        assert_eq!(editor.undo.len(), 2);
+        assert!(editor.array(None, 0, DVec3::X).is_err());
+
+        // Save the selection as a prefab, place it turned.
+        let saved = editor.save_prefab(None, "pair", false).unwrap();
+        assert!(saved.contains("pair"), "{saved}");
+        assert!(
+            editor.save_prefab(None, "pair", false).is_err(),
+            "no silent replace"
+        );
+        assert_eq!(
+            editor.prefab_list,
+            [PrefabInfo {
+                name: "pair".into(),
+                private: false
+            }]
+        );
+        assert!(dir.join("prefabs/pair.map").is_file());
+        editor
+            .place_prefab("pair", DVec3::new(-10.0, 0.0, -10.0), 90.0)
+            .unwrap();
+        assert_eq!(editor.selection.len(), 4);
+        assert!(editor.place_prefab("nope", DVec3::ZERO, 0.0).is_err());
+        // The private folder is not there: a private Map cannot save one.
+        editor.private = true;
+        assert!(editor.save_prefab(None, "secret", false).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dragging_a_face_follows_the_pointer_along_the_normal() {
+        // The ray from (3, 5, 0) straight down passes the line x-axis through the origin at x = 3.
+        let at = along_axis(
+            DVec3::ZERO,
+            DVec3::X,
+            DVec3::new(3.0, 5.0, 0.0),
+            DVec3::NEG_Y,
+        )
+        .unwrap();
+        assert!((at - 3.0).abs() < 1e-9);
+        // A slanted ray still gives the closest point on the axis, measured from the face.
+        let at = along_axis(
+            DVec3::new(2.0, 0.0, 0.0),
+            DVec3::X,
+            DVec3::new(0.0, 4.0, 4.0),
+            DVec3::new(1.0, -1.0, -1.0),
+        )
+        .unwrap();
+        assert!((at - 2.0).abs() < 1e-9, "{at}");
+        // Looking along the axis: no answer.
+        assert!(along_axis(DVec3::ZERO, DVec3::X, DVec3::new(-5.0, 1.0, 1.0), DVec3::X).is_none());
+    }
+
+    #[test]
+    fn f5_asks_for_a_playtest_and_a_box_is_not_a_click() {
+        let mut app = key_app(two_brushes_and_a_spawn());
+        tap(&mut app, KeyCode::F5, &[]);
+        let sent: Vec<Command> = app
+            .world_mut()
+            .resource_mut::<Messages<Command>>()
+            .drain()
+            .collect();
+        assert!(matches!(sent[..], [Command::Playtest]));
+        // Ctrl+A selects everything, Ctrl+Shift+A everything like the last pick, and J / K / M
+        // act on all of it.
+        tap(&mut app, KeyCode::KeyA, &[KeyCode::ControlLeft]);
+        assert_eq!(app.world().resource::<Editor>().selection.len(), 2);
+        tap(&mut app, KeyCode::KeyK, &[KeyCode::ShiftLeft]);
+        let editor = app.world().resource::<Editor>();
+        assert_eq!(editor.map.as_ref().unwrap().entities[1].angle(), 90.0);
+        assert_eq!(editor.undo.len(), 1, "one step for both");
+        tap(&mut app, KeyCode::KeyM, &[]);
+        let editor = app.world().resource::<Editor>();
+        assert_eq!(editor.undo.len(), 2);
+        assert_eq!(editor.map.as_ref().unwrap().entities[1].angle(), 270.0);
+        // Copy and paste with no pointer in the window: offset 1 m to the right.
+        tap(&mut app, KeyCode::KeyC, &[KeyCode::ControlLeft]);
+        tap(&mut app, KeyCode::KeyV, &[KeyCode::ControlLeft]);
+        let editor = app.world().resource::<Editor>();
+        assert_eq!(editor.map.as_ref().unwrap().entities[0].brushes.len(), 2);
+        assert_eq!(editor.selection.len(), 2);
+        // Ctrl+Shift+D: an array of three.
+        tap(
+            &mut app,
+            KeyCode::KeyD,
+            &[KeyCode::ControlLeft, KeyCode::ShiftLeft],
+        );
+        assert_eq!(app.world().resource::<Editor>().selection.len(), 6);
     }
 }

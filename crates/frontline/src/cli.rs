@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use bevy::prelude::Resource;
 use clap::Parser;
@@ -37,7 +37,8 @@ pub struct Cli {
     #[arg(long, default_value_t = DEFAULT_PORT)]
     port: u16,
 
-    /// Player name (overrides the saved Settings), or the Dedicated Server's name on the LAN.
+    /// Play as the Profile of this name for this run (created when there is none), or the
+    /// Dedicated Server's name on the LAN.
     #[arg(long)]
     name: Option<String>,
 
@@ -60,6 +61,12 @@ pub struct Cli {
     /// content folder; also the main menu's backdrop.
     #[arg(long, default_value = DEFAULT_MAP, conflicts_with = "connect")]
     map: String,
+
+    /// Dev/test (MapEdit's playtest): play a TrenchBroom `.map` file by its path instead of a Map
+    /// of the registry. It is loaded as a Map named after the file, with the Map's own look, every
+    /// Game Mode and the first two Factions; also the main menu's backdrop.
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["connect", "map", "rotation"])]
+    map_file: Option<PathBuf>,
 
     /// Dev/test: look preset from `data/looks.ron` (e.g. `night_ops`) that replaces the Map's own
     /// look for this session (when hosting or dedicated; only a window shows it).
@@ -140,9 +147,17 @@ impl Cli {
         }))
     }
 
-    /// The Map this process's server starts on.
+    /// The Map this process's server starts on: the `--map-file`'s, else `--map`.
     pub fn map(&self) -> MapId {
-        MapId::new(self.map.clone())
+        match &self.map_file {
+            Some(path) => crate::maps::map_file_id(path),
+            None => MapId::new(self.map.clone()),
+        }
+    }
+
+    /// The `.map` file given with `--map-file`, if any.
+    pub fn map_file(&self) -> Option<&Path> {
+        self.map_file.as_deref()
     }
 
     /// The `--look` preset replacing every Map's look, if given.

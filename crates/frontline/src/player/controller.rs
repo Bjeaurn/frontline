@@ -21,6 +21,7 @@ use crate::data::{ActiveRules, GameData, MovementTuning};
 use crate::flow::{AppState, Settings};
 use crate::maps::MapSpawns;
 use crate::net::protocol::{FallDamage, Respawn};
+use crate::profile::Profile;
 use crate::shared::{FromServer, GameLayer, LocalPlayer, PlayerName, PlayerPose, Stance, ToServer};
 
 // Collision geometry (metres).
@@ -584,9 +585,9 @@ pub(super) fn spawn_local_player(
     mut commands: Commands,
     data: Res<GameData>,
     spawns: Option<Res<MapSpawns>>,
-    settings: Res<Settings>,
+    profile: Res<Profile>,
 ) {
-    let name = settings.name.clone();
+    let name = profile.name.clone();
     let (feet, yaw) = random_spawn(spawns.as_deref());
     let feet = feet + Vec3::Y * HEADROOM_LIFT;
     let stance = Stance::Standing;

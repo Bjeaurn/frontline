@@ -169,6 +169,71 @@ pub fn register_private_source(app: &mut App) {
     );
 }
 
+/// Asset source serving the folder of the Map file given with `--map-file`, e.g.
+/// `mapfile://level.map`.
+pub const MAP_FILE_SOURCE: &str = "mapfile";
+
+/// Registers the `mapfile://` asset source on the folder of `path` (a `.map` file). Call before
+/// any plugin adds `AssetPlugin`.
+pub fn register_map_file_source(app: &mut App, path: &Path) {
+    let Some(dir) = std::path::absolute(path)
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+    else {
+        return;
+    };
+    app.register_asset_source(
+        MAP_FILE_SOURCE,
+        AssetSourceBuilder::new(move || Box::new(FileAssetReader::new(dir.clone()))),
+    );
+}
+
+/// The id a Map file given by path plays under: its file name without the extension (and
+/// without a leading dot, as MapEdit's playtest copies have).
+pub fn map_file_id(path: &Path) -> MapId {
+    let stem = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    MapId::new(stem.trim_start_matches('.'))
+}
+
+/// The registry entry of a Map file given by path: shown under its id, the Map's own (worldspawn)
+/// look, every Game Mode, the `default_factions`.
+fn map_file_info(path: &Path, default_factions: &[String; 2]) -> Result<MapInfo, String> {
+    if path.extension().is_none_or(|ext| ext != "map") {
+        return Err(format!("{} is not a .map file", path.display()));
+    }
+    if !path.is_file() {
+        return Err(format!("{} does not exist", path.display()));
+    }
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    Ok(MapInfo {
+        name: map_file_id(path).0,
+        file: format!("{MAP_FILE_SOURCE}://{name}"),
+        look: None,
+        modes: Vec::new(),
+        factions: default_factions.clone(),
+        private: false,
+    })
+}
+
+/// Adds the Map file `path` (`--map-file`) to the registry and returns its id. The folder must
+/// have been registered with [`register_map_file_source`].
+pub fn add_map_file(app: &mut App, path: &Path) -> Result<MapId, String> {
+    let data = app.world().resource::<GameData>();
+    let factions = [data.factions[0].id.clone(), data.factions[1].id.clone()];
+    let info = map_file_info(path, &factions)?;
+    let id = map_file_id(path);
+    app.world_mut()
+        .resource_mut::<MapRegistry>()
+        .insert(id.clone(), info);
+    Ok(id)
+}
+
 /// Loads `data/maps.ron` (or the built-in copy) and the private Maps, and checks that every
 /// Map's Factions exist. Maps without an entry play the first two Factions of `factions.ron`.
 pub(super) fn load_registry(data: &GameData) -> MapRegistry {
@@ -283,5 +348,26 @@ mod tests {
         let dir = Path::new("definitely/not/here");
         assert!(private_map_stems(dir).is_empty());
         assert!(read_private_declared(&dir.join(MAPS_FILE)).is_empty());
+    }
+
+    #[test]
+    fn a_map_file_by_path_is_a_map_with_the_generic_entry() {
+        let dir = std::env::temp_dir().join(format!("frontline-map-file-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(".mapedit-play-z_town.map");
+        std::fs::write(&file, "").unwrap();
+        let factions = ["first".to_owned(), "second".to_owned()];
+        let info = map_file_info(&file, &factions).unwrap();
+        assert_eq!(map_file_id(&file), MapId::new("mapedit-play-z_town"));
+        assert_eq!(info.file, "mapfile://.mapedit-play-z_town.map");
+        assert_eq!(info.name, "mapedit-play-z_town");
+        assert!(info.look.is_none() && info.modes.is_empty() && !info.private);
+        assert!(info.supports(GameModeId::Headquarters), "every Game Mode");
+        assert_eq!(info.factions, factions);
+        assert!(map_file_info(&dir.join("missing.map"), &factions).is_err());
+        let text = dir.join("notes.txt");
+        std::fs::write(&text, "").unwrap();
+        assert!(map_file_info(&text, &factions).is_err(), "not a .map");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

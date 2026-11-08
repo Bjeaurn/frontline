@@ -40,6 +40,9 @@ pub enum AppState {
 pub enum MenuScreen {
     #[default]
     Title,
+    /// The first boot: no Profile exists yet, so a name is asked for before anything else
+    /// (`menus::first_boot`). Also what deleting the last Profile leads to.
+    FirstBoot,
     /// HOST GAME: pick the Rotation and server settings before starting.
     HostSetup,
     ServerBrowser,
@@ -138,7 +141,12 @@ impl Handedness {
 #[derive(Resource, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    pub name: String,
+    /// The name an older `settings.ron` held before the player's name moved to the Profile
+    /// (CONTEXT.md: Profile). Only read, to name the first Profile; never written back.
+    #[serde(rename = "name", skip_serializing)]
+    pub legacy_name: String,
+    /// The id of the active Profile (`profiles/<id>.ron`); `None` until the first one exists.
+    pub active_profile: Option<String>,
     /// Radians of view rotation per unit of mouse motion.
     pub mouse_sensitivity: f32,
     /// Horizontal field of view in degrees.
@@ -175,7 +183,8 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            name: "Player".into(),
+            legacy_name: String::new(),
+            active_profile: None,
             mouse_sensitivity: 0.002,
             fov_deg: 80.0,
             master_volume: 0.8,
@@ -203,16 +212,11 @@ pub struct FlowPlugin;
 
 impl Plugin for FlowPlugin {
     fn build(&self, app: &mut App) {
-        let Some(Mode::Windowed {
-            start, name, cod4, ..
-        }) = app.world().get_resource::<Mode>().cloned()
+        let Some(Mode::Windowed { start, cod4, .. }) = app.world().get_resource::<Mode>().cloned()
         else {
             panic!("FlowPlugin needs Mode::Windowed inserted first");
         };
         let mut settings = load_settings();
-        if let Some(name) = name {
-            settings.name = name;
-        }
         if let Some(path) = cod4 {
             settings.cod4_path = Some(path);
         }
@@ -250,7 +254,7 @@ impl Plugin for FlowPlugin {
     }
 }
 
-/// `<config dir>/frontline/<file>`: where the Settings and the Profile live.
+/// `<config dir>/frontline/<file>`: where the Settings, the Profiles and the rule sets live.
 fn config_path(file: &str) -> Option<PathBuf> {
     dirs::config_dir().map(|dir| dir.join("frontline").join(file))
 }
@@ -281,10 +285,11 @@ pub fn load_config<T: serde::de::DeserializeOwned>(file: &str) -> Option<T> {
     }
 }
 
-/// Writes `value` to the RON config file `file`, logging instead of failing.
-pub fn save_config<T: Serialize>(file: &str, value: &T) {
+/// Writes `value` to the RON config file `file`, logging instead of failing. True when it was
+/// written.
+pub fn save_config<T: Serialize>(file: &str, value: &T) -> bool {
     let Some(path) = config_path(file) else {
-        return;
+        return false;
     };
     let saved = ron::ser::to_string_pretty(value, ron::ser::PrettyConfig::default())
         .map_err(|err| err.to_string())
@@ -295,8 +300,56 @@ pub fn save_config<T: Serialize>(file: &str, value: &T) {
             std::fs::write(&path, text).map_err(|err| err.to_string())
         });
     match saved {
-        Ok(()) => info!("Saved {}", path.display()),
-        Err(err) => warn!("Can't save {}: {err}", path.display()),
+        Ok(()) => {
+            info!("Saved {}", path.display());
+            true
+        }
+        Err(err) => {
+            warn!("Can't save {}: {err}", path.display());
+            false
+        }
+    }
+}
+
+/// Whether the config file `file` exists.
+pub fn config_exists(file: &str) -> bool {
+    config_path(file).is_some_and(|path| path.is_file())
+}
+
+/// The names (without the `.ron`) of the RON files in the config directory `dir`, in no
+/// particular order. Empty when the directory is absent.
+pub fn list_config(dir: &str) -> Vec<String> {
+    let Some(entries) = config_path(dir).and_then(|path| std::fs::read_dir(path).ok()) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().is_some_and(|extension| extension == "ron") {
+                path.file_stem()?.to_str().map(str::to_owned)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Deletes the config file `file`, logging instead of failing. True when it is gone.
+pub fn remove_config(file: &str) -> bool {
+    let Some(path) = config_path(file) else {
+        return false;
+    };
+    match std::fs::remove_file(&path) {
+        Ok(()) => {
+            info!("Deleted {}", path.display());
+            true
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => true,
+        Err(err) => {
+            warn!("Can't delete {}: {err}", path.display());
+            false
+        }
     }
 }
 
@@ -401,7 +454,11 @@ mod tests {
     #[test]
     fn an_old_settings_file_loads_with_the_new_settings_at_their_defaults() {
         let settings: Settings = ron::from_str(OLD_FILE).unwrap();
-        assert_eq!(settings.name, "Mac");
+        // The old name is kept only to name the first Profile, and never written back.
+        assert_eq!(settings.legacy_name, "Mac");
+        assert_eq!(settings.active_profile, None);
+        let saved = ron::ser::to_string(&settings).unwrap();
+        assert!(!saved.contains("name: \"Mac\""), "{saved}");
         assert_eq!(settings.mouse_sensitivity, 0.003);
         assert_eq!(settings.fov_deg, 90.0);
         assert_eq!(settings.host.server_name, "Mac's Server");
@@ -418,7 +475,7 @@ mod tests {
     fn a_file_with_only_some_fields_loads() {
         let settings: Settings = ron::from_str("(fov_deg: 100.0)").unwrap();
         assert_eq!(settings.fov_deg, 100.0);
-        assert_eq!(settings.name, Settings::default().name);
+        assert_eq!(settings.active_profile, None);
     }
 
     #[test]
@@ -426,6 +483,7 @@ mod tests {
         let mut settings = Settings {
             ads_sensitivity: 0.6,
             scope_sensitivity: 0.4,
+            active_profile: Some("mac".into()),
             invert_y: true,
             auto_reload: true,
             handedness: Handedness::Left,

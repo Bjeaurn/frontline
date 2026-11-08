@@ -1,28 +1,43 @@
-//! The Profile (CONTEXT.md: Profile): the player's own data, kept in
-//! `<config dir>/frontline/profile.ron` next to `settings.ron`. It travels with the player, not
-//! with any Host, so it is a client-local file the server never sees.
+//! The Profiles (CONTEXT.md: Profile): the player's own data. An install holds several, each
+//! its own file `<config dir>/frontline/profiles/<id>.ron` next to `settings.ron`, and one is
+//! active (its id is remembered in the Settings). A Profile travels with the player, not with
+//! any Host, so it is a client-local file the server never sees.
 //!
-//! It holds the three custom Loadouts (classes), which Loadout is chosen, the XP the server
-//! awarded (the Level is derived from it, `data/progression.ron`) and the per-Weapon counters:
-//! kills and headshots for the camo Challenges, and the Weapon XP behind each Weapon Level. New
-//! fields need `#[serde(default)]` so existing files keep loading. Client and Host only.
+//! A Profile holds its name (the player's name to everyone else: scoreboard, chat, the Host's
+//! server name), the three custom Loadouts (classes), which Loadout is chosen, the XP the
+//! server awarded (the Level is derived from it, `data/progression.ron`) and the per-Weapon
+//! counters: kills and headshots for the camo Challenges, and the Weapon XP behind each Weapon
+//! Level. New fields need `#[serde(default)]` so existing files keep loading. Client and Host
+//! only.
+//!
+//! The `Profile` resource is the active one; [`Profiles`] creates, renames, switches and deletes
+//! them, and `book` holds the pure rules (names, ids, which one is active). Builds before
+//! several Profiles kept one `profile.ron` and the player's name in `settings.ron`: the first
+//! boot turns them into the first Profile and removes the old file.
 //!
 //! Profiles written before Pick 10 stored their classes under `custom` in the old shape; they
 //! are migrated on load: what fits is kept and, if a class is over the rules, things are dropped
 //! from the end (and logged).
 
+pub mod book;
+
 use std::collections::HashMap;
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use self::book::{Entry, Startup};
+use crate::cli::Mode;
 use crate::data::{FireMode, GameData, WeaponId};
-use crate::flow::{Settings, load_config, save_config};
+use crate::flow::{Settings, config_exists, list_config, load_config, remove_config, save_config};
 use crate::gear::{AttachmentId, Attachments, Loadout, PERK_SLOTS, PerkId, Perks};
 use crate::net::protocol::XpAward;
 use crate::progression::{LevelProgress, UnlockItem, WeaponRecord, XpReason};
 
-const PROFILE_FILE: &str = "profile.ron";
+/// The single Profile file of builds before several Profiles; migrated on the first boot.
+const OLD_PROFILE_FILE: &str = "profile.ron";
+const PROFILES_DIR: &str = "profiles";
 
 /// Custom Loadouts a Profile holds (CONTEXT.md: a Profile holds three custom Loadouts).
 pub const CUSTOM_SLOTS: usize = 3;
@@ -30,20 +45,39 @@ pub const CUSTOM_SLOTS: usize = 3;
 pub struct ProfilePlugin;
 
 impl Plugin for ProfilePlugin {
-    /// Loads the Profile now, from the data and Settings already inserted, so it exists before
-    /// anything (the first spawn included) asks for it. Add after `DataPlugin` and `FlowPlugin`.
+    /// Loads the Profiles now, from the data and Settings already inserted, so the active one
+    /// exists before anything (the first spawn included) asks for it. Add after `DataPlugin` and
+    /// `FlowPlugin`.
+    ///
+    /// With no Profile yet the main menu asks for a name (`MenuScreen::FirstBoot`); a start that
+    /// skips the menus (`--host`, `--connect`) makes one named after the OS user instead.
+    /// `--name` plays as the Profile of that name for this run, creating it if there is none.
     fn build(&self, app: &mut App) {
-        let profile = load_profile(
+        let Some(Mode::Windowed { start, name, .. }) = app.world().get_resource::<Mode>().cloned()
+        else {
+            panic!("ProfilePlugin needs Mode::Windowed inserted first");
+        };
+        let booted = boot(
             app.world().resource::<GameData>(),
             app.world().resource::<Settings>(),
+            name.as_deref(),
+            start.is_some(),
         );
-        app.insert_resource(profile).add_systems(
-            Update,
-            save_profile
-                .run_if(resource_changed::<Profile>)
-                .run_if(not(resource_added::<Profile>)),
-        );
+        app.world_mut().resource_mut::<Settings>().active_profile = booted.active;
+        app.insert_resource(booted.profile)
+            .insert_resource(ProfileList(booted.entries))
+            .add_systems(
+                Update,
+                save_profile
+                    .run_if(resource_changed::<Profile>)
+                    .run_if(not(resource_added::<Profile>)),
+            );
     }
+}
+
+/// Whether a Profile is active. Without one the menus ask for a name first.
+pub fn has_active_profile(settings: Res<Settings>) -> bool {
+    settings.active_profile.is_some()
 }
 
 /// Which Loadout the player spawns with: a Default Loadout (an index into
@@ -89,6 +123,10 @@ impl From<LegacyLoadout> for Loadout {
 
 #[derive(Resource, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Profile {
+    /// The player's name: what other players see (scoreboard, chat) and the Profile list shows.
+    /// Empty in a file from before the player's name moved here; `boot` names it.
+    #[serde(default)]
+    pub name: String,
     /// The custom Loadouts, always `CUSTOM_SLOTS` of them.
     #[serde(rename = "classes", default)]
     pub custom: Vec<Loadout>,
@@ -134,6 +172,7 @@ impl Profile {
     /// Profiles existed.
     pub(crate) fn fresh(data: &GameData, default_choice: usize) -> Profile {
         Profile {
+            name: String::new(),
             custom: Vec::new(),
             legacy_custom: Vec::new(),
             chosen: LoadoutChoice::Default(default_choice),
@@ -306,26 +345,316 @@ impl Profile {
             LoadoutChoice::Default(index) => &data.default_loadouts[index],
         }
     }
-}
 
-/// Reads the Profile file; the first run (no file) starts from the Settings' old
-/// `loadout` choice. A file in the pre-Pick 10 shape is migrated and saved right away.
-fn load_profile(data: &GameData, settings: &Settings) -> Profile {
-    match load_config::<Profile>(PROFILE_FILE) {
-        Some(profile) => {
-            let migrate = profile.needs_migration();
-            let profile = profile.validated(data);
-            if migrate {
-                save_config(PROFILE_FILE, &profile);
-            }
-            profile
-        }
-        None => Profile::fresh(data, settings.loadout),
+    /// This Profile under `name`.
+    fn named(mut self, name: &str) -> Profile {
+        self.name = name.to_owned();
+        self
     }
 }
 
-fn save_profile(profile: Res<Profile>) {
-    save_config(PROFILE_FILE, &*profile);
+/// The Profile list in book order (`book::sort`): a Profile's file id and name, without the
+/// data of the Profiles that are not active. Change it only through [`Profiles`].
+#[derive(Resource, Debug, Default)]
+pub struct ProfileList(Vec<Entry>);
+
+impl ProfileList {
+    pub fn entries(&self) -> &[Entry] {
+        &self.0
+    }
+
+    /// What NEW would do with `raw`: the name it makes, or why it can't.
+    pub fn check_new(&self, raw: &str) -> Result<String, String> {
+        if !book::has_room(&self.0) {
+            return Err(format!("At most {} profiles", book::MAX_PROFILES));
+        }
+        book::check_name(raw, &self.0, None).map_err(|err| err.describe().to_owned())
+    }
+
+    /// What RENAME would do with `raw` for the Profile `id`.
+    pub fn check_rename(&self, raw: &str, id: &str) -> Result<String, String> {
+        book::check_name(raw, &self.0, Some(id)).map_err(|err| err.describe().to_owned())
+    }
+}
+
+/// Creates, renames, switches and deletes Profiles, keeping the files, the list, the active
+/// `Profile` and the Settings' remembered id in step. Everything that caches the Profile reads
+/// the `Profile` resource, so a switch reloads Loadouts, XP and counters everywhere at once; a
+/// Match caches nothing of it, but the menus only offer a switch outside one.
+#[derive(SystemParam)]
+pub struct Profiles<'w> {
+    list: ResMut<'w, ProfileList>,
+    profile: ResMut<'w, Profile>,
+    settings: ResMut<'w, Settings>,
+    data: Res<'w, GameData>,
+}
+
+impl Profiles<'_> {
+    pub fn entries(&self) -> &[Entry] {
+        &self.list.0
+    }
+
+    /// The active Profile's id; `None` before the first one exists.
+    pub fn active_id(&self) -> Option<&str> {
+        self.settings.active_profile.as_deref()
+    }
+
+    /// The active Profile's name.
+    pub fn active_name(&self) -> &str {
+        &self.profile.name
+    }
+
+    /// A new Profile called `raw` (a fresh one: no XP, the Default Loadouts), made active.
+    pub fn create(&mut self, raw: &str) -> Result<(), String> {
+        let name = self.list.check_new(raw)?;
+        self.save_active();
+        let profile = Profile::fresh(&self.data, 0).named(&name);
+        let entry = add_profile(&mut self.list.0, name, &profile)
+            .ok_or("Can't save the new profile (see the log)")?;
+        self.settings.active_profile = Some(entry.id);
+        *self.profile = profile;
+        Ok(())
+    }
+
+    /// Renames the active Profile.
+    pub fn rename(&mut self, raw: &str) -> Result<(), String> {
+        let Some(id) = self.settings.active_profile.clone() else {
+            return Err("No profile is active".into());
+        };
+        let name = self.list.check_rename(raw, &id)?;
+        if let Some(entry) = self.list.0.iter_mut().find(|entry| entry.id == id) {
+            entry.name.clone_from(&name);
+        }
+        book::sort(&mut self.list.0);
+        self.profile.name = name;
+        self.save_active();
+        Ok(())
+    }
+
+    /// Makes `id` the active Profile, loading its Loadouts, XP and counters.
+    pub fn switch(&mut self, id: &str) -> Result<(), String> {
+        if self.active_id() == Some(id) {
+            return Ok(());
+        }
+        let loaded = self.load(id)?;
+        self.save_active();
+        self.settings.active_profile = Some(id.to_owned());
+        *self.profile = loaded;
+        Ok(())
+    }
+
+    /// Deletes Profile `id`. The active one passes to the next in the list (the previous when
+    /// it was last); with none left no Profile is active and the menus ask for a name.
+    pub fn delete(&mut self, id: &str) -> Result<(), String> {
+        if !self.list.0.iter().any(|entry| entry.id == id) {
+            return Err("No such profile".into());
+        }
+        let was_active = self.active_id() == Some(id);
+        let next = if was_active {
+            book::active_after_delete(&self.list.0, id)
+        } else {
+            None
+        };
+        // Read the next one before anything is deleted, so a failure loses nothing.
+        let next = match next {
+            Some(next) => Some((self.load(&next)?, next)),
+            None => None,
+        };
+        if !remove_config(&profile_file(id)) {
+            return Err("Can't delete the profile file (see the log)".into());
+        }
+        self.list.0.retain(|entry| entry.id != id);
+        if was_active {
+            match next {
+                Some((loaded, next)) => {
+                    self.settings.active_profile = Some(next);
+                    *self.profile = loaded;
+                }
+                None => {
+                    self.settings.active_profile = None;
+                    *self.profile = Profile::fresh(&self.data, 0);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Reads Profile `id` for a switch, named as the list shows it.
+    fn load(&self, id: &str) -> Result<Profile, String> {
+        let entry = self
+            .list
+            .0
+            .iter()
+            .find(|entry| entry.id == id)
+            .ok_or("No such profile")?;
+        read_profile(id, &self.data)
+            .map(|profile| profile.named(&entry.name))
+            .ok_or_else(|| format!("Can't read the profile \"{}\" (see the log)", entry.name))
+    }
+
+    /// Writes the active Profile now, so a switch can't lose what was changed since the last
+    /// save.
+    fn save_active(&self) {
+        if let Some(id) = &self.settings.active_profile {
+            write_profile(id, &self.profile);
+        }
+    }
+}
+
+/// What `boot` found: the list, the active Profile (a placeholder while the id is `None`).
+struct Booted {
+    entries: Vec<Entry>,
+    active: Option<String>,
+    profile: Profile,
+}
+
+/// `profiles/<id>.ron`, relative to the config directory.
+fn profile_file(id: &str) -> String {
+    format!("{PROFILES_DIR}/{id}.ron")
+}
+
+fn read_profile(id: &str, data: &GameData) -> Option<Profile> {
+    load_config::<Profile>(&profile_file(id)).map(|profile| profile.validated(data))
+}
+
+fn write_profile(id: &str, profile: &Profile) -> bool {
+    save_config(&profile_file(id), profile)
+}
+
+/// Every readable Profile file with its list entry, in book order. A file without a name (one
+/// written by hand) is listed under its id.
+fn read_all(data: &GameData) -> Vec<(Entry, Profile)> {
+    let mut all = Vec::new();
+    for id in list_config(PROFILES_DIR) {
+        if !book::is_valid_id(&id) {
+            warn!("Ignoring {PROFILES_DIR}/{id}.ron: not a Profile id (a-z, 0-9 and -)");
+            continue;
+        }
+        let Some(profile) = read_profile(&id, data) else {
+            continue;
+        };
+        let name = book::clean_name(&profile.name).unwrap_or_else(|| id.clone());
+        let profile = profile.named(&name);
+        all.push((Entry { id, name }, profile));
+    }
+    all.sort_by_cached_key(|(entry, _)| book::order_key(entry));
+    all
+}
+
+/// Saves `profile` as a new file for a Profile called `name` and lists it. `None` when the file
+/// can't be written.
+fn add_profile(entries: &mut Vec<Entry>, name: String, profile: &Profile) -> Option<Entry> {
+    let id = book::new_id(&name, |id| {
+        entries.iter().any(|entry| entry.id == id) || config_exists(&profile_file(id))
+    });
+    if !write_profile(&id, profile) {
+        return None;
+    }
+    let entry = Entry { id, name };
+    entries.push(entry.clone());
+    book::sort(entries);
+    Some(entry)
+}
+
+/// The first Profile of an install from before several Profiles: the old `profile.ron` (when
+/// it reads) or a fresh one that starts from the old Settings' Loadout choice, named `name`.
+/// The old file is removed once the new one is written.
+fn first_profile(
+    data: &GameData,
+    settings: &Settings,
+    entries: &mut Vec<Entry>,
+    name: String,
+    old_file: bool,
+) -> (Option<String>, Profile) {
+    let old = old_file
+        .then(|| load_config::<Profile>(OLD_PROFILE_FILE))
+        .flatten();
+    let migrated = old.is_some();
+    let profile = old
+        .map_or_else(
+            || Profile::fresh(data, settings.loadout),
+            |old| old.validated(data),
+        )
+        .named(&name);
+    let Some(entry) = add_profile(entries, name, &profile) else {
+        return (None, profile);
+    };
+    info!("Profile: created \"{}\" ({})", entry.name, entry.id);
+    if migrated {
+        info!("Profile: migrated {OLD_PROFILE_FILE}");
+        remove_config(OLD_PROFILE_FILE);
+    }
+    (Some(entry.id), profile)
+}
+
+/// Reads the Profiles and settles which is active: the remembered one, a first one made from
+/// an older install, one for a start that skips the menus, or none (the menu asks). `cli_name`
+/// (`--name`) picks or creates the Profile of that name.
+fn boot(data: &GameData, settings: &Settings, cli_name: Option<&str>, no_menu: bool) -> Booted {
+    let all = read_all(data);
+    let mut entries: Vec<Entry> = all.iter().map(|(entry, _)| entry.clone()).collect();
+    let wanted = cli_name.and_then(book::clean_name);
+    let suggestion = wanted.clone().unwrap_or_else(suggested_name);
+    let none = || (None, Profile::fresh(data, 0));
+    let (mut active, mut profile) = match book::startup(
+        &entries,
+        settings.active_profile.as_deref(),
+        config_exists(OLD_PROFILE_FILE),
+        &settings.legacy_name,
+        &suggestion,
+    ) {
+        Startup::Use { active } => all
+            .into_iter()
+            .find(|(entry, _)| entry.id == active)
+            .map_or_else(none, |(entry, profile)| (Some(entry.id), profile)),
+        Startup::Create { name, old_file } => {
+            first_profile(data, settings, &mut entries, name, old_file)
+        }
+        Startup::AskName if no_menu => {
+            first_profile(data, settings, &mut entries, suggestion, false)
+        }
+        Startup::AskName => none(),
+    };
+    if let Some(wanted) = wanted {
+        match book::find_by_name(&entries, &wanted).cloned() {
+            Some(entry) if active.as_deref() == Some(entry.id.as_str()) => {}
+            Some(entry) => {
+                if let Some(found) = read_profile(&entry.id, data) {
+                    active = Some(entry.id);
+                    profile = found.named(&entry.name);
+                }
+            }
+            None if book::has_room(&entries) => {
+                let fresh = Profile::fresh(data, 0).named(&wanted);
+                if let Some(entry) = add_profile(&mut entries, wanted, &fresh) {
+                    active = Some(entry.id);
+                    profile = fresh;
+                }
+            }
+            None => warn!("--name {wanted}: no such profile and the book is full"),
+        }
+    }
+    Booted {
+        entries,
+        active,
+        profile,
+    }
+}
+
+/// The name suggested for a new Profile: the OS user's, else `Player`.
+pub fn suggested_name() -> String {
+    ["USERNAME", "USER"]
+        .iter()
+        .filter_map(|var| std::env::var(var).ok())
+        .find_map(|user| book::clean_name(&user))
+        .unwrap_or_else(|| book::DEFAULT_NAME.to_owned())
+}
+
+/// Saves the active Profile to its file.
+fn save_profile(profile: Res<Profile>, settings: Res<Settings>) {
+    if let Some(id) = &settings.active_profile {
+        write_profile(id, &profile);
+    }
 }
 
 #[cfg(test)]
@@ -418,6 +747,57 @@ mod tests {
         assert_ne!(without, text, "the field was written");
         let back: Profile = ron::from_str(&without).unwrap();
         assert!(back.fire_modes.is_empty());
+    }
+
+    #[test]
+    fn the_old_single_profile_file_becomes_the_first_profile_keeping_everything() {
+        let data = GameData::load();
+        let mut old = Profile::fresh(&data, 0);
+        old.xp = 4000;
+        old.chosen = LoadoutChoice::Custom(1);
+        old.custom[1].name = "Keeper".into();
+        old.weapons.insert(
+            WeaponId::Smg,
+            WeaponRecord {
+                kills: 3,
+                headshots: 1,
+                xp: 4,
+            },
+        );
+        old.fire_modes.insert(WeaponId::Smg, FireMode::Auto);
+        // What the single-Profile build wrote: the same file without a name.
+        let text = ron::ser::to_string_pretty(&old, ron::ser::PrettyConfig::default()).unwrap();
+        let nameless = text.replacen("    name: \"\",\n", "", 1);
+        assert_ne!(nameless, text, "the name was written");
+
+        let loaded: Profile = ron::from_str(&nameless).unwrap();
+        assert_eq!(loaded.name, "");
+        let first = loaded.validated(&data).named("Mac");
+        assert_eq!(first.name, "Mac");
+        assert_eq!(
+            Profile {
+                name: String::new(),
+                ..first.clone()
+            },
+            old
+        );
+        assert_eq!(first.loadout(&data).name, "Keeper");
+        // The migrated file keeps the name from then on.
+        let saved = ron::ser::to_string_pretty(&first, ron::ser::PrettyConfig::default()).unwrap();
+        assert_eq!(ron::from_str::<Profile>(&saved).unwrap().name, "Mac");
+    }
+
+    #[test]
+    fn a_pick_10_era_file_migrates_into_a_named_profile_with_its_xp_and_classes() {
+        let data = GameData::load();
+        let first = ron::from_str::<Profile>(LEGACY)
+            .unwrap()
+            .validated(&data)
+            .named("Mac");
+        assert_eq!(first.name, "Mac");
+        assert_eq!(first.xp, 4000);
+        assert_eq!(first.custom[0].name, "Old Rifle");
+        assert_eq!(first.chosen, LoadoutChoice::Custom(0));
     }
 
     /// A profile.ron as the build before Pick 10 wrote it.

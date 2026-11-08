@@ -14,6 +14,7 @@ use super::{client, server};
 use crate::cli::Mode;
 use crate::flow::{AppState, ConnectionError, FlowCommand, MenuScreen, Settings};
 use crate::gear::AmmoPack;
+use crate::profile::Profile;
 use crate::rotation::ServerConfig;
 use crate::shared::MatchState;
 
@@ -43,6 +44,7 @@ fn apply_flow_commands(
     mut flow: MessageReader<FlowCommand>,
     mode: Res<Mode>,
     settings: Res<Settings>,
+    profile: Res<Profile>,
     config: Res<ServerConfig>,
     clients: LiveClients,
     servers: LiveServers,
@@ -65,12 +67,12 @@ fn apply_flow_commands(
                     continue;
                 }
                 let server_name = match settings.host.server_name.trim() {
-                    "" => settings.name.clone(),
+                    "" => profile.name.clone(),
                     name => name.to_owned(),
                 };
                 info!(
                     "Hosting \"{server_name}\" on port {port} as \"{}\"",
-                    settings.name
+                    profile.name
                 );
                 let server =
                     server::start_server(&mut commands, port, server_name, config.max_players);

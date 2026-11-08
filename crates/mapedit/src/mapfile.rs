@@ -47,13 +47,13 @@ pub fn dir_to_game(d: DVec3) -> DVec3 {
     DVec3::new(-d.y, d.z, -d.x)
 }
 
-fn round_to(value: f64, scale: f64) -> f64 {
+pub(crate) fn round_to(value: f64, scale: f64) -> f64 {
     let rounded = (value * scale).round() / scale;
     // No negative zero in the text.
     if rounded == 0.0 { 0.0 } else { rounded }
 }
 
-fn round_vec(v: DVec3, scale: f64) -> DVec3 {
+pub(crate) fn round_vec(v: DVec3, scale: f64) -> DVec3 {
     DVec3::new(
         round_to(v.x, scale),
         round_to(v.y, scale),
@@ -441,12 +441,19 @@ impl Brush {
     /// distance in metres per unit of `direction` and the outward surface normal (game space).
     /// `None` when it misses, or starts inside.
     pub fn ray_hit(&self, origin: DVec3, direction: DVec3) -> Option<(f64, DVec3)> {
+        self.ray_face(origin, direction)
+            .map(|(distance, normal, _)| (distance, normal))
+    }
+
+    /// [`Self::ray_hit`] with the index (into `faces`) of the face the ray enters through.
+    pub fn ray_face(&self, origin: DVec3, direction: DVec3) -> Option<(f64, DVec3, usize)> {
         let start = game_to_tb(origin);
         let dir = dir_to_tb(direction);
         let (mut enter, mut exit) = (f64::MIN, f64::MAX);
         let mut normal = DVec3::ZERO;
+        let mut entered = 0;
         let mut planes = 0;
-        for face in &self.faces {
+        for (index, face) in self.faces.iter().enumerate() {
             let Some((n, d)) = face.plane() else {
                 continue;
             };
@@ -463,6 +470,7 @@ impl Brush {
                     if t > enter {
                         enter = t;
                         normal = n;
+                        entered = index;
                     }
                 } else if t < exit {
                     exit = t;
@@ -474,11 +482,11 @@ impl Brush {
         }
         // `dir` is `direction` permuted, so a TrenchBroom-space `t` in units of `dir` counts
         // inches here: scale to metres per unit of `direction`.
-        Some((enter / UNITS_PER_METRE, dir_to_game(normal)))
+        Some((enter / UNITS_PER_METRE, dir_to_game(normal), entered))
     }
 
     /// Rounds every coordinate to 5 places (a quarter micrometre), so moves leave clean numbers.
-    fn tidy(&mut self) {
+    pub(crate) fn tidy(&mut self) {
         for face in &mut self.faces {
             face.points = face.points.map(|p| round_vec(p, 1e5));
         }
@@ -625,7 +633,7 @@ impl MapEntity {
 }
 
 /// A number as the file writes it: the shortest text that reads back the same.
-fn format_number(value: f64) -> String {
+pub(crate) fn format_number(value: f64) -> String {
     let value = if value == 0.0 { 0.0 } else { value };
     format!("{value}")
 }
@@ -912,31 +920,6 @@ impl MapFile {
                     return Err("a point entity has no texture".into());
                 }
                 e.brushes.iter_mut().for_each(|b| b.set_surface(surface));
-            }
-        }
-        Ok(())
-    }
-
-    /// Deletes `item`. The worldspawn itself stays.
-    pub fn delete(&mut self, item: Item) -> Result<(), String> {
-        match item {
-            Item::Brush { entity, brush } => {
-                let brushes = &mut self
-                    .entities
-                    .get_mut(entity)
-                    .ok_or_else(|| format!("no {item}"))?
-                    .brushes;
-                if brush >= brushes.len() {
-                    return Err(format!("no {item}"));
-                }
-                brushes.remove(brush);
-            }
-            Item::Entity(0) => return Err("the worldspawn cannot be deleted".into()),
-            Item::Entity(entity) => {
-                if entity >= self.entities.len() {
-                    return Err(format!("no {item}"));
-                }
-                self.entities.remove(entity);
             }
         }
         Ok(())
@@ -1593,11 +1576,11 @@ mod tests {
             map.bounds(copy, &props).unwrap().0,
             DVec3::new(3.0, 0.0, -2.0)
         ));
-        map.delete(wall).unwrap();
+        map.delete_many(&[wall]).unwrap();
         assert_eq!(map.entities[0].brushes.len(), 1);
-        assert!(map.delete(Item::Entity(0)).is_err());
-        assert!(map.delete(Item::Entity(9)).is_err());
-        map.delete(spawn).unwrap();
+        assert!(map.delete_many(&[Item::Entity(0)]).is_err());
+        assert!(map.delete_many(&[Item::Entity(9)]).is_err());
+        map.delete_many(&[spawn]).unwrap();
         assert_eq!(map.entities.len(), 1);
     }
 
