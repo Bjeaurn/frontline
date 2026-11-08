@@ -8,6 +8,7 @@
 //! (`bevy::ui_widgets::Activate`; also fires on Enter/Space when the button has focus).
 
 use bevy::asset::RenderAssetUsages;
+use bevy::input_focus::tab_navigation::TabIndex;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -378,6 +379,10 @@ fn dim_disabled_buttons(
 pub fn text_field(fonts: &UiFonts, text: &str, max_characters: usize) -> impl Bundle {
     (
         TextInput,
+        // Bevy's click-to-focus (`PointerFocusPlugin`) only focuses what has a `TabIndex`: without
+        // it a click on the field did nothing and it could not be typed into (name, server name,
+        // rule set name, address, CoD4 path). The tab order itself is not used.
+        TabIndex(0),
         EditableText {
             max_characters: Some(max_characters),
             ..EditableText::new(text)
