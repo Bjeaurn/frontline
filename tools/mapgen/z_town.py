@@ -51,17 +51,23 @@ PERIMETER = 14.0
 # ---- helpers ------------------------------------------------------------------------------
 
 
-def terrace(L: Level, x0: float, x1: float, z0: float, z1: float, y0: float, y1: float) -> None:
-    """A solid massing block, brick with a plaster band at each storey line (a stack of blocks
-    with equal footprints, so no two faces overlap)."""
+# Facade (wall, band) surfaces of the massing blocks: mostly brick, some plaster and concrete, so a
+# street is not one red wall. A block's pick follows its west edge, so a regenerated Map is stable and a building's floors match.
+FACADES = [("brick", "plaster"), ("brick", "concrete"), ("plaster", "concrete"), ("brick", "plaster"), ("concrete", "plaster"), ("brick", "concrete")]
+
+
+def terrace(L: Level, x0: float, x1: float, z0: float, z1: float, y0: float, y1: float, brick: bool = False) -> None:
+    """A solid massing block, a facade surface with a band of another at each storey line (a stack of
+    blocks with equal footprints, so no two faces overlap). `brick` forces brick walls (the church)."""
+    wall, band = ("brick", "plaster") if brick else FACADES[int(abs(x0) * 1.7) % len(FACADES)]
     y = y0
     while y < y1 - 1e-9:
         wall_top = min(y + WT, y1)
-        L.block("brick", x0, x1, y, wall_top, z0, z1)
+        L.block(wall, x0, x1, y, wall_top, z0, z1)
         y = wall_top
         if y < y1 - 1e-9:
             band_top = min(y + SLAB, y1)
-            L.block("plaster", x0, x1, y, band_top, z0, z1)
+            L.block(band, x0, x1, y, band_top, z0, z1)
             y = band_top
 
 
@@ -319,9 +325,9 @@ def church(L: Level) -> None:
         east=[door(19.0, 22.0), window(15.5, 17.1)],
     )
     # The corner block north of the entrance hall, and the solid block between the halls.
-    terrace(L, -6.0, 8.0, -2.0, 1.0, 0.0, h)
-    terrace(L, -6.0, 24.0, 11.0, 14.0, 0.0, h)
-    terrace(L, 16.0, 24.0, 28.0, 31.0, 0.0, 7.2)  # the sacristy annex, closing the hall's south-east corner
+    terrace(L, -6.0, 8.0, -2.0, 1.0, 0.0, h, brick=True)
+    terrace(L, -6.0, 24.0, 11.0, 14.0, 0.0, h, brick=True)
+    terrace(L, 16.0, 24.0, 28.0, 31.0, 0.0, 7.2, brick=True)  # the sacristy annex, closing the hall's south-east corner
     for x0, x1, z0, z1 in ((-6.0, 24.0, -2.0, 14.0), (-6.0, 20.0, 14.0, 28.0)):
         L.block("concrete", x0, x1, h, CHURCH_ROOF, z0, z1)
     # Covered walks (a green metal canopy on columns): north (x -6..24, z -4..-2) and west

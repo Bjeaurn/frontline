@@ -102,3 +102,7 @@ Findings: church fine but its lane gap should close and the south hall (windows 
 Done: lane filled and roofed (one solid block, no lane); south hall x -6..20, z 14..28 with windows on the front lane, south lane and east path, plus a sacristy annex closing the south-east corner (it also keeps the Alpha-Bravo sightlines closed); walks 2 m wide in green metal, doors into them removed (the west walk is the entrance canopy, climb crates moved to x -8.6); the lane arch is now 6 m wide between piers; Raadhuisstraat widened to 11 m with arcaded shop fronts, two enterable shops, trees, planters, benches and a kiosk; one market stall removed; new `grass` surface (CC0 Grass001) for lawns, hedges and tree foliage; `z_town` now uses `dawn_cold`, `z_town_night` is the same map with `night_ops`.
 
 Still open: HQ, S&D and TDM playtests; whether `dawn_cold` reads well (the bricks go strongly orange, shade is dark); Mac frame rate.
+
+## Playtest 2 (Windows): look pass
+
+Feedback: audio positional/weak, a rifle missing, name/profile, maps could look more like CoD4/MW2 without FPS cost. Look step 1 (no new assets, no FPS cost): facades vary per building (brick, plaster, concrete with contrasting bands; the church stays brick), brick tint desaturated, `overcast_urban` saturation 0.7, `dawn_cold` readable in shade (ambient 520, exposure 0, saturation 0.66). Next: more props from the asset packs, then new character models.

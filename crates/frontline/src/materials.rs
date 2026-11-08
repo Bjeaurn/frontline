@@ -116,7 +116,7 @@ impl SurfaceKind {
             SurfaceKind::Corrugated => Color::srgb(0.72, 0.40, 0.28),
             SurfaceKind::Wood => Color::srgb(1.0, 0.94, 0.86),
             SurfaceKind::Ground => Color::srgb(0.96, 0.93, 0.88),
-            SurfaceKind::Brick => Color::srgb(0.84, 0.72, 0.66),
+            SurfaceKind::Brick => Color::srgb(0.76, 0.69, 0.65),
             SurfaceKind::Grass => Color::srgb(0.92, 0.98, 0.86),
         }
     }
