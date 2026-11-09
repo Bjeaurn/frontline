@@ -309,6 +309,18 @@ fn clear(spatial: &SpatialQuery, filter: &SpatialQueryFilter, from: Vec3, to: Ve
     })
 }
 
+/// A cloud is looked for this far above where it burst and up to `CLOUD_DROP` below that.
+const CLOUD_RAISE: f32 = 0.2;
+const CLOUD_DROP: f32 = 8.0;
+
+/// Where a cloud that burst at `at` settles: on the floor `floor_distance` below the point
+/// `CLOUD_RAISE` above it (the ray's hit distance), else where it burst.
+fn settled_cloud(at: Vec3, floor_distance: Option<f32>) -> Vec3 {
+    floor_distance.map_or(at, |distance| {
+        Vec3::new(at.x, at.y + CLOUD_RAISE - distance, at.z)
+    })
+}
+
 /// Applies what each Grenade that went off does, and tells every client where it went off.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn apply_detonations(
@@ -331,7 +343,17 @@ pub(super) fn apply_detonations(
     let filter = SpatialQueryFilter::from_mask(GameLayer::World);
     for detonation in detonations.read() {
         let tuning = data.grenade(detonation.kind);
-        let centre = detonation.position;
+        // Smoke and gas settle on the floor under where they burst, whatever height a timed fuse
+        // caught them at: a cloud hanging in the air looks wrong.
+        let centre = if tuning.effect.makes_cloud() {
+            let above = detonation.position + Vec3::Y * CLOUD_RAISE;
+            let floor = spatial
+                .cast_ray(above, Dir3::NEG_Y, CLOUD_DROP, true, &filter)
+                .map(|hit| hit.distance);
+            settled_cloud(detonation.position, floor)
+        } else {
+            detonation.position
+        };
         let (radius, secs) = match tuning.effect {
             Effect::Blast { radius, .. }
             | Effect::Flash { radius, .. }
@@ -433,5 +455,21 @@ pub(super) fn apply_detonations(
                 Effect::Smoke { .. } | Effect::Gas { .. } => {}
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cloud_settles_on_the_floor_under_it_or_stays_where_it_is() {
+        let at = Vec3::new(3.0, 2.5, -4.0);
+        // The ray starts a little above and finds the floor 2.7 m down: the floor is at y 0.
+        let settled = settled_cloud(at, Some(2.7));
+        assert!((settled.y - 0.0).abs() < 1e-5, "{settled}");
+        assert_eq!((settled.x, settled.z), (3.0, -4.0));
+        // Nothing below within reach (over a drop, out of the map): where it burst.
+        assert_eq!(settled_cloud(at, None), at);
     }
 }

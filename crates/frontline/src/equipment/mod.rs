@@ -548,6 +548,40 @@ pub fn stun_exposure(radius: f32, distance: f32, in_sight: bool) -> f32 {
     nearness(radius, distance) * if in_sight { 1.0 } else { STUN_THROUGH_WALLS }
 }
 
+/// What a blast does to the local player's senses, from how far it went off.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BlastFelt {
+    /// How hard the view is jolted, 0 to 1: well beyond the damage radius.
+    pub shake: f32,
+    /// How dazed they are, 0 to 1: a white haze and ringing ears, only when very close.
+    pub daze: f32,
+}
+
+/// What a blast with damage `radius` going off `distance` from the eye does to the senses: the
+/// ground shake reaches 1.8 times as far as the damage; the daze is for the inner 70% of it.
+pub fn blast_felt(radius: f32, distance: f32) -> BlastFelt {
+    BlastFelt {
+        shake: nearness(radius * 1.8, distance),
+        daze: nearness(radius * 0.7, distance),
+    }
+}
+
+/// Speed (m/s) below which a Grenade is rolling, not bouncing: it makes no sound.
+const BOUNCE_MIN_SPEED: f32 = 3.0;
+
+/// Whether a Grenade that moved with velocity `before` and now moves with `after` just hit
+/// something, and how hard (0 to 1): it lost a third of its speed or turned more than about 60
+/// degrees. A Grenade rolling slowly, or still falling, is not bouncing.
+pub fn bounce_strength(before: Vec3, after: Vec3) -> Option<f32> {
+    let speed = before.length();
+    if speed < BOUNCE_MIN_SPEED {
+        return None;
+    }
+    let turned = after.dot(before) < 0.5 * speed * after.length();
+    let slowed = after.length() < 0.67 * speed;
+    (turned || slowed).then(|| (speed / 25.0).clamp(0.15, 1.0))
+}
+
 /// Seconds a smoke cloud takes to billow out, and to thin out at the end.
 pub const SMOKE_FADE_IN_SECS: f32 = 1.2;
 pub const SMOKE_FADE_OUT_SECS: f32 = 3.0;
@@ -1641,5 +1675,37 @@ mod tests {
                 "{kind:?} does no damage"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod feel_tests {
+    use super::*;
+
+    #[test]
+    fn a_blast_is_felt_well_beyond_where_it_hurts_and_rings_only_close_by() {
+        let radius = 8.0;
+        let at = |distance| blast_felt(radius, distance);
+        let (near, mid, far) = (at(1.0), at(8.0), at(20.0));
+        assert!(
+            near.shake > mid.shake && mid.shake > 0.0,
+            "{near:?} {mid:?}"
+        );
+        assert!(near.daze > 0.8, "right next to it you are dazed: {near:?}");
+        assert_eq!(mid.daze, 0.0, "daze ends within the lethal radius: {mid:?}");
+        assert_eq!(far, BlastFelt::default(), "far away nothing is felt");
+    }
+
+    #[test]
+    fn a_hard_stop_or_a_turn_is_a_bounce_a_steady_fall_or_a_slow_roll_is_not() {
+        let falling = Vec3::new(4.0, -10.0, 0.0);
+        // Hits the floor and goes back up slower: a bounce, harder the faster it came in.
+        let hard = bounce_strength(falling, Vec3::new(3.0, 3.0, 0.0)).expect("bounce");
+        let soft = bounce_strength(falling * 0.3, Vec3::new(1.0, 1.0, 0.0));
+        assert!(soft.is_none_or(|soft| soft < hard));
+        // Speeding up while falling is not one.
+        assert_eq!(bounce_strength(falling, falling * 1.1), None);
+        // Rolling slowly never clinks.
+        assert_eq!(bounce_strength(Vec3::X, Vec3::NEG_X), None);
     }
 }

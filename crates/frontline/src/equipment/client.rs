@@ -13,8 +13,9 @@ use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
 use super::{
-    Carried, Effect, Grenade, KeyState, PouchSlot, ReadiedThrow, ThrowFeed, cloud_exposure,
-    cough_dip, flash_alpha, linger, slow_scale, stun_shake, throw_request, tunnel_inner_percent,
+    Carried, Effect, Grenade, KeyState, PouchSlot, ReadiedThrow, ThrowFeed, blast_felt,
+    bounce_strength, cloud_exposure, cough_dip, flash_alpha, linger, slow_scale, stun_shake,
+    throw_request, tunnel_inner_percent,
 };
 use crate::assets::EMBEDDED_ROOT;
 use crate::atmosphere::ActiveLook;
@@ -55,6 +56,7 @@ impl Plugin for EquipmentClientPlugin {
                 (
                     throw,
                     follow_grenades,
+                    bounce_thuds,
                     blink_mine_lights,
                     on_detonations,
                     animate_bursts,
@@ -183,6 +185,11 @@ fn show_grenade(
     commands.entity(add.entity).insert((
         Transform::from_translation(grenade.position),
         Visibility::default(),
+        Flight {
+            last: grenade.position,
+            at: 0.0,
+            velocity: Vec3::ZERO,
+        },
         children![(
             WorldAssetRoot(scene),
             // The model's middle on the Grenade's position.
@@ -227,6 +234,49 @@ fn follow_grenades(time: Res<Time>, mut grenades: Query<(&Grenade, &mut Transfor
     let blend = 1.0 - (-40.0 * time.delta_secs()).exp();
     for (grenade, mut transform) in &mut grenades {
         transform.translation = transform.translation.lerp(grenade.position, blend);
+    }
+}
+
+/// What a replicated Grenade did last: where it was and when, and the velocity that gave, to
+/// tell a bounce from a flight.
+#[derive(Component)]
+struct Flight {
+    last: Vec3,
+    at: f32,
+    velocity: Vec3,
+}
+
+/// A thud where a Grenade hits something: a body that lost a third of its speed or turned.
+/// Heavier ones fall harder and bounce less (`data/equipment.ron`), so each is a dull knock.
+fn bounce_thuds(
+    time: Res<Time>,
+    assets: Res<GrenadeAssets>,
+    mut rng: ResMut<WeaponRng>,
+    mut cue: RearCue,
+    mut grenades: Query<(&Grenade, &mut Flight)>,
+    mut commands: Commands,
+) {
+    let now = time.elapsed_secs();
+    for (grenade, mut flight) in &mut grenades {
+        if grenade.position == flight.last {
+            continue;
+        }
+        let dt = now - flight.at;
+        if dt > 1e-4 {
+            let velocity = (grenade.position - flight.last) / dt;
+            if let Some(strength) = bounce_strength(flight.velocity, velocity) {
+                cue.play(
+                    &mut commands,
+                    &assets.boom,
+                    0.25 + 0.5 * strength,
+                    0.85 + rng.signed() * 0.08,
+                    grenade.position,
+                );
+            }
+            flight.velocity = velocity;
+        }
+        flight.last = grenade.position;
+        flight.at = now;
     }
 }
 
@@ -295,6 +345,9 @@ fn on_detonations(
     mut rng: ResMut<WeaponRng>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut cue: RearCue,
+    eye: Query<&GlobalTransform, With<EyeCamera>>,
+    mut status: ResMut<StatusState>,
+    mut flash: ResMut<FlashState>,
     mut commands: Commands,
 ) {
     let detail = Detail::of(&video.0.quality);
@@ -302,7 +355,7 @@ fn on_detonations(
         let at = blast.position;
         match data.grenade(blast.kind).effect {
             Effect::Blast { .. } => {
-                let radius = blast.radius * 0.4;
+                let radius = blast.radius * 0.6;
                 spawn_fireball(
                     &mut commands,
                     &mut materials,
@@ -323,13 +376,35 @@ fn on_detonations(
                     Transform::from_translation(at + Vec3::Y * 0.5),
                     PointLight {
                         intensity: BLAST_LIGHT,
-                        range: radius * 4.0,
+                        range: radius * 5.0,
                         color: Color::srgb(1.0, 0.7, 0.3),
                         ..default()
                     },
                 ));
-                cue.play(&mut commands, &assets.boom, 3.0, 0.45, at);
-                cue.play(&mut commands, &assets.bang, 1.8, 0.5, at);
+                cue.play(&mut commands, &assets.boom, 3.6, 0.38, at);
+                cue.play(&mut commands, &assets.bang, 2.2, 0.42, at);
+                // The ground jolts under anyone near, and close by it rings in the ears and
+                // whites the view: the blast is felt, not only seen.
+                if let Ok(eye) = eye.single() {
+                    let felt = blast_felt(blast.radius, eye.translation().distance(at));
+                    status.rattle(felt.shake);
+                    if felt.daze > 0.0 {
+                        let secs = 1.5 + 2.5 * felt.daze;
+                        if status.daze(secs, 0.4 + 0.6 * felt.daze, 0.25 * felt.daze) {
+                            commands.spawn((
+                                Name::new("Ringing"),
+                                AudioPlayer::new(assets.ring.clone()),
+                                PlaybackSettings::DESPAWN
+                                    .with_volume(Volume::Linear(STUN_RING_VOLUME * felt.daze)),
+                            ));
+                        }
+                        let deaf = 2.0 * felt.daze;
+                        if deaf > flash.deaf_left {
+                            flash.deaf_left = deaf;
+                            flash.deaf_total = deaf;
+                        }
+                    }
+                }
             }
             Effect::Flash { .. } => {
                 spawn_flash_pop(&mut commands, &mut materials, &particles, &mut rng, at, 1.0);
@@ -478,9 +553,27 @@ fn spawn_fireball(
             ..default()
         },
     );
+    // A second, wider shock ring that travels on after the first.
+    puff(
+        commands,
+        PuffSpec {
+            at: at + Vec3::Y * 0.3,
+            start_size: 0.6,
+            end_size: radius * 4.2,
+            grow_secs: 0.5,
+            life: 0.5,
+            shape: Shape::Ring,
+            color: LinearRgba::rgb(1.0, 0.9, 0.8),
+            alpha: 0.2,
+            additive: true,
+            drag: 0.0,
+            fade: Fade::Out { in_secs: 0.03 },
+            ..default()
+        },
+    );
     // The fire itself: orange blended puffs (additive ones wash out to white), a hotter core
     // inside them.
-    for _ in 0..detail.count(5) {
+    for _ in 0..detail.count(7) {
         let offset = random_in_ball(rng) * radius * 0.3;
         puff(
             commands,
@@ -500,7 +593,7 @@ fn spawn_fireball(
             },
         );
     }
-    for _ in 0..detail.count(3) {
+    for _ in 0..detail.count(5) {
         let offset = random_in_ball(rng) * radius * 0.2;
         puff(
             commands,
@@ -520,7 +613,7 @@ fn spawn_fireball(
             },
         );
     }
-    for _ in 0..detail.count(5) {
+    for _ in 0..detail.count(7) {
         let drift = random_in_ball(rng) * 1.6 + Vec3::Y * (1.6 + rng.next() * 1.8);
         puff(
             commands,
@@ -542,8 +635,8 @@ fn spawn_fireball(
             },
         );
     }
-    for i in 0..detail.count(6) {
-        let angle = i as f32 / detail.count(6) as f32 * std::f32::consts::TAU + rng.next();
+    for i in 0..detail.count(8) {
+        let angle = i as f32 / detail.count(8) as f32 * std::f32::consts::TAU + rng.next();
         let outward = Vec3::new(angle.cos(), 0.0, angle.sin());
         puff(
             commands,
@@ -563,7 +656,7 @@ fn spawn_fireball(
         );
     }
     if detail > Detail::Low {
-        for _ in 0..detail.count(12) {
+        for _ in 0..detail.count(18) {
             let mut direction = random_unit(rng);
             direction.y = direction.y.abs() * 0.8 + 0.2;
             spawn_spark(
@@ -648,8 +741,9 @@ fn spawn_flash_pop(
 /// A cloud of puffs (Smoke or Tear Gas): puffs of `tint` that billow out to fill a ball of
 /// `radius`, hold for `secs` (as `smoke_density` says) and thin out again. Smoke's, at `alpha`
 /// 1, are so many, wide and opaque in the middle that you cannot see a target through the
-/// cloud; the puffs rest on the ground and reach about a puff's height up, over a standing
-/// head.
+/// cloud. Two thirds of the puffs are wide and low and rest on the floor (half a puff up, so a
+/// flat quad doesn't cut a hard line through it); the rest rise a little higher over a standing
+/// head. `at` is on the floor: the server settles clouds there.
 #[allow(clippy::too_many_arguments)]
 fn spawn_smoke_puffs(
     commands: &mut Commands,
@@ -663,12 +757,22 @@ fn spawn_smoke_puffs(
     tint: LinearRgba,
     alpha: f32,
 ) {
-    for _ in 0..detail.count(SMOKE_PUFFS) {
-        let end_size = radius * (1.0 + rng.next() * 0.5);
-        let mut target = random_in_ball(rng) * radius * 0.6;
-        // A puff is a flat quad: rest it on the ground (half its size up) so it doesn't cut a
-        // hard line through the floor.
-        target.y = end_size * (0.5 + rng.next() * 0.25);
+    for i in 0..detail.count(SMOKE_PUFFS) {
+        let low = i % 3 != 0;
+        let end_size = radius
+            * if low {
+                0.75 + rng.next() * 0.35
+            } else {
+                0.55 + rng.next() * 0.35
+            };
+        let spread = if low { 0.95 } else { 0.5 };
+        let mut target = random_in_ball(rng) * radius * spread;
+        target.y = end_size
+            * if low {
+                0.3 + rng.next() * 0.1
+            } else {
+                0.45 + rng.next() * 0.2
+            };
         let shade = 0.85 + rng.next() * 0.3;
         spawn_puff(
             commands,
@@ -890,11 +994,43 @@ struct StatusState {
     stun_total: f32,
     stun_strength: f32,
     stun_slow: f32,
+    /// Seconds of ground shake left from a blast nearby, the seconds it began with and how hard
+    /// it jolts the view at the start.
+    rumble_left: f32,
+    rumble_total: f32,
+    rumble_strength: f32,
     /// How choked the player is (0 to 1), the share of speed the thickest cloud around them
     /// takes at full strength, and the seconds spent choking (the cough clock).
     gas: f32,
     gas_slow: f32,
     gas_clock: f32,
+}
+
+impl StatusState {
+    /// A blast jolted the ground: `shake` (0 to 1) shakes the view for a moment, if harder than
+    /// what still shakes it.
+    fn rattle(&mut self, shake: f32) {
+        if shake > 0.0
+            && shake > self.rumble_strength * (self.rumble_left / self.rumble_total.max(0.01))
+        {
+            self.rumble_total = 0.5 + 0.7 * shake;
+            self.rumble_left = self.rumble_total;
+            self.rumble_strength = shake;
+        }
+    }
+
+    /// A blast dazed the player: the haze and shake of a stun for `secs` at `strength`, slowing
+    /// by `slow`. True when it is new or stronger than what is left (so the ringing starts).
+    fn daze(&mut self, secs: f32, strength: f32, slow: f32) -> bool {
+        if secs <= self.stun_left {
+            return false;
+        }
+        self.stun_left = secs;
+        self.stun_total = secs;
+        self.stun_strength = strength;
+        self.stun_slow = slow;
+        true
+    }
 }
 
 fn on_stunned(
@@ -954,7 +1090,13 @@ fn update_status(
     }
     let dt = time.delta_secs();
     state.stun_left = (state.stun_left - dt).max(0.0);
+    state.rumble_left = (state.rumble_left - dt).max(0.0);
     let stun = flash_alpha(state.stun_left, state.stun_total);
+    let rumble = if state.rumble_total > 0.0 {
+        state.rumble_left / state.rumble_total
+    } else {
+        0.0
+    };
 
     // The thickest cloud the eye is in sets how much gas there is to breathe.
     let (exposure, slow) = eye.single().map_or((0.0, 0.0), |eye| {
@@ -991,6 +1133,10 @@ fn update_status(
         modifiers.status_move =
             slow_scale(state.stun_slow, stun) * slow_scale(state.gas_slow, state.gas);
         modifiers.view_shake = stun_shake(time.elapsed_secs(), stun * state.stun_strength)
+            + stun_shake(
+                time.elapsed_secs() * 3.0,
+                rumble * rumble * state.rumble_strength,
+            )
             + Vec3::X * cough_dip(state.gas_clock, state.gas);
     }
     let sway = 0.85 + 0.15 * (time.elapsed_secs() * 4.0).sin();
