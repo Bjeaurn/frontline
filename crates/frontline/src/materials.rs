@@ -1,6 +1,8 @@
 //! The material library: one tileable PBR texture set (CC0, see `assets/textures/CREDITS.md`)
-//! per [`SurfaceKind`], each with one shared, tinted material that Map faces use (`maps`).
-//! Client/Host only; a Dedicated Server has no textures or materials.
+//! per [`SurfaceKind`], drawn with a tinted material that Map faces use (`maps`). A surface's
+//! textures load when the first Map that uses it does, and go with the last one, so a Map only
+//! pays for the surfaces on its walls. Client/Host only; a Dedicated Server has no textures or
+//! materials.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{
@@ -11,54 +13,125 @@ use bevy::render::render_resource::TextureFormat;
 
 use crate::assets::EMBEDDED_ROOT;
 
-/// What a surface is made of; picks its texture set.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum SurfaceKind {
-    Concrete,
-    Plaster,
-    /// Painted sheet metal.
-    Metal,
+/// Declares the surfaces: one line each with the folder under `assets/textures/`, the metres one
+/// repeat covers (horizontal, vertical), the image size in pixels and the tint multiplied into
+/// the colour texture (a muted palette that the Map looks then grade).
+macro_rules! surfaces {
+    ($(
+        $(#[$doc:meta])*
+        $variant:ident = $name:literal, tile ($u:literal, $v:literal), px ($w:literal, $h:literal),
+        tint ($r:literal, $g:literal, $b:literal);
+    )*) => {
+        /// What a surface is made of; picks its texture set.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub enum SurfaceKind {
+            $($(#[$doc])* $variant,)*
+        }
+
+        impl SurfaceKind {
+            /// In declaration order.
+            pub const ALL: &'static [SurfaceKind] = &[$(SurfaceKind::$variant,)*];
+
+            /// Canonical lowercase name; also the texture folder under `assets/textures/`.
+            pub const fn name(self) -> &'static str {
+                match self {
+                    $(SurfaceKind::$variant => $name,)*
+                }
+            }
+
+            /// Metres one repeat of the texture covers (horizontal, vertical). `tools/mapgen`
+            /// and MapEdit bake it into the faces' scale; `SURFACES` in `mapgen.py` must match
+            /// (a test compares them).
+            pub const fn tile(self) -> (f64, f64) {
+                match self {
+                    $(SurfaceKind::$variant => ($u, $v),)*
+                }
+            }
+
+            /// Size of the colour image in pixels.
+            pub const fn image_px(self) -> (u32, u32) {
+                match self {
+                    $(SurfaceKind::$variant => ($w, $h),)*
+                }
+            }
+
+            fn tint(self) -> Color {
+                match self {
+                    $(SurfaceKind::$variant => Color::srgb($r, $g, $b),)*
+                }
+            }
+        }
+    };
+}
+
+surfaces! {
+    Concrete = "concrete", tile (2.2, 1.1), px (1024, 512), tint (1.0, 0.99, 0.96);
+    /// Khaki painted plaster.
+    Plaster = "plaster", tile (2.0, 1.0), px (1024, 512), tint (0.90, 0.84, 0.72);
+    /// Painted sheet metal, olive drab.
+    Metal = "metal", tile (2.0, 2.0), px (1024, 1024), tint (0.50, 0.56, 0.46);
     /// Corrugated steel, e.g. shipping containers.
-    Corrugated,
+    Corrugated = "corrugated", tile (2.0, 2.0), px (1024, 1024), tint (0.72, 0.40, 0.28);
     /// Plywood, e.g. crates.
-    Wood,
-    /// Dirt and gravel.
-    Ground,
-    Brick,
+    Wood = "wood", tile (1.0, 1.0), px (1024, 1024), tint (1.0, 0.94, 0.86);
+    /// Dry stony earth.
+    Ground = "ground", tile (4.0, 4.0), px (1024, 1024), tint (0.96, 0.93, 0.88);
+    Brick = "brick", tile (2.4, 1.2), px (1024, 512), tint (0.76, 0.69, 0.65);
     /// Lawns, hedges and foliage.
-    Grass,
+    Grass = "grass", tile (3.0, 3.0), px (1024, 1024), tint (0.92, 0.98, 0.86);
+
+    // Walls: weathered paint over plaster, the brick showing through where it has come off.
+    PlasterYellow = "plaster_yellow", tile (2.0, 2.0), px (1024, 1024), tint (0.90, 0.88, 0.84);
+    PlasterOchre = "plaster_ochre", tile (2.0, 2.0), px (1024, 1024), tint (0.88, 0.84, 0.78);
+    PlasterBlue = "plaster_blue", tile (2.0, 2.0), px (1024, 1024), tint (0.95, 0.95, 0.94);
+    PlasterWhite = "plaster_white", tile (2.0, 2.0), px (1024, 1024), tint (0.96, 0.94, 0.90);
+    PlasterGreen = "plaster_green", tile (2.0, 2.0), px (1024, 1024), tint (0.96, 0.96, 0.92);
+    /// Old, dirty red brick with wide mortar.
+    BrickOld = "brick_old", tile (1.7, 1.7), px (1024, 1024), tint (0.92, 0.88, 0.84);
+    /// Perforated clay blocks: unfinished and cheap construction.
+    BrickHollow = "brick_hollow", tile (2.0, 2.0), px (1024, 1024), tint (0.86, 0.80, 0.74);
+    /// Sandstone blocks.
+    Stone = "stone", tile (2.2, 2.2), px (1024, 1024), tint (0.96, 0.94, 0.90);
+    /// Dark, stained, broken concrete.
+    ConcreteDamaged = "concrete_damaged", tile (3.0, 3.0), px (1024, 1024), tint (1.0, 0.99, 0.96);
+    /// Peeling blue paint on boards: doors, shutters, fences.
+    WoodPainted = "wood_painted", tile (1.5, 1.5), px (1024, 1024), tint (0.95, 0.95, 0.95);
+    /// Grey weathered horizontal boards.
+    WoodSiding = "wood_siding", tile (1.4, 1.4), px (1024, 1024), tint (1.0, 0.98, 0.94);
+
+    // Floors and ground.
+    Asphalt = "asphalt", tile (5.0, 5.0), px (1024, 1024), tint (1.0, 1.0, 1.0);
+    Sand = "sand", tile (3.5, 3.5), px (1024, 1024), tint (0.96, 0.93, 0.88);
+    Gravel = "gravel", tile (1.6, 1.6), px (1024, 1024), tint (0.92, 0.90, 0.86);
+    /// Grey concrete pavers.
+    Paving = "paving", tile (2.0, 2.0), px (1024, 1024), tint (0.76, 0.76, 0.74);
+    /// Clinker bricks laid as a street.
+    PavingBrick = "paving_brick", tile (1.3, 1.3), px (1024, 1024), tint (0.92, 0.90, 0.88);
+    /// Dirty white floor tiles.
+    Tiles = "tiles", tile (2.0, 2.0), px (1024, 1024), tint (0.90, 0.89, 0.86);
+    /// Dark, worn floorboards.
+    WoodFloor = "wood_floor", tile (1.9, 1.9), px (1024, 1024), tint (1.0, 0.97, 0.92);
+
+    // Roofs.
+    RoofTiles = "roof_tiles", tile (2.9, 2.9), px (1024, 1024), tint (0.90, 0.86, 0.82);
+    RoofSlate = "roof_slate", tile (2.9, 2.9), px (1024, 1024), tint (1.0, 1.0, 1.0);
+
+    // Metal.
+    /// Rusted steel plates.
+    MetalRust = "metal_rust", tile (1.6, 1.6), px (1024, 1024), tint (0.90, 0.88, 0.86);
+    /// Green paint flaking to rust: gates, doors, dumpsters.
+    MetalGreen = "metal_green", tile (2.0, 2.0), px (1024, 1024), tint (0.82, 0.84, 0.80);
+    /// White paint flaking to rust.
+    MetalWhite = "metal_white", tile (2.0, 2.0), px (1024, 1024), tint (0.92, 0.91, 0.88);
+    CorrugatedRust = "corrugated_rust", tile (2.0, 2.0), px (1024, 1024), tint (0.92, 0.90, 0.88);
+    CorrugatedBlue = "corrugated_blue", tile (2.0, 2.0), px (1024, 1024), tint (0.90, 0.92, 0.92);
 }
 
 impl SurfaceKind {
-    /// In declaration order, so `kind as usize` indexes it.
-    pub const ALL: [SurfaceKind; 8] = [
-        SurfaceKind::Concrete,
-        SurfaceKind::Plaster,
-        SurfaceKind::Metal,
-        SurfaceKind::Corrugated,
-        SurfaceKind::Wood,
-        SurfaceKind::Ground,
-        SurfaceKind::Brick,
-        SurfaceKind::Grass,
-    ];
-
-    /// Canonical lowercase name; also the texture folder under `assets/textures/`.
-    pub fn name(self) -> &'static str {
-        match self {
-            SurfaceKind::Concrete => "concrete",
-            SurfaceKind::Plaster => "plaster",
-            SurfaceKind::Metal => "metal",
-            SurfaceKind::Corrugated => "corrugated",
-            SurfaceKind::Wood => "wood",
-            SurfaceKind::Ground => "ground",
-            SurfaceKind::Brick => "brick",
-            SurfaceKind::Grass => "grass",
-        }
-    }
-
-    /// The kind a map texture name refers to, e.g. `"concrete/color"`, `"walls/brick_red"` or
-    /// `"crate_plywood"`: the last path segment naming a kind wins, matched case-insensitively
-    /// by keyword.
+    /// The surface a map texture name refers to. A path segment that is a surface's own name
+    /// (`"plaster_blue/color"`, the names `tools/mapgen` and MapEdit write) picks it; otherwise
+    /// a keyword in the segment picks one of the base surfaces (`"walls/brick_red"`,
+    /// `"crate_plywood"`). The last segment naming one wins, case-insensitively.
     pub fn from_texture_name(name: &str) -> Option<SurfaceKind> {
         const KEYWORDS: &[(&str, SurfaceKind)] = &[
             // Before "metal", which "corrugated metal" names also contain.
@@ -83,41 +156,40 @@ impl SurfaceKind {
         ];
         name.rsplit(['/', '\\']).find_map(|segment| {
             let segment = segment.to_ascii_lowercase();
-            KEYWORDS
+            SurfaceKind::ALL
                 .iter()
-                .find(|(keyword, _)| segment.contains(keyword))
-                .map(|&(_, kind)| kind)
+                .copied()
+                .find(|kind| kind.name() == segment)
+                .or_else(|| {
+                    KEYWORDS
+                        .iter()
+                        .find(|(keyword, _)| segment.contains(keyword))
+                        .map(|&(_, kind)| kind)
+                })
         })
     }
 
-    /// Metres one repeat of the CC0 texture covers (horizontal, vertical); must match
-    /// `SURFACES` in `tools/mapgen/mapgen.py`, which bakes it into the faces' scale. Replacement
-    /// textures rescale their UVs against it.
+    /// [`SurfaceKind::tile`] as a vector. Replacement textures rescale their UVs against it.
     pub fn tile_metres(self) -> Vec2 {
-        match self {
-            SurfaceKind::Concrete => Vec2::new(2.2, 1.1),
-            SurfaceKind::Plaster => Vec2::new(2.0, 1.0),
-            SurfaceKind::Metal => Vec2::new(2.0, 2.0),
-            SurfaceKind::Corrugated => Vec2::new(2.0, 2.0),
-            SurfaceKind::Wood => Vec2::new(1.0, 1.0),
-            SurfaceKind::Ground => Vec2::new(4.0, 4.0),
-            SurfaceKind::Brick => Vec2::new(2.4, 1.2),
-            SurfaceKind::Grass => Vec2::new(3.0, 3.0),
-        }
+        let (u, v) = self.tile();
+        Vec2::new(u as f32, v as f32)
     }
 
-    /// Multiplied into the colour texture: a dirty, muted palette (khaki plaster, olive-drab
-    /// metal, rusty containers) that the Map looks then grade.
-    fn tint(self) -> Color {
-        match self {
-            SurfaceKind::Concrete => Color::srgb(1.0, 0.99, 0.96),
-            SurfaceKind::Plaster => Color::srgb(0.90, 0.84, 0.72),
-            SurfaceKind::Metal => Color::srgb(0.50, 0.56, 0.46),
-            SurfaceKind::Corrugated => Color::srgb(0.72, 0.40, 0.28),
-            SurfaceKind::Wood => Color::srgb(1.0, 0.94, 0.86),
-            SurfaceKind::Ground => Color::srgb(0.96, 0.93, 0.88),
-            SurfaceKind::Brick => Color::srgb(0.76, 0.69, 0.65),
-            SurfaceKind::Grass => Color::srgb(0.92, 0.98, 0.86),
+    /// The material of this surface, tinted with its palette colour. `load` loads one of its
+    /// texture files: the asset path and whether it holds colour (sRGB) or data.
+    pub fn material(self, mut load: impl FnMut(String, bool) -> Handle<Image>) -> StandardMaterial {
+        StandardMaterial {
+            base_color: self.tint(),
+            base_color_texture: Some(load(self.texture_path("color"), true)),
+            normal_map_texture: Some(load(self.texture_path("normal"), false)),
+            // Greyscale roughness maps expand to RGBA: green drives roughness. Blue would drive
+            // metallic, but every surface is dielectric (paint and rust, not bare metal), so
+            // it's zeroed.
+            metallic_roughness_texture: Some(load(self.texture_path("roughness"), false)),
+            perceptual_roughness: 1.0,
+            metallic: 0.0,
+            reflectance: 0.3,
+            ..default()
         }
     }
 
@@ -126,76 +198,18 @@ impl SurfaceKind {
     }
 }
 
-/// The texture set of one [`SurfaceKind`].
-#[derive(Clone, Debug)]
-pub struct SurfaceTextures {
-    pub color: Handle<Image>,
-    pub normal: Handle<Image>,
-    pub roughness: Handle<Image>,
-}
-
-/// Textures and a tinted material per [`SurfaceKind`], loaded once at startup.
-#[derive(Resource, Clone, Debug)]
-pub struct SurfaceMaterials {
-    textures: [SurfaceTextures; SurfaceKind::ALL.len()],
-    materials: [Handle<StandardMaterial>; SurfaceKind::ALL.len()],
-}
-
-impl SurfaceMaterials {
-    pub fn textures(&self, kind: SurfaceKind) -> &SurfaceTextures {
-        &self.textures[kind as usize]
-    }
-
-    /// The shared material of `kind`, tinted with its palette colour.
-    pub fn material(&self, kind: SurfaceKind) -> Handle<StandardMaterial> {
-        self.materials[kind as usize].clone()
-    }
-
-    /// A new material of `kind` whose textures are multiplied by `tint`.
-    fn tinted(&self, kind: SurfaceKind, tint: Color) -> StandardMaterial {
-        let textures = self.textures(kind);
-        StandardMaterial {
-            base_color: tint,
-            base_color_texture: Some(textures.color.clone()),
-            normal_map_texture: Some(textures.normal.clone()),
-            // Greyscale roughness maps expand to RGBA: green drives roughness. Blue would drive
-            // metallic, but every kind is dielectric (paint, not bare metal), so it's zeroed.
-            metallic_roughness_texture: Some(textures.roughness.clone()),
-            perceptual_roughness: 1.0,
-            metallic: 0.0,
-            reflectance: 0.3,
-            ..default()
-        }
+/// How a surface texture is read: colour as sRGB, normal and roughness as data; tiling.
+pub fn surface_image_settings(srgb: bool) -> impl Fn(&mut ImageLoaderSettings) + Send + Sync {
+    move |settings: &mut ImageLoaderSettings| {
+        settings.is_srgb = srgb;
+        settings.sampler = ImageSampler::Descriptor(repeat_sampler());
     }
 }
 
-impl FromWorld for SurfaceMaterials {
-    fn from_world(world: &mut World) -> Self {
-        let server = world.resource::<AssetServer>();
-        let load = |kind: SurfaceKind, map: &str, srgb: bool| -> Handle<Image> {
-            server
-                .load_builder()
-                .with_settings(move |settings: &mut ImageLoaderSettings| {
-                    settings.is_srgb = srgb;
-                    settings.sampler = ImageSampler::Descriptor(repeat_sampler());
-                })
-                .load(kind.texture_path(map))
-        };
-        let textures = SurfaceKind::ALL.map(|kind| SurfaceTextures {
-            color: load(kind, "color", true),
-            normal: load(kind, "normal", false),
-            roughness: load(kind, "roughness", false),
-        });
-        let mut library = SurfaceMaterials {
-            textures,
-            materials: default(),
-        };
-        let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
-        library.materials =
-            SurfaceKind::ALL.map(|kind| materials.add(library.tinted(kind, kind.tint())));
-        library
-    }
-}
+/// Present in a process that draws surfaces (Client/Host, MapEdit): Maps then give their faces
+/// the surfaces' materials instead of one plain one.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct SurfaceLibrary;
 
 /// Trilinear, anisotropic and tiling in both directions.
 pub(crate) fn repeat_sampler() -> ImageSamplerDescriptor {
@@ -212,12 +226,13 @@ pub(crate) fn repeat_sampler() -> ImageSamplerDescriptor {
     }
 }
 
-/// Loads the material library and gives its textures mipmaps. Client/Host only.
+/// Marks the process as one that draws surfaces and gives their textures mipmaps. Client/Host
+/// only.
 pub struct MaterialsPlugin;
 
 impl Plugin for MaterialsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SurfaceMaterials>()
+        app.init_resource::<SurfaceLibrary>()
             .add_systems(Update, (mip_surface_textures, mip_prop_textures));
     }
 }
@@ -278,18 +293,16 @@ fn mip_prop_textures(
 /// texture gets one generated once it has loaded. The CPU copy is then dropped after upload.
 fn mip_surface_textures(
     mut events: MessageReader<AssetEvent<Image>>,
-    library: Res<SurfaceMaterials>,
+    server: Res<AssetServer>,
     mut images: ResMut<Assets<Image>>,
 ) {
     for event in events.read() {
         let AssetEvent::LoadedWithDependencies { id } = *event else {
             continue;
         };
-        let ours = library.textures.iter().any(|set| {
-            [&set.color, &set.normal, &set.roughness]
-                .into_iter()
-                .any(|handle| handle.id() == id)
-        });
+        let ours = server
+            .get_path(id)
+            .is_some_and(|path| is_surface_texture(&path.to_string()));
         if !ours {
             continue;
         }
@@ -298,6 +311,12 @@ fn mip_surface_textures(
             image.asset_usage = RenderAssetUsages::RENDER_WORLD;
         }
     }
+}
+
+/// Whether an asset path is one of the embedded surface textures.
+fn is_surface_texture(path: &str) -> bool {
+    path.strip_prefix(EMBEDDED_ROOT)
+        .is_some_and(|rest| rest.starts_with("textures/"))
 }
 
 /// Appends a box-filtered mip chain to an uncompressed 8-bit RGBA 2D image without one
@@ -359,7 +378,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn texture_names_map_to_kinds() {
+    fn texture_names_map_to_surfaces() {
         let cases = [
             ("concrete", Some(SurfaceKind::Concrete)),
             ("walls/Brick_Red", Some(SurfaceKind::Brick)),
@@ -368,17 +387,82 @@ mod tests {
             ("crate_plywood", Some(SurfaceKind::Wood)),
             ("ground/dirt01", Some(SurfaceKind::Ground)),
             ("grass/color", Some(SurfaceKind::Grass)),
-            ("plaster_white", Some(SurfaceKind::Plaster)),
+            ("walls/plaster_cream", Some(SurfaceKind::Plaster)),
             ("__TB_empty", None),
-            // TrenchBroom names: folder per kind, `color` the map to paint with.
+            // TrenchBroom names: a folder per surface, `color` the map to paint with.
             ("concrete/color", Some(SurfaceKind::Concrete)),
             ("textures/brick/color", Some(SurfaceKind::Brick)),
+            // A surface's own name beats the keywords inside it.
+            ("plaster_blue/color", Some(SurfaceKind::PlasterBlue)),
+            ("Brick_Old/color", Some(SurfaceKind::BrickOld)),
+            ("concrete_damaged/color", Some(SurfaceKind::ConcreteDamaged)),
+            ("sand/color", Some(SurfaceKind::Sand)),
+            ("corrugated_rust/color", Some(SurfaceKind::CorrugatedRust)),
         ];
         for (name, kind) in cases {
             assert_eq!(SurfaceKind::from_texture_name(name), kind, "{name}");
         }
-        for kind in SurfaceKind::ALL {
+        for &kind in SurfaceKind::ALL {
             assert_eq!(SurfaceKind::from_texture_name(kind.name()), Some(kind));
+            let texture = format!("{}/color", kind.name());
+            assert_eq!(SurfaceKind::from_texture_name(&texture), Some(kind));
+        }
+    }
+
+    /// `tools/mapgen/mapgen.py` bakes the tile and image sizes into every face it writes: its
+    /// table must list the same surfaces with the same numbers.
+    #[test]
+    fn mapgen_lists_the_same_surfaces_and_sizes() {
+        let source = include_str!("../../../tools/mapgen/mapgen.py");
+        let table = source
+            .split_once("SURFACES = {")
+            .and_then(|(_, rest)| rest.split_once("\n}"))
+            .map(|(table, _)| table)
+            .expect("SURFACES table in mapgen.py");
+        let mut listed = Vec::new();
+        for line in table.lines().map(str::trim) {
+            let Some((name, numbers)) = line.strip_prefix('"').and_then(|l| l.split_once("\":"))
+            else {
+                continue;
+            };
+            let numbers: Vec<f64> = numbers
+                .split(|c: char| !(c.is_ascii_digit() || c == '.'))
+                .filter(|part| !part.is_empty())
+                .map(|part| part.parse().unwrap())
+                .collect();
+            listed.push((name.to_owned(), numbers));
+        }
+        let ours: Vec<(String, Vec<f64>)> = SurfaceKind::ALL
+            .iter()
+            .map(|kind| {
+                let ((u, v), (w, h)) = (kind.tile(), kind.image_px());
+                (
+                    kind.name().to_owned(),
+                    vec![u, v, f64::from(w), f64::from(h)],
+                )
+            })
+            .collect();
+        assert_eq!(listed, ours);
+    }
+
+    #[test]
+    fn only_embedded_surface_textures_get_surface_mips() {
+        assert!(is_surface_texture(
+            "embedded://frontline/textures/sand/normal.jpg"
+        ));
+        assert!(!is_surface_texture("embedded://frontline/camos/gold.png"));
+        assert!(!is_surface_texture("textures/sand/color.jpg"));
+    }
+
+    /// A surface missing from `assets::EMBEDDED_SURFACES` would draw untextured in a shipped
+    /// build.
+    #[test]
+    fn every_surface_has_its_three_textures_embedded() {
+        for kind in SurfaceKind::ALL {
+            for map in ["color", "normal", "roughness"] {
+                let path = format!("textures/{}/{map}.jpg", kind.name());
+                assert!(crate::assets::is_embedded(&path), "{path} is not embedded");
+            }
         }
     }
 

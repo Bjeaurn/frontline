@@ -51,24 +51,29 @@ PERIMETER = 14.0
 # ---- helpers ------------------------------------------------------------------------------
 
 
-# Facade (wall, band) surfaces of the massing blocks: mostly brick, some plaster and concrete, so a
+# Facade (wall, band) surfaces of the massing blocks: brick old and new, some weathered plaster, so a
 # street is not one red wall. A block's pick follows its west edge, so a regenerated Map is stable and a building's floors match.
-FACADES = [("brick", "plaster"), ("brick", "concrete"), ("plaster", "concrete"), ("brick", "plaster"), ("concrete", "plaster"), ("brick", "concrete")]
+FACADES = [("brick", "plaster"), ("brick_old", "concrete"), ("plaster_white", "concrete"), ("brick", "plaster"), ("stone", "concrete"), ("brick_old", "plaster"), ("plaster_yellow", "concrete")]
 
 
 def terrace(L: Level, x0: float, x1: float, z0: float, z1: float, y0: float, y1: float, brick: bool = False) -> None:
     """A solid massing block, a facade surface with a band of another at each storey line (a stack of
-    blocks with equal footprints, so no two faces overlap). `brick` forces brick walls (the church)."""
+    blocks with equal footprints, so no two faces overlap). `brick` forces brick walls (the church,
+    whose roofs are built on top). Any other block taller than a storey ends in a flat gravel roof."""
     wall, band = ("brick", "plaster") if brick else FACADES[int(abs(x0) * 1.7) % len(FACADES)]
+    roof = 0.0 if brick or y1 <= STOREY + 0.5 else 0.12
+    top = y1 - roof
     y = y0
-    while y < y1 - 1e-9:
-        wall_top = min(y + WT, y1)
+    while y < top - 1e-9:
+        wall_top = min(y + WT, top)
         L.block(wall, x0, x1, y, wall_top, z0, z1)
         y = wall_top
-        if y < y1 - 1e-9:
-            band_top = min(y + SLAB, y1)
+        if y < top - 1e-9:
+            band_top = min(y + SLAB, top)
             L.block(band, x0, x1, y, band_top, z0, z1)
             y = band_top
+    if roof:
+        L.block("gravel", x0, x1, top, y1, z0, z1)
 
 
 def slits(a0: float, a1: float, count: int, width: float = 0.5, low: float = 1.3, high: float = 1.8):
@@ -182,19 +187,21 @@ def parapet(L: Level, x0: float, x1: float, z0: float, z1: float, y: float, h: f
 
 
 def ground(L: Level) -> None:
+    street = "paving_brick"  # clinker streets
     streets = [
-        ("brick", -37.0, -31.0, -33.0, Z1),  # Kerkstraat
-        ("brick", X0, -5.0, -3.0, 2.0),  # Marktstraat
-        ("brick", -38.0, -31.0, -37.0, -33.0),  # the street round the north of the square
-        ("brick", -5.0, 1.0, Z0, -3.0),  # Torenstraat and the street along the square's east side
-        ("brick", -5.0, X1, -41.0, -30.0),  # Raadhuisstraat
-        ("brick", -6.0, 46.0, -11.0, -5.0),  # the north lane
-        ("brick", 24.0, 29.0, -5.0, 32.0),  # the path along the church's east side
-        ("brick", 32.0, 37.0, -5.0, 38.0),  # the second path (with bushes)
-        ("brick", 46.0, 49.0, Z0, Z1),  # Open Hof
-        ("brick", -37.0, -4.0, 40.0, 50.0),  # the south street
-        ("brick", -16.0, 46.0, 32.0, 38.0),  # the south lane
-        ("brick", -16.0, -6.0, -3.0, 40.0),  # the lane in front of the church (west side)
+        ("asphalt", 37.0, 46.0, -5.0, 38.0),  # the car park
+        (street, -37.0, -31.0, -33.0, Z1),  # Kerkstraat
+        (street, X0, -5.0, -3.0, 2.0),  # Marktstraat
+        (street, -38.0, -31.0, -37.0, -33.0),  # the street round the north of the square
+        (street, -5.0, 1.0, Z0, -3.0),  # Torenstraat and the street along the square's east side
+        (street, -5.0, X1, -41.0, -30.0),  # Raadhuisstraat
+        (street, -6.0, 46.0, -11.0, -5.0),  # the north lane
+        (street, 24.0, 29.0, -5.0, 32.0),  # the path along the church's east side
+        (street, 32.0, 37.0, -5.0, 38.0),  # the second path (with bushes)
+        ("asphalt", 46.0, 49.0, Z0, Z1),  # Open Hof
+        (street, -37.0, -4.0, 40.0, 50.0),  # the south street
+        (street, -16.0, 46.0, 32.0, 38.0),  # the south lane
+        (street, -16.0, -6.0, -3.0, 40.0),  # the lane in front of the church (west side)
     ]
     lawns = [
         ("grass", -31.0, -5.0, -33.0, -30.5),  # Kerkplein's frame of lawn
@@ -204,7 +211,7 @@ def ground(L: Level) -> None:
         ("grass", 29.0, 32.0, -5.0, 32.0),  # the garden between the east paths
         ("grass", -5.0, X1, -41.0, -39.4),  # the tree strip along the north row
     ]
-    paint_floor(L, streets + lawns)
+    paint_floor(L, streets + lawns, default="paving")
 
 
 def perimeter(L: Level) -> None:

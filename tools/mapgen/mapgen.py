@@ -19,7 +19,8 @@ UNITS_PER_METRE = 39.37008
 
 # Metres one texture repeat covers (horizontal, vertical) and the image size in pixels, per
 # surface folder under crates/frontline/assets/textures/. Faces get the Valve 220 scale that
-# keeps these real-world sizes, in-game and in TrenchBroom alike.
+# keeps these real-world sizes, in-game and in TrenchBroom alike. The same table as `surfaces!`
+# in crates/frontline/src/materials.rs (a test there compares the two).
 SURFACES = {
     "concrete": ((2.2, 1.1), (1024, 512)),
     "plaster": ((2.0, 1.0), (1024, 512)),
@@ -29,6 +30,31 @@ SURFACES = {
     "ground": ((4.0, 4.0), (1024, 1024)),
     "brick": ((2.4, 1.2), (1024, 512)),
     "grass": ((3.0, 3.0), (1024, 1024)),
+    "plaster_yellow": ((2.0, 2.0), (1024, 1024)),
+    "plaster_ochre": ((2.0, 2.0), (1024, 1024)),
+    "plaster_blue": ((2.0, 2.0), (1024, 1024)),
+    "plaster_white": ((2.0, 2.0), (1024, 1024)),
+    "plaster_green": ((2.0, 2.0), (1024, 1024)),
+    "brick_old": ((1.7, 1.7), (1024, 1024)),
+    "brick_hollow": ((2.0, 2.0), (1024, 1024)),
+    "stone": ((2.2, 2.2), (1024, 1024)),
+    "concrete_damaged": ((3.0, 3.0), (1024, 1024)),
+    "wood_painted": ((1.5, 1.5), (1024, 1024)),
+    "wood_siding": ((1.4, 1.4), (1024, 1024)),
+    "asphalt": ((5.0, 5.0), (1024, 1024)),
+    "sand": ((3.5, 3.5), (1024, 1024)),
+    "gravel": ((1.6, 1.6), (1024, 1024)),
+    "paving": ((2.0, 2.0), (1024, 1024)),
+    "paving_brick": ((1.3, 1.3), (1024, 1024)),
+    "tiles": ((2.0, 2.0), (1024, 1024)),
+    "wood_floor": ((1.9, 1.9), (1024, 1024)),
+    "roof_tiles": ((2.9, 2.9), (1024, 1024)),
+    "roof_slate": ((2.9, 2.9), (1024, 1024)),
+    "metal_rust": ((1.6, 1.6), (1024, 1024)),
+    "metal_green": ((2.0, 2.0), (1024, 1024)),
+    "metal_white": ((2.0, 2.0), (1024, 1024)),
+    "corrugated_rust": ((2.0, 2.0), (1024, 1024)),
+    "corrugated_blue": ((2.0, 2.0), (1024, 1024)),
 }
 
 Vec3 = tuple[float, float, float]

@@ -78,30 +78,6 @@ const EMBEDDED: &[(&str, &[u8])] = embed![
     "sounds/footstep_concrete_005.ogg",
     "sounds/footstep_concrete_006.ogg",
     "sounds/footstep_concrete_007.ogg",
-    "textures/concrete/color.jpg",
-    "textures/concrete/normal.jpg",
-    "textures/concrete/roughness.jpg",
-    "textures/plaster/color.jpg",
-    "textures/plaster/normal.jpg",
-    "textures/plaster/roughness.jpg",
-    "textures/metal/color.jpg",
-    "textures/metal/normal.jpg",
-    "textures/metal/roughness.jpg",
-    "textures/corrugated/color.jpg",
-    "textures/corrugated/normal.jpg",
-    "textures/corrugated/roughness.jpg",
-    "textures/wood/color.jpg",
-    "textures/wood/normal.jpg",
-    "textures/wood/roughness.jpg",
-    "textures/ground/color.jpg",
-    "textures/ground/normal.jpg",
-    "textures/ground/roughness.jpg",
-    "textures/brick/color.jpg",
-    "textures/brick/normal.jpg",
-    "textures/brick/roughness.jpg",
-    "textures/grass/color.jpg",
-    "textures/grass/normal.jpg",
-    "textures/grass/roughness.jpg",
     "models/weapons/m4.glb",
     "models/weapons/m16.glb",
     "models/weapons/ak47.glb",
@@ -115,13 +91,79 @@ const EMBEDDED: &[(&str, &[u8])] = embed![
     "models/weapons/smoke_low.glb",
 ];
 
-/// Registers [`EMBEDDED`] with the asset server. Add it before plugins that load those paths.
+/// The colour, normal and roughness maps of each surface folder under `assets/textures/`
+/// (`materials::SurfaceKind`; a test there checks that every surface is listed here).
+macro_rules! embed_surfaces {
+    ($($name:literal),* $(,)?) => {
+        &[$(
+            (
+                concat!("textures/", $name, "/color.jpg"),
+                include_bytes!(concat!("../assets/textures/", $name, "/color.jpg")),
+            ),
+            (
+                concat!("textures/", $name, "/normal.jpg"),
+                include_bytes!(concat!("../assets/textures/", $name, "/normal.jpg")),
+            ),
+            (
+                concat!("textures/", $name, "/roughness.jpg"),
+                include_bytes!(concat!("../assets/textures/", $name, "/roughness.jpg")),
+            ),
+        )*]
+    };
+}
+
+const EMBEDDED_SURFACES: &[(&str, &[u8])] = embed_surfaces![
+    "concrete",
+    "plaster",
+    "metal",
+    "corrugated",
+    "wood",
+    "ground",
+    "brick",
+    "grass",
+    "plaster_yellow",
+    "plaster_ochre",
+    "plaster_blue",
+    "plaster_white",
+    "plaster_green",
+    "brick_old",
+    "brick_hollow",
+    "stone",
+    "concrete_damaged",
+    "wood_painted",
+    "wood_siding",
+    "asphalt",
+    "sand",
+    "gravel",
+    "paving",
+    "paving_brick",
+    "tiles",
+    "wood_floor",
+    "roof_tiles",
+    "roof_slate",
+    "metal_rust",
+    "metal_green",
+    "metal_white",
+    "corrugated_rust",
+    "corrugated_blue",
+];
+
+/// Whether `path` (under `assets/`) is compiled into the binary.
+pub fn is_embedded(path: &str) -> bool {
+    EMBEDDED
+        .iter()
+        .chain(EMBEDDED_SURFACES)
+        .any(|(embedded, _)| *embedded == path)
+}
+
+/// Registers [`EMBEDDED`] and the surface textures with the asset server. Add it before plugins
+/// that load those paths.
 pub struct EmbeddedAssetsPlugin;
 
 impl Plugin for EmbeddedAssetsPlugin {
     fn build(&self, app: &mut App) {
         let registry = app.world().resource::<EmbeddedAssetRegistry>();
-        for (path, bytes) in EMBEDDED {
+        for (path, bytes) in EMBEDDED.iter().chain(EMBEDDED_SURFACES) {
             registry.insert_asset(PathBuf::new(), &Path::new("frontline").join(path), *bytes);
         }
     }

@@ -40,7 +40,7 @@ def central_building(L: Level) -> None:
     """The contested two-storey building in the middle: a hall with a stair ramp up each side,
     two side rooms per floor, windows over both lanes and a fire escape to the roof on the east
     (and, turned about, the west) wall. x -10..10, z -8..8."""
-    wall, slab = "plaster", "concrete"
+    wall, slab = "plaster_green", "concrete"
     t = 0.4
     # Window and door gaps, along the north wall (x) and west wall (z) of each storey. Mirroring
     # builds the south and east walls.
@@ -116,7 +116,7 @@ def central_building(L: Level) -> None:
 def blocks(L: Level) -> None:
     """The east block's garage and workshop (and, turned about, the west block's): one storey
     with a roof you reach by a ramp from the north street. x 24..38, z -12..12 (before `BX`)."""
-    wall = "brick"
+    wall = "brick_old"
     t = 0.4
     top = WALL_TOP
     # The lane side (west face of the east block): a wide shutter door, a door, windows.
@@ -195,7 +195,7 @@ def perimeter(L: Level) -> None:
 
 def street(L: Level) -> None:
     """Ground, asphalt tiles, road markings and street furniture."""
-    L.floor("concrete", -HX - RECESS, HX + RECESS, -HZ - RECESS, HZ + RECESS, 0.0)
+    L.floor("asphalt", -HX - RECESS, HX + RECESS, -HZ - RECESS, HZ + RECESS, 0.0)
     asphalt = "Street_Asphalt_6x6"
     # The tile's base is its surface: 1 cm over the floor, decals 1 cm over the tile.
     for i in range(15):  # the north and south streets
@@ -249,7 +249,7 @@ def shops(L: Level) -> None:
     end of the east lane): a door and windows on every side but the west, a flat roof reached by
     a two-crate stack at the west wall (1.2 m, then 1.0 m, then 1.4 m up to the roof: each step
     within the 1.6 m mantle), and a parapet on its north and east edges."""
-    wall = "brick"
+    wall = "plaster_white"
     x0, x1, z0, z1 = -29.0, -19.0, -29.0, -22.0
     t = 0.4
     with L.mirrored():

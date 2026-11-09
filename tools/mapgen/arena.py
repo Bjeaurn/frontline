@@ -24,8 +24,8 @@ PERIMETER_WALL_HEIGHT = 4.0
 OUT = MAPS_DIR / "arena.map"
 
 # Surface folder (crates/frontline/assets/textures/<surface>/) per role of a block.
-FLOOR, PERIMETER, WALL, BUILDING = "ground", "concrete", "brick", "plaster"
-RAMP, COVER, CRATE, SLAB, CONTAINER = "wood", "metal", "wood", "concrete", "corrugated"
+FLOOR, PERIMETER, WALL, BUILDING = "sand", "stone", "brick_hollow", "plaster_ochre"
+RAMP, COVER, CRATE, SLAB, CONTAINER = "wood", "concrete_damaged", "wood", "concrete", "corrugated_rust"
 
 
 def build() -> Level:

@@ -4,8 +4,8 @@
 //! - Units: 1 TrenchBroom unit = 1 inch ([`UNITS_PER_METRE`]), the crate's default and Call of
 //!   Duty's own map unit, so Homage Map measurements carry over directly.
 //! - Textures: a face's texture name picks a [`SurfaceKind`] from our material library
-//!   (`SurfaceKind::from_texture_name`, e.g. `concrete/color`). TrenchBroom sees the same files
-//!   under `assets/textures/`.
+//!   (`SurfaceKind::from_texture_name`, e.g. `concrete/color`), whose textures load with the
+//!   first Map that uses it. TrenchBroom sees the same files under `assets/textures/`.
 //! - Colliders: every brush becomes a static convex collider on `GameLayer::World`, the layer
 //!   movement and shots query.
 //! - Entities: see [`classes`]; spawn points become [`MapSpawns`].
@@ -49,7 +49,7 @@ use crate::cli::Mode;
 use crate::cod4::{Cod4, Cod4Overrides, PreparedTexture};
 use crate::data::{GameData, GameModeId};
 use crate::flow::{AppState, ConnectionError, FlowCommand, MenuScreen};
-use crate::materials::{SurfaceKind, SurfaceMaterials};
+use crate::materials::{SurfaceKind, SurfaceLibrary, surface_image_settings};
 use crate::shared::{GameLayer, MatchState, Team};
 
 /// TrenchBroom units per metre: 1 unit = 1 inch.
@@ -73,16 +73,16 @@ impl Plugin for MapsPlugin {
         if !windowed {
             add_headless_asset_support(app);
         }
-        let surfaces = match app.world().get_resource::<SurfaceMaterials>() {
-            Some(library) => MapSurfaces::Library {
-                library: Box::new(library.clone()),
+        let surfaces = if app.world().contains_resource::<SurfaceLibrary>() {
+            MapSurfaces::Library {
                 cod4: app.world().get_resource::<Cod4Overrides>().cloned(),
-            },
-            None => MapSurfaces::Headless(
+            }
+        } else {
+            MapSurfaces::Headless(
                 app.world_mut()
                     .resource_mut::<Assets<StandardMaterial>>()
                     .add(StandardMaterial::default()),
-            ),
+            )
         };
         let registry = registry::load_registry(app.world().resource::<GameData>());
         app.add_plugins(
@@ -137,12 +137,11 @@ fn add_headless_asset_support(app: &mut App) {
     .init_asset::<StandardMaterial>();
 }
 
-/// Materials map faces get: the surface library when rendering, one plain material headless.
+/// Materials map faces get: the surfaces' own when rendering, one plain material headless.
 #[derive(Clone)]
 enum MapSurfaces {
     /// `cod4`: decoded CoD4 textures for Homage Maps, when this process has that support.
     Library {
-        library: Box<SurfaceMaterials>,
         cod4: Option<Cod4Overrides>,
     },
     Headless(Handle<StandardMaterial>),
@@ -184,26 +183,26 @@ fn loose_texture_hook(surfaces: MapSurfaces) -> Arc<LoadLooseTextureFn> {
     texture_hook(move |mut view| {
         let material = match &surfaces {
             MapSurfaces::Headless(material) => material.clone(),
-            MapSurfaces::Library { library, cod4 } => {
-                match SurfaceKind::from_texture_name(view.name) {
-                    Some(kind) => {
-                        let map_file = view.load_context.path().without_label().to_string();
-                        let textures = cod4.as_ref().and_then(|cod4| cod4.get(&map_file));
-                        match textures.as_deref().and_then(|map| map.get(view.name)) {
-                            Some(prepared) => cod4_material(&mut view, kind, prepared),
-                            None => library.material(kind),
-                        }
-                    }
-                    None => {
-                        warn!(
-                            "Map texture \"{}\" names no surface ({}); drawing it as missing",
-                            view.name,
-                            SurfaceKind::ALL.map(SurfaceKind::name).join(", ")
-                        );
-                        return Box::pin(ready(view.tb_server.missing_material.read().clone()));
+            MapSurfaces::Library { cod4 } => match SurfaceKind::from_texture_name(view.name) {
+                Some(kind) => {
+                    let map_file = view.load_context.path().without_label().to_string();
+                    let textures = cod4.as_ref().and_then(|cod4| cod4.get(&map_file));
+                    match textures.as_deref().and_then(|map| map.get(view.name)) {
+                        Some(prepared) => cod4_material(&mut view, kind, prepared),
+                        None => surface_material(&mut view, kind),
                     }
                 }
-            }
+                None => {
+                    let known: Vec<&str> =
+                        SurfaceKind::ALL.iter().map(|kind| kind.name()).collect();
+                    warn!(
+                        "Map texture \"{}\" names no surface ({}); drawing it as missing",
+                        view.name,
+                        known.join(", ")
+                    );
+                    return Box::pin(ready(view.tb_server.missing_material.read().clone()));
+                }
+            },
         };
         let handle = view.load_context.add_labeled_asset(
             format!("GenericMaterial_{}", view.name),
@@ -211,6 +210,18 @@ fn loose_texture_hook(surfaces: MapSurfaces) -> Arc<LoadLooseTextureFn> {
         );
         Box::pin(ready(handle))
     })
+}
+
+/// The material of `kind` for this Map. Its textures load as the Map's dependencies (once per
+/// process while any Map uses them), so only the surfaces a Map has are in memory.
+fn surface_material(view: &mut TextureLoadView, kind: SurfaceKind) -> Handle<StandardMaterial> {
+    let material = kind.material(|path, srgb| {
+        view.load_context
+            .load_builder()
+            .with_settings(surface_image_settings(srgb))
+            .load(path)
+    });
+    view.add_material(material)
 }
 
 /// A material of `kind`'s faces made from the player's own CoD4 image (docs/adr/0004). The

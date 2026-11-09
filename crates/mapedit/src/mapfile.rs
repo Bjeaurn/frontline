@@ -20,6 +20,7 @@ use std::collections::HashMap;
 use std::fmt::{self, Write as _};
 
 use bevy::math::DVec3;
+use frontline::materials::SurfaceKind;
 
 /// 1 TrenchBroom unit = 1 inch (`maps::UNITS_PER_METRE` in the game).
 pub const UNITS_PER_METRE: f64 = 39.37008;
@@ -65,8 +66,7 @@ pub(crate) fn round_vec(v: DVec3, scale: f64) -> DVec3 {
 
 /// A surface of the game's material library (`crates/frontline/assets/textures/<name>/`): the
 /// real-world size one texture repeat covers and the image size, which together fix the Valve 220
-/// scale of a face. Must agree with `SurfaceKind::tile_metres` and `SURFACES` in `mapgen.py`
-/// (tested).
+/// scale of a face. Taken from the game's own table (`frontline::materials::SurfaceKind`).
 #[derive(Clone, Copy, Debug)]
 pub struct Surface {
     pub name: &'static str,
@@ -91,59 +91,36 @@ impl Surface {
     }
 }
 
-pub const SURFACES: [Surface; 8] = [
-    Surface {
-        name: "concrete",
-        tile_metres: (2.2, 1.1),
-        image_px: (1024.0, 512.0),
-    },
-    Surface {
-        name: "plaster",
-        tile_metres: (2.0, 1.0),
-        image_px: (1024.0, 512.0),
-    },
-    Surface {
-        name: "metal",
-        tile_metres: (2.0, 2.0),
-        image_px: (1024.0, 1024.0),
-    },
-    Surface {
-        name: "corrugated",
-        tile_metres: (2.0, 2.0),
-        image_px: (1024.0, 1024.0),
-    },
-    Surface {
-        name: "wood",
-        tile_metres: (1.0, 1.0),
-        image_px: (1024.0, 1024.0),
-    },
-    Surface {
-        name: "ground",
-        tile_metres: (4.0, 4.0),
-        image_px: (1024.0, 1024.0),
-    },
-    Surface {
-        name: "brick",
-        tile_metres: (2.4, 1.2),
-        image_px: (1024.0, 512.0),
-    },
-    Surface {
-        name: "grass",
-        tile_metres: (3.0, 3.0),
-        image_px: (1024.0, 1024.0),
-    },
-];
+/// Every surface of the game, in its order.
+pub const SURFACES: [Surface; SurfaceKind::ALL.len()] = {
+    let mut surfaces = [Surface {
+        name: "",
+        tile_metres: (0.0, 0.0),
+        image_px: (0.0, 0.0),
+    }; SurfaceKind::ALL.len()];
+    let mut i = 0;
+    while i < surfaces.len() {
+        let kind = SurfaceKind::ALL[i];
+        let (width, height) = kind.image_px();
+        surfaces[i] = Surface {
+            name: kind.name(),
+            tile_metres: kind.tile(),
+            image_px: (width as f64, height as f64),
+        };
+        i += 1;
+    }
+    surfaces
+};
 
 /// The surface called `name` (`concrete`).
 pub fn surface(name: &str) -> Option<&'static Surface> {
     SURFACES.iter().find(|surface| surface.name == name)
 }
 
-/// The surface a texture name belongs to: `concrete/color` is `concrete`.
+/// The surface a texture name belongs to, as the game resolves it: `concrete/color` is
+/// `concrete`.
 pub fn surface_of_texture(texture: &str) -> Option<&'static Surface> {
-    let lower = texture.to_ascii_lowercase();
-    let folder = lower.split('/').next().unwrap_or("");
-    surface(folder).or_else(|| SURFACES.iter().find(|s| lower.contains(s.name)))
+    surface(SurfaceKind::from_texture_name(texture)?.name())
 }
 
 // --------------------------------------------------------------------------------------- faces
@@ -1382,19 +1359,15 @@ mod tests {
     }
 
     #[test]
-    fn surfaces_match_the_game_and_mapgen() {
-        use frontline::materials::SurfaceKind;
-        for kind in SurfaceKind::ALL {
-            let surface = surface(kind.name()).unwrap_or_else(|| panic!("{}", kind.name()));
-            let tile = kind.tile_metres();
-            assert_eq!(surface.tile_metres.0 as f32, tile.x, "{}", kind.name());
-            assert_eq!(surface.tile_metres.1 as f32, tile.y, "{}", kind.name());
-        }
-        assert_eq!(SURFACES.len(), SurfaceKind::ALL.len());
-        // The scale of a concrete face in the committed maps.
+    fn surfaces_bake_the_scale_of_the_committed_maps_and_resolve_texture_names() {
+        // The scale of a concrete and a ground face in the committed maps.
         assert_eq!(surface("concrete").unwrap().face_scale(), [0.0846, 0.0846]);
         assert_eq!(surface("ground").unwrap().face_scale(), [0.1538, 0.1538]);
         assert_eq!(surface_of_texture("brick/color").unwrap().name, "brick");
+        assert_eq!(
+            surface_of_texture("plaster_blue/color").unwrap().name,
+            "plaster_blue"
+        );
         assert!(surface_of_texture("unknown/thing").is_none());
     }
 
