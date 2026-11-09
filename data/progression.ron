@@ -54,9 +54,29 @@
         (level: 9, item: Wildcard(PerkGreed2)),
         (level: 10, item: Wildcard(PerkGreed3)),
         (level: 12, item: Wildcard(Overkill)),
+        // Perks added later, spread over the Levels (Perk Slots 1, 2, 3 noted).
+        (level: 3, item: Perk(Bandolier)),       // 1
+        (level: 7, item: Perk(Hardened)),        // 3
+        (level: 9, item: Perk(QuickRecovery)),   // 2
+        (level: 11, item: Perk(SteadyAim)),      // 1
+        (level: 13, item: Perk(FallGuard)),      // 3
+        (level: 16, item: Perk(TacticalMask)),   // 3
+        (level: 18, item: Perk(Juggernaut)),     // 2
+        (level: 21, item: Perk(Quickdraw)),      // 1
+        (level: 24, item: Perk(DangerClose)),    // 2
+        // Weapons added later: the AKS-74U (a second SMG) first, then the AK-47, the shotgun last.
+        (level: 6, item: Weapon(Aks74u)),
+        (level: 9, item: Weapon(Ak47)),
+        (level: 14, item: Weapon(Shotgun)),
         // Equipment: the Frag is there from Level 1.
         (level: 3, item: Equipment(Flashbang)),
         (level: 4, item: Equipment(Smoke)),
+        // More equipment (lethal L, tactical T): the Stun Grenade and Semtex early enough to try,
+        // Tear Gas in the middle, the Proximity Mine (2 class points) late.
+        (level: 8, item: Equipment(Stun)),       // T
+        (level: 10, item: Equipment(Semtex)),    // L
+        (level: 14, item: Equipment(TearGas)),   // T
+        (level: 17, item: Equipment(Mine)),      // L
     ],
     // Weapon Levels: every kill with a Weapon gives that Weapon XP (`xp_per_kill`, plus
     // `xp_per_headshot` when the killing shot hit the head). `thresholds` is the Weapon XP at
@@ -73,16 +93,25 @@
         AssaultRifle: [
             (level: 1, attachment: RedDot),
             (level: 2, attachment: Silencer),
+            (level: 2, attachment: Reflex),
             (level: 3, attachment: Holographic),
+            (level: 3, attachment: Compensator),
+            (level: 3, attachment: AngledGrip),
             (level: 4, attachment: Foregrip),
             (level: 4, attachment: Prism),
+            (level: 4, attachment: FlashHider),
             (level: 5, attachment: Acog),
+            (level: 5, attachment: Scope6x),
         ],
         Smg: [
             (level: 1, attachment: RedDot),
             (level: 2, attachment: Silencer),
+            (level: 2, attachment: Reflex),
             (level: 3, attachment: Holographic),
+            (level: 3, attachment: FlashHider),
             (level: 4, attachment: Foregrip),
+            (level: 4, attachment: AngledGrip),
+            (level: 4, attachment: Compensator),
             (level: 5, attachment: Prism),
         ],
         // The M16A4 is the only Weapon with the grenade launcher (it shares the Underbarrel slot with
@@ -91,13 +120,51 @@
             (level: 1, attachment: RedDot),
             (level: 2, attachment: Silencer),
             (level: 2, attachment: GrenadeLauncher),
+            (level: 2, attachment: Reflex),
             (level: 3, attachment: Holographic),
+            (level: 3, attachment: Compensator),
             (level: 4, attachment: Foregrip),
+            (level: 4, attachment: FlashHider),
             (level: 5, attachment: Acog),
+            (level: 5, attachment: Scope6x),
+        ],
+        // The AK-47: its kick is the reason to bring a Compensator or a grip.
+        Ak47: [
+            (level: 1, attachment: RedDot),
+            (level: 2, attachment: Silencer),
+            (level: 2, attachment: Compensator),
+            (level: 3, attachment: Holographic),
+            (level: 3, attachment: Foregrip),
+            (level: 4, attachment: AngledGrip),
+            (level: 4, attachment: Acog),
+            (level: 5, attachment: FlashHider),
+            (level: 5, attachment: Scope6x),
+        ],
+        Aks74u: [
+            (level: 1, attachment: RedDot),
+            (level: 2, attachment: Reflex),
+            (level: 2, attachment: Silencer),
+            (level: 3, attachment: Foregrip),
+            (level: 3, attachment: FlashHider),
+            (level: 4, attachment: Holographic),
+            (level: 4, attachment: AngledGrip),
+            (level: 5, attachment: Compensator),
+        ],
+        // The shotgun takes no Underbarrel Attachment (its forend is the pump).
+        Shotgun: [
+            (level: 1, attachment: RedDot),
+            (level: 2, attachment: Reflex),
+            (level: 3, attachment: Compensator),
+            (level: 4, attachment: Silencer),
+            (level: 4, attachment: FlashHider),
+            (level: 5, attachment: Holographic),
         ],
         SniperRifle: [
             (level: 1, attachment: Silencer),
+            (level: 2, attachment: FlashHider),
             (level: 3, attachment: Foregrip),
+            (level: 4, attachment: Compensator),
+            (level: 5, attachment: AngledGrip),
         ],
     },
     // Weapon camos. A camo is unlocked per Weapon by its `challenge`, counted on that Weapon:

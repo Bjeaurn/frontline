@@ -13,6 +13,7 @@ use bevy::text::LetterSpacing;
 use super::life::{LocalLife, can_request_respawn, respawn_hold};
 use crate::data::{ActiveRules, GameData};
 use crate::flow::AppState;
+use crate::gear::EquippedPerks;
 use crate::match_hud::{FRIENDLY_COLOR, relation_color};
 use crate::modes::ModeView;
 use crate::net::protocol::{Damaged, DeathCause, KillFeed};
@@ -330,7 +331,8 @@ pub(super) fn spawn_hud(
 pub(super) fn update_damage_vignette(
     time: Res<Time>,
     rules: ActiveRules,
-    replica: Query<(&Health, &PlayerTeam), With<LocalPlayerReplica>>,
+    replica: Query<(&Health, &PlayerTeam, Option<&EquippedPerks>), With<LocalPlayerReplica>>,
+    data: Res<GameData>,
     mut damaged: MessageReader<FromServer<Damaged>>,
     mut flash: Local<f32>,
     mut applied: Local<f32>,
@@ -344,8 +346,13 @@ pub(super) fn update_damage_vignette(
     *flash = (*flash + hit_flash / FLASH_DAMAGE).min(1.0);
     *flash = (*flash - FLASH_DECAY_PER_SEC * time.delta_secs()).max(0.0);
     let missing = match replica.single() {
-        Ok((health, team)) if team.0.is_some() => {
-            (1.0 - health.0 / rules.get().max_health).clamp(0.0, 1.0)
+        Ok((health, team, perks)) if team.0.is_some() => {
+            // Juggernaut raises the maximum; the server replicates the Perks.
+            let max_health = perks
+                .map(|perks| data.perk_effects(perks.0.iter()))
+                .unwrap_or_default()
+                .max_health(rules.get().max_health);
+            (1.0 - health.0 / max_health).clamp(0.0, 1.0)
         }
         _ => {
             *flash = 0.0;

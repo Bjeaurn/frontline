@@ -18,7 +18,7 @@ use super::protocol::{
     Damaged, EquipPerks, FallDamage, FireShot, Flashed, ForceRespawn, GrenadeDetonated, Hello,
     HitConfirm, KillFeed, ObjectiveHold, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseChannel,
     PoseUpdate, ProjectileFired, ProjectileLanded, ReportLevel, RequestRespawn, Respawn, SendChat,
-    ShotChannel, ShotTracer, ThrowGrenade, XpAward,
+    ShotChannel, ShotTracer, Stunned, ThrowGrenade, XpAward,
 };
 use crate::data::GameData;
 use crate::gear::Perks;
@@ -45,6 +45,7 @@ impl Plugin for ClientNetPlugin {
             .add_message::<FromServer<ChatLine>>()
             .add_message::<FromServer<GrenadeDetonated>>()
             .add_message::<FromServer<Flashed>>()
+            .add_message::<FromServer<Stunned>>()
             .add_message::<ToServer<ThrowGrenade>>()
             .add_message::<ToServer<FireShot>>()
             .add_message::<ToServer<ChooseTeam>>()
@@ -72,6 +73,7 @@ impl Plugin for ClientNetPlugin {
                     forward_from_server::<ChatLine>,
                     forward_from_server::<GrenadeDetonated>,
                     forward_from_server::<Flashed>,
+                    forward_from_server::<Stunned>,
                 )
                     .after(MessageSystems::Receive),
             )

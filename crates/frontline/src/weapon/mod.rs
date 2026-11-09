@@ -451,16 +451,21 @@ impl HeldWeapon {
     }
 }
 
-/// One local round left the barrel: `muzzle` is the viewmodel muzzle in world space and
+/// One local bullet left the barrel: `muzzle` is the viewmodel muzzle in world space and
 /// `end` where the client-side ray met the World (or maximum range); `None` for a projectile
-/// Weapon, whose bullet and impact come from the server (docs/adr/0005).
+/// Weapon, whose bullet and impact come from the server (docs/adr/0005). A round of a Weapon
+/// with `pellets` is one of these per pellet: only pellet 0 makes the gunshot, the flash and
+/// the viewmodel kick.
 #[derive(Message, Clone, Copy, Debug)]
 struct ShotFired {
     weapon: WeaponId,
     muzzle: Vec3,
     end: Option<Vec3>,
+    pellet: u8,
     /// A Silencer is fitted: no muzzle flash, and the gunshot's volume and pitch below.
     silenced: bool,
+    /// Size of the muzzle flash relative to a plain muzzle (a Muzzle Attachment's `flash_scale`).
+    flash_scale: f32,
     volume: f32,
     pitch: f32,
 }
@@ -1033,38 +1038,45 @@ fn fire(
         let kick = weapon.recoil_scale(&stats);
         for _ in 0..rounds {
             let aim = aim_rotation(pose.yaw, pose.pitch);
-            let (angle, radius) = (
-                rng.next() * std::f32::consts::TAU,
-                spread * rng.next().sqrt(),
-            );
-            let offset = Quat::from_rotation_y(radius * angle.cos())
-                * Quat::from_rotation_x(radius * angle.sin());
-            let direction = Dir3::new_unchecked((aim * offset * Vec3::NEG_Z).normalize());
-
-            shots.write(ToServer(FireShot {
-                weapon: weapon.id,
-                attachments: weapon.attachments,
-                origin,
-                direction: *direction,
-            }));
-            // A projectile Weapon's bullet flies for real on the server: no instant tracer or impact.
-            let end = stats.projectile.is_none().then(|| {
-                let distance = spatial
-                    .cast_ray(origin, direction, stats.range, true, &filter)
-                    .map_or(stats.range, |hit| hit.distance);
-                origin + *direction * distance
-            });
             let muzzle = Transform::from_translation(origin)
                 .with_rotation(aim)
                 .transform_point(gun.transform_point(Vec3::from(stats.muzzle_offset)));
-            fired.write(ShotFired {
-                weapon: weapon.id,
-                muzzle,
-                end,
-                silenced: stats.silenced,
-                volume: stats.shot_volume,
-                pitch: stats.shot_pitch,
-            });
+            // A shotgun's round is `pellets` bullets, each its own ray in the spread cone; the
+            // gunshot, flash and kick belong to the round (pellet 0).
+            for pellet in 0..stats.pellets {
+                let (angle, radius) = (
+                    rng.next() * std::f32::consts::TAU,
+                    spread * rng.next().sqrt(),
+                );
+                let offset = Quat::from_rotation_y(radius * angle.cos())
+                    * Quat::from_rotation_x(radius * angle.sin());
+                let direction = Dir3::new_unchecked((aim * offset * Vec3::NEG_Z).normalize());
+
+                shots.write(ToServer(FireShot {
+                    weapon: weapon.id,
+                    attachments: weapon.attachments,
+                    origin,
+                    direction: *direction,
+                    pellet,
+                }));
+                // A projectile Weapon's bullet flies for real on the server: no instant tracer or impact.
+                let end = stats.projectile.is_none().then(|| {
+                    let distance = spatial
+                        .cast_ray(origin, direction, stats.range, true, &filter)
+                        .map_or(stats.range, |hit| hit.distance);
+                    origin + *direction * distance
+                });
+                fired.write(ShotFired {
+                    weapon: weapon.id,
+                    muzzle,
+                    end,
+                    pellet,
+                    silenced: stats.silenced,
+                    flash_scale: stats.flash_scale,
+                    volume: stats.shot_volume,
+                    pitch: stats.shot_pitch,
+                });
+            }
 
             let pitch_kick = stats.recoil_pitch_deg.to_radians() * kick;
             let yaw_kick = stats.recoil_yaw_deg.to_radians() * kick * rng.signed();

@@ -1,6 +1,7 @@
-//! Create a Class: the screens (class list, slot overview, the Primary's own screen, pickers),
-//! built under the editor's content root whenever the screen changes, and the preview panels
-//! that follow the highlight.
+//! Create a Class: the screens (class list, slot overview, the Primary's own screen, the
+//! full-screen pickers), built under the editor's content root whenever the screen changes, the
+//! dropdown list that floats over the overview for the small slots, and the preview panels that
+//! follow the highlight.
 
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
@@ -8,8 +9,9 @@ use bevy::ui_widgets::Button;
 
 use super::model::{self, Choice, PAGE_SIZE, Pick, Slot};
 use super::{
-    Act, Action, Editor, KEY_BACK, KEY_EDIT, KEY_NAME, KEY_NEXT, KEY_PREV, KEY_SAVE, Look,
-    NameField, Nav, PreviewPanel, Screen, Status, class_choice, key_of,
+    Act, Action, DropdownUi, Editor, KEY_BACK, KEY_EDIT, KEY_LIST, KEY_MORE_DOWN, KEY_MORE_UP,
+    KEY_NAME, KEY_NEXT, KEY_PREV, KEY_SAVE, Look, NameField, Nav, PreviewPanel, Screen, Status,
+    class_choice, key_of,
 };
 use crate::class::EquipmentSlot;
 use crate::data::GameData;
@@ -28,7 +30,7 @@ const GUN_TILE_W: f32 = 262.0;
 const GUN_TILE_H: f32 = 168.0;
 const LIST_W: f32 = 440.0;
 const PICKER_W: f32 = 580.0;
-const PREVIEW_W: f32 = 560.0;
+pub(super) const PREVIEW_W: f32 = 560.0;
 
 /// Everything a screen is drawn from.
 pub(super) struct Ctx<'a> {
@@ -1150,6 +1152,198 @@ fn gun(ctx: &Ctx, commands: &mut Commands, content: Entity) {
     );
 }
 
+// ------------------------------------------------------------------- dropdown
+
+/// The longest description or reason a dropdown entry has room for on its one line.
+const LINE_CHARS: usize = 50;
+
+/// The dropdown list of the open slot with a click catcher behind it (a click outside closes the
+/// list) and the preview card beside it, all children of the editor's root so they float over
+/// the overview. Nothing when no list is open.
+pub(super) fn dropdown(ctx: &Ctx, commands: &mut Commands, root: Entity) {
+    let Some(list) = &ctx.editor.dropdown else {
+        return;
+    };
+    let options = &ctx.editor.options;
+    let place = list.place;
+    commands.spawn((
+        DropdownUi,
+        Button,
+        Action(Act::CloseList),
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(0.0),
+            top: px(0.0),
+            width: percent(100.0),
+            height: percent(100.0),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.4)),
+        ChildOf(root),
+    ));
+    let panel = commands
+        .spawn((DropdownUi, ui::panel(), ChildOf(root)))
+        .insert(Node {
+            position_type: PositionType::Absolute,
+            left: px(place.x),
+            top: px(place.y),
+            width: px(place.w),
+            height: px(place.h),
+            flex_direction: FlexDirection::Column,
+            padding: UiRect::all(px(model::LIST_INSET - 1.0)),
+            border: UiRect::all(px(1.0)),
+            overflow: Overflow::clip(),
+            ..default()
+        })
+        .id();
+    let scrolls = place.scrolls(options.len());
+    let visible = place.visible as isize;
+    if scrolls {
+        more(ctx, commands, panel, KEY_MORE_UP, list.first, "^", -visible);
+    }
+    for (index, choice) in options
+        .iter()
+        .enumerate()
+        .skip(list.first)
+        .take(place.visible)
+    {
+        list_row(ctx, commands, panel, index, choice);
+    }
+    if scrolls {
+        let below = options.len().saturating_sub(list.first + place.visible);
+        more(ctx, commands, panel, KEY_MORE_DOWN, below, "v", visible);
+    }
+    if let Some((x, y)) = place.card {
+        commands
+            .spawn((DropdownUi, PreviewPanel, ui::panel(), ChildOf(root)))
+            .insert(Node {
+                position_type: PositionType::Absolute,
+                left: px(x),
+                top: px(y),
+                width: px(model::CARD_W),
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(px(16.0)),
+                row_gap: px(8.0),
+                border: UiRect::all(px(1.0)),
+                ..default()
+            });
+    }
+}
+
+/// The `^ 2 more` or `v 3 more` line of a list that scrolls: a button scrolling by a list
+/// height while there is more that way, an empty line otherwise (the list keeps its height).
+fn more(
+    ctx: &Ctx,
+    commands: &mut Commands,
+    parent: Entity,
+    key: usize,
+    count: usize,
+    arrow: &str,
+    by: isize,
+) {
+    let node = Node {
+        width: percent(100.0),
+        height: px(model::HINT_H),
+        flex_shrink: 0.0,
+        justify_content: JustifyContent::Center,
+        align_items: AlignItems::Center,
+        ..default()
+    };
+    if count == 0 {
+        commands.spawn((node, ChildOf(parent)));
+        return;
+    }
+    let line = item(
+        commands,
+        parent,
+        Nav::new(key, 0.0, 0.0).mouse_only(),
+        Act::Scroll(by),
+        Look::row(),
+        node,
+    );
+    text(
+        ctx,
+        commands,
+        line,
+        &format!("{arrow}  {count} more"),
+        15.0,
+        ui::TEXT_DIM,
+    );
+}
+
+/// One entry of a dropdown list: the name (with a mark when the slot holds it) and cost on
+/// top, below it why it is locked or refused (red) or else its one-line description. Greyed
+/// while it can't be taken, the cost red when it doesn't fit the budget.
+fn list_row(ctx: &Ctx, commands: &mut Commands, parent: Entity, index: usize, choice: &Choice) {
+    let usable = choice.usable();
+    let line = item(
+        commands,
+        parent,
+        Nav::new(KEY_LIST + index, 0.0, 0.0),
+        Act::Choose(index),
+        Look::row(),
+        Node {
+            width: percent(100.0),
+            height: px(model::ROW_H),
+            flex_shrink: 0.0,
+            padding: UiRect::axes(px(12.0), px(4.0)),
+            border: UiRect::left(px(4.0)),
+            column_gap: px(12.0),
+            align_items: AlignItems::Center,
+            overflow: Overflow::clip(),
+            ..default()
+        },
+    );
+    let lines = column(commands, line, 2.0);
+    commands.entity(lines).insert(Node {
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        min_width: px(0.0),
+        row_gap: px(2.0),
+        ..default()
+    });
+    let top = row(commands, lines, 10.0);
+    bold(
+        ctx,
+        commands,
+        top,
+        &choice.name.to_uppercase(),
+        22.0,
+        if usable { ui::TEXT } else { ui::TEXT_DIM },
+    );
+    if choice.current {
+        text(ctx, commands, top, "EQUIPPED", 15.0, ui::ACCENT);
+    }
+    match choice.lock.as_ref().or(choice.refusal.as_ref()) {
+        Some(reason) => text(
+            ctx,
+            commands,
+            lines,
+            &model::brief(reason, LINE_CHARS),
+            15.0,
+            RED,
+        ),
+        None => text(
+            ctx,
+            commands,
+            lines,
+            &model::brief(&choice.info, LINE_CHARS),
+            15.0,
+            ui::TEXT_DIM,
+        ),
+    };
+    if choice.pick != Pick::Empty {
+        let tint = if choice.over_budget {
+            RED
+        } else if usable {
+            ui::ACCENT
+        } else {
+            ui::TEXT_DIM
+        };
+        bold(ctx, commands, line, &pts(choice.cost), 22.0, tint);
+    }
+}
+
 // -------------------------------------------------------------------- picker
 
 fn picker(ctx: &Ctx, commands: &mut Commands, content: Entity, slot: Slot) {
@@ -1339,22 +1533,27 @@ fn choice_row(ctx: &Ctx, commands: &mut Commands, parent: Entity, index: usize, 
     }
 }
 
-/// The right panel of a picker: the highlighted option.
-pub(super) fn choice_preview(ctx: &Ctx, commands: &mut Commands, panel: Entity, choice: &Choice) {
-    let Screen::Picker(slot) = ctx.editor.screen else {
-        return;
-    };
+/// The preview of a highlighted option, `width` wide: the right-hand panel of a full-screen
+/// picker or the card beside a dropdown list. `slot` is what is being picked for.
+pub(super) fn choice_preview(
+    ctx: &Ctx,
+    commands: &mut Commands,
+    panel: Entity,
+    slot: Slot,
+    width: f32,
+    choice: &Choice,
+) {
     bold(
         ctx,
         commands,
         panel,
         &choice.name.to_uppercase(),
-        34.0,
+        (width / 16.0).min(34.0),
         ui::TEXT,
     );
     let info = text(ctx, commands, panel, &choice.info, 20.0, ui::TEXT_DIM);
     commands.entity(info).insert(Node {
-        max_width: px(PREVIEW_W - 50.0),
+        max_width: px(width - 50.0),
         ..default()
     });
     match &choice.pick {
@@ -1424,7 +1623,7 @@ pub(super) fn choice_preview(ctx: &Ctx, commands: &mut Commands, panel: Entity, 
     if let Some(reason) = choice.lock.as_ref().or(choice.refusal.as_ref()) {
         let note = text(ctx, commands, panel, reason, 20.0, RED);
         commands.entity(note).insert(Node {
-            max_width: px(PREVIEW_W - 50.0),
+            max_width: px(width - 50.0),
             ..default()
         });
     }

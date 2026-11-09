@@ -1,7 +1,8 @@
-// Grenades: thrown equipment (Frag, Flashbang, Smoke) and the underslung launcher's round
-// (Launcher). Read at startup from ./data/ (falls back to the copy built into the binary). The
-// server flies each one as a physical projectile; clients draw it. Distances in metres, times in
-// seconds, speeds in m/s. Which items a class can carry is data/class_points.ron.
+// Grenades: thrown equipment (Frag, Semtex, Proximity Mine, Flashbang, Stun Grenade, Smoke,
+// Tear Gas) and the underslung launcher's round (Launcher). Read at startup from ./data/ (falls
+// back to the copy built into the binary). The server flies each one as a physical projectile;
+// clients draw it. Distances in metres, times in seconds, speeds in m/s. Which items a class can
+// carry is data/class_points.ron, and the Level that unlocks each data/progression.ron.
 //
 //   speed, gravity   launch speed along the aim and the downward pull (game-tuned, not
 //                    physical). For a thrown one `speed` is the cap: no throw may be faster
@@ -13,17 +14,32 @@
 //                    degrees up). Looking down the speed falls to down_speed straight down
 //                    (a short underhand toss, a few metres at 45 degrees down). A Grenade never
 //                    leaves the hand steeper than max_launch_deg.
-//   restitution      share of the speed into a surface kept when bouncing off it
+//   restitution      share of the speed into a surface kept when bouncing off it (a Grenade that
+//                    sticks never bounces)
 //   friction         share of the sideways speed kept on a bounce
 //   radius           collision radius of the body
 //   fuse             Timed(secs): bursts that long after leaving the hand;
 //                    Impact(arm_distance, max_secs): bursts on the first surface it hits once it has
-//                    flown arm_distance, or after max_secs in the air
+//                    flown arm_distance, or after max_secs in the air;
+//                    Stick(secs, max_air_secs): sticks to the first surface or player it touches
+//                    and bursts `secs` later (`max_air_secs` after leaving the hand if it touches
+//                    nothing). On a player it rides along until they die, then drops;
+//                    Proximity(arm_secs, trigger_radius, max_secs): a mine. Sticks to the first
+//                    surface it touches (never a player), is armed `arm_secs` later and bursts
+//                    when an enemy of its owner comes within trigger_radius in a clear line (or
+//                    `max_secs` after the throw). A player keeps at most `count` of them down:
+//                    placing one more removes their oldest
 //   effect           Blast(damage, radius): `damage` at the centre, falling off linearly to nothing
 //                    at `radius`, only to players it can reach in a straight line;
 //                    Flash(radius, blind_secs, deaf_secs): blinds (white-out) players looking at it
 //                    and deafens everyone, both fading with distance;
-//                    Smoke(radius, secs): a cloud that blocks the view for `secs`
+//                    Stun(radius, secs, slow): everyone within radius is shaken and slowed (by up to
+//                    the share `slow`) for up to `secs`, fading with distance and weaker behind
+//                    cover; no damage;
+//                    Smoke(radius, secs): a cloud that blocks the view for `secs`;
+//                    Gas(radius, secs, slow): a cloud that lasts `secs`; whoever stands in it
+//                    coughs, is slowed (by up to the share `slow`) and sees a narrowed view,
+//                    for a moment after leaving it too; no damage
 //   count            how many a player carries (the Launcher's: rounds per life)
 //   cooldown_secs    wait between two throws of the same kind (Launcher: between rounds)
 {
@@ -47,6 +63,46 @@
             up_pitch_deg: 45.0,
         )),
     ),
+    Semtex: (
+        name: "Semtex",
+        speed: 22.0,
+        gravity: 14.0,
+        restitution: 0.0,
+        friction: 0.0,
+        radius: 0.06,
+        fuse: Stick(secs: 1.5, max_air_secs: 5.0),
+        effect: Blast(damage: 150.0, radius: 5.5),
+        count: 1,
+        cooldown_secs: 1.0,
+        throw: Some((
+            lob_deg: 16.0,
+            max_launch_deg: 70.0,
+            down_speed: 3.0,
+            level_speed: 22.0,
+            up_speed: 20.0,
+            up_pitch_deg: 45.0,
+        )),
+    ),
+    Mine: (
+        name: "Proximity Mine",
+        speed: 16.0,
+        gravity: 14.0,
+        restitution: 0.0,
+        friction: 0.0,
+        radius: 0.08,
+        fuse: Proximity(arm_secs: 1.5, trigger_radius: 2.6, max_secs: 150.0),
+        effect: Blast(damage: 220.0, radius: 5.0),
+        count: 2,
+        cooldown_secs: 1.5,
+        throw: Some((
+            lob_deg: 10.0,
+            max_launch_deg: 70.0,
+            down_speed: 2.5,
+            level_speed: 11.0,
+            up_speed: 15.0,
+            up_pitch_deg: 45.0,
+        )),
+    ),
     Flashbang: (
         name: "Flashbang",
         speed: 25.0,
@@ -67,6 +123,26 @@
             up_pitch_deg: 45.0,
         )),
     ),
+    Stun: (
+        name: "Stun Grenade",
+        speed: 25.0,
+        gravity: 14.0,
+        restitution: 0.35,
+        friction: 0.6,
+        radius: 0.06,
+        fuse: Timed(2.0),
+        effect: Stun(radius: 12.0, secs: 6.0, slow: 0.5),
+        count: 2,
+        cooldown_secs: 1.0,
+        throw: Some((
+            lob_deg: 16.0,
+            max_launch_deg: 70.0,
+            down_speed: 3.0,
+            level_speed: 25.0,
+            up_speed: 23.0,
+            up_pitch_deg: 45.0,
+        )),
+    ),
     Smoke: (
         name: "Smoke Grenade",
         speed: 25.0,
@@ -76,6 +152,26 @@
         radius: 0.06,
         fuse: Timed(3.0),
         effect: Smoke(radius: 5.5, secs: 25.0),
+        count: 1,
+        cooldown_secs: 1.0,
+        throw: Some((
+            lob_deg: 16.0,
+            max_launch_deg: 70.0,
+            down_speed: 3.0,
+            level_speed: 25.0,
+            up_speed: 23.0,
+            up_pitch_deg: 45.0,
+        )),
+    ),
+    TearGas: (
+        name: "Tear Gas",
+        speed: 25.0,
+        gravity: 14.0,
+        restitution: 0.3,
+        friction: 0.5,
+        radius: 0.06,
+        fuse: Timed(2.0),
+        effect: Gas(radius: 5.0, secs: 16.0, slow: 0.45),
         count: 1,
         cooldown_secs: 1.0,
         throw: Some((

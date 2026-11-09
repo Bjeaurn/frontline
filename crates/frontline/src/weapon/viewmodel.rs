@@ -157,7 +157,7 @@ struct ArmEntities {
     support: LimbEntities,
     /// The Grenade in the strong hand, and one scene per kind under it.
     holder: Entity,
-    grenades: [(GrenadeKind, Entity); 3],
+    grenades: [(GrenadeKind, Entity); GrenadeKind::THROWN.len()],
 }
 
 /// The gloves, one mesh per `rig::glove_index`.
@@ -258,10 +258,22 @@ const PRISM_TUBE: (f32, f32) = (0.0125, 0.0165);
 const PRISM_DEPTH: f32 = 0.07;
 const PRISM_BELL: (f32, f32) = (0.004, 0.012);
 const PRISM_CHEVRON: (f32, f32) = (0.0075, 0.0009);
-/// Silencer girth relative to the barrel.
-const SUPPRESSOR_RADIUS_SCALE: f32 = 1.9;
-/// Foregrip: radius and length. Grenade Launcher: tube radius and length.
+/// Reflex window, frame bar thickness, housing length and its crosshair's bar length, thickness
+/// and the gap between the bars' inner ends and the centre.
+const REFLEX_WINDOW: Vec2 = Vec2::new(0.038, 0.022);
+const REFLEX_FRAME: f32 = 0.0012;
+const REFLEX_DEPTH: f32 = 0.014;
+const REFLEX_CROSS: (f32, f32, f32) = (0.006, 0.0007, 0.0035);
+/// 6x scope tube radii (inner, outer), length, objective bell growth and length, and the thin
+/// crosshair's thickness.
+const SCOPE6_TUBE: (f32, f32) = (0.015, 0.019);
+const SCOPE6_DEPTH: f32 = 0.15;
+const SCOPE6_BELL: (f32, f32) = (0.005, 0.02);
+const SCOPE6_CROSS: f32 = 0.0004;
+/// Foregrip: radius and length. Angled Grip: radius, length and how far it leans forward (radians
+/// from the vertical). Grenade Launcher: tube radius and length.
 const FOREGRIP: (f32, f32) = (0.014, 0.075);
+const ANGLED_GRIP: (f32, f32, f32) = (0.0135, 0.065, 0.6);
 const LAUNCHER: (f32, f32) = (0.022, 0.2);
 
 /// Gun origin relative to the camera when fully aimed: the sight point on the screen centre,
@@ -429,14 +441,14 @@ fn camo_uvs(mesh: &Mesh, to_gun: &Transform) -> Option<Vec<[f32; 2]>> {
 
 /// A rectangular optic around `sight`: four frame bars of thickness `frame` and length `depth`
 /// (centred `shift` towards the eye) around a glass `window`, with a dot of `dot` radius at its
-/// centre.
+/// centre if there is one (an optic with another reticle brings its own).
 fn optic_parts(
     sight: Vec3,
     window: Vec2,
     frame: f32,
     depth: f32,
     shift: f32,
-    dot: f32,
+    dot: Option<f32>,
 ) -> Vec<(Mesh, Furniture, Transform)> {
     let block = |size: Vec3, centre: Vec3| {
         (
@@ -449,7 +461,7 @@ fn optic_parts(
     let centre = sight + Vec3::Z * shift;
     let side = Vec3::new(t, h + 2.0 * t, depth);
     let bar = Vec3::new(w + 2.0 * t, t, depth);
-    vec![
+    let mut parts = vec![
         block(side, centre + Vec3::X * (w + t) / 2.0),
         block(side, centre - Vec3::X * (w + t) / 2.0),
         block(bar, centre + Vec3::Y * (h + t) / 2.0),
@@ -459,13 +471,16 @@ fn optic_parts(
             Furniture::Glass,
             Transform::from_translation(sight),
         ),
-        // Just in front of the glass towards the eye, so it never z-fights it.
+    ];
+    // Just in front of the glass towards the eye, so it never z-fights it.
+    parts.extend(dot.map(|radius| {
         (
-            Mesh::from(Circle::new(dot)),
+            Mesh::from(Circle::new(radius)),
             Furniture::Reticle,
             Transform::from_translation(sight + Vec3::Z * 0.001),
-        ),
-    ]
+        )
+    }));
+    parts
 }
 
 /// Meshes of the fitted Optic (`stats.sight`) built around its sight point, as
@@ -490,7 +505,7 @@ fn sight_parts(rig: &GunRig, stats: &WeaponStats) -> Vec<(Mesh, Furniture, Trans
     match stats.sight {
         SightKind::RedDot => {
             let (window, t) = (RED_DOT_WINDOW, RED_DOT_FRAME);
-            let mut parts = optic_parts(sight, window, t, RED_DOT_DEPTH, 0.0, RED_DOT_RADIUS);
+            let mut parts = optic_parts(sight, window, t, RED_DOT_DEPTH, 0.0, Some(RED_DOT_RADIUS));
             parts.push(mount(sight.y - window.y / 2.0 - t, sight.z, 0.012, 0.03));
             parts
         }
@@ -498,7 +513,7 @@ fn sight_parts(rig: &GunRig, stats: &WeaponStats) -> Vec<(Mesh, Furniture, Trans
             let (window, t) = (HOLO_WINDOW, HOLO_FRAME);
             // The housing runs forward from the window.
             let shift = -HOLO_DEPTH / 2.0 + 0.004;
-            let mut parts = optic_parts(sight, window, t, HOLO_DEPTH, shift, HOLO_DOT);
+            let mut parts = optic_parts(sight, window, t, HOLO_DEPTH, shift, Some(HOLO_DOT));
             let (inner, outer) = HOLO_RING;
             parts.push((
                 Mesh::from(Annulus::new(inner, outer)),
@@ -560,7 +575,7 @@ fn sight_parts(rig: &GunRig, stats: &WeaponStats) -> Vec<(Mesh, Furniture, Trans
             let (window, t) = (ACOG_WINDOW, ACOG_FRAME);
             // The housing runs forward from the eyepiece; a rail block sits on its top.
             let shift = -ACOG_DEPTH / 2.0 + 0.005;
-            let mut parts = optic_parts(sight, window, t, ACOG_DEPTH, shift, ACOG_RADIUS);
+            let mut parts = optic_parts(sight, window, t, ACOG_DEPTH, shift, Some(ACOG_RADIUS));
             parts.push(block(
                 Vec3::new(window.x + 2.0 * t, 0.012, ACOG_DEPTH),
                 sight + Vec3::new(0.0, (window.y + 2.0 * t + 0.012) / 2.0 + t / 2.0, shift),
@@ -572,6 +587,77 @@ fn sight_parts(rig: &GunRig, stats: &WeaponStats) -> Vec<(Mesh, Furniture, Trans
                 0.06,
             ));
             parts
+        }
+        SightKind::Reflex => {
+            let (window, t) = (REFLEX_WINDOW, REFLEX_FRAME);
+            let mut parts = optic_parts(sight, window, t, REFLEX_DEPTH, 0.0, None);
+            // A crosshair with an open centre: four short bars, just in front of the glass.
+            let (length, thickness, gap) = REFLEX_CROSS;
+            let reach = gap + length / 2.0;
+            for (size, offset) in [
+                (Vec2::new(length, thickness), Vec3::X * reach),
+                (Vec2::new(length, thickness), Vec3::NEG_X * reach),
+                (Vec2::new(thickness, length), Vec3::Y * reach),
+                (Vec2::new(thickness, length), Vec3::NEG_Y * reach),
+            ] {
+                parts.push((
+                    Mesh::from(Rectangle::from_size(size)),
+                    Furniture::Reticle,
+                    Transform::from_translation(sight + offset + Vec3::Z * 0.001),
+                ));
+            }
+            parts.push(mount(sight.y - window.y / 2.0 - t, sight.z, 0.011, 0.028));
+            parts
+        }
+        SightKind::LongScope => {
+            let (inner, outer) = SCOPE6_TUBE;
+            let (bell, bell_depth) = SCOPE6_BELL;
+            let shift = -SCOPE6_DEPTH / 2.0 + 0.008;
+            let cross = |size: Vec2| {
+                (
+                    Mesh::from(Rectangle::from_size(size)),
+                    Furniture::Reticle,
+                    Transform::from_translation(sight + Vec3::Z * 0.001),
+                )
+            };
+            vec![
+                (
+                    Mesh::from(Extrusion::new(Annulus::new(inner, outer), SCOPE6_DEPTH)),
+                    Furniture::Sight,
+                    Transform::from_translation(sight + Vec3::Z * shift),
+                ),
+                // The wider objective bell at the front end.
+                (
+                    Mesh::from(Extrusion::new(
+                        Annulus::new(inner, outer + bell),
+                        bell_depth,
+                    )),
+                    Furniture::Sight,
+                    Transform::from_translation(
+                        sight + Vec3::Z * (shift - SCOPE6_DEPTH / 2.0 + bell_depth / 2.0),
+                    ),
+                ),
+                (
+                    Mesh::from(Circle::new(inner)),
+                    Furniture::Glass,
+                    Transform::from_translation(sight),
+                ),
+                cross(Vec2::new(2.0 * inner, SCOPE6_CROSS)),
+                cross(Vec2::new(SCOPE6_CROSS, 2.0 * inner)),
+                // Two rings' worth of mount, near each end.
+                mount(
+                    sight.y - outer,
+                    sight.z + shift + SCOPE6_DEPTH * 0.3,
+                    0.018,
+                    0.02,
+                ),
+                mount(
+                    sight.y - outer,
+                    sight.z + shift - SCOPE6_DEPTH * 0.3,
+                    0.018,
+                    0.02,
+                ),
+            ]
         }
         SightKind::Irons | SightKind::Scope => Vec::new(),
     }
@@ -713,12 +799,7 @@ fn spawn_arms(
             ChildOf(root),
         ))
         .id();
-    let grenades = [
-        GrenadeKind::Frag,
-        GrenadeKind::Flashbang,
-        GrenadeKind::Smoke,
-    ]
-    .map(|kind| {
+    let grenades = GrenadeKind::THROWN.map(|kind| {
         let (file, scale, centre) = rig::grenade_model(kind);
         let scene =
             assets.load(AssetPath::from(format!("{EMBEDDED_ROOT}{file}")).with_label("Scene0"));
@@ -939,7 +1020,7 @@ fn build_gun(
     let stats = &*weapon.stats;
     let rig = rig::gun_rig(stats.model);
     let muzzle = Vec3::from(stats.muzzle_offset);
-    // Where the barrel itself ends: a Silencer carries on from there to the muzzle.
+    // Where the barrel itself ends: a muzzle device carries on from there to the muzzle.
     let barrel_end = muzzle.z + stats.muzzle_length;
     let mut part = |mesh: Mesh, furniture: Furniture, transform: Transform| {
         commands
@@ -956,11 +1037,7 @@ fn build_gun(
     };
     if stats.muzzle_length > 0.0 {
         part(
-            Cylinder::new(
-                rig.barrel_radius * SUPPRESSOR_RADIUS_SCALE,
-                stats.muzzle_length,
-            )
-            .into(),
+            Cylinder::new(rig.barrel_radius * stats.muzzle_girth, stats.muzzle_length).into(),
             Furniture::Sight,
             Transform::from_xyz(muzzle.x, muzzle.y, (barrel_end + muzzle.z) / 2.0)
                 .with_rotation(Quat::from_rotation_x(FRAC_PI_2)),
@@ -1020,6 +1097,22 @@ fn build_gun(
                 // The tube is wider than a Foregrip: the hand sits that much further out.
                 left_rest = HandPose {
                     position: rig.left_grip.position + Vec3::X * (FOREGRIP.0 - LAUNCHER.0),
+                    ..rig.left_grip
+                };
+            }
+            Some(AttachmentId::AngledGrip) => {
+                // Leans forward from the handguard; the hand holds its middle.
+                let (sin, cos) = ANGLED_GRIP.2.sin_cos();
+                let down = Vec3::new(0.0, -cos, -sin);
+                let middle = at + down * ANGLED_GRIP.1 / 2.0;
+                part(
+                    Cylinder::new(ANGLED_GRIP.0, ANGLED_GRIP.1).into(),
+                    Furniture::Polymer,
+                    Transform::from_translation(middle)
+                        .with_rotation(Quat::from_rotation_arc(Vec3::Y, -down)),
+                );
+                left_rest = HandPose {
+                    position: Vec3::new(rig.left_grip.position.x, middle.y, middle.z),
                     ..rig.left_grip
                 };
             }
@@ -1136,7 +1229,7 @@ fn animate_viewmodel(
     settings: Res<Settings>,
     (gloves, mut glove_meshes): (Res<GloveMeshes>, Query<&mut Mesh3d>),
 ) {
-    let shots = fired.read().count();
+    let shots = fired.read().filter(|shot| shot.pellet == 0).count();
     let thrown = throws
         .read()
         .map(|throw| throw.0.kind)

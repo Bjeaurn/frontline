@@ -625,12 +625,25 @@ mod tests {
     fn the_shipped_table_unlocks_the_starting_kit_then_the_rest_in_order() {
         let data = data();
         let progression = &data.progression;
-        for id in WeaponId::ALL.into_iter().filter(|id| *id != WeaponId::M16) {
-            assert!(progression.is_unlocked(UnlockItem::Weapon(id), 1), "{id:?}");
+        let later = |id| match id {
+            WeaponId::M16 => Some(4),
+            WeaponId::Aks74u => Some(6),
+            WeaponId::Ak47 => Some(9),
+            WeaponId::Shotgun => Some(14),
+            _ => None,
+        };
+        for id in WeaponId::ALL {
+            let item = UnlockItem::Weapon(id);
+            match later(id) {
+                // The starting kit; the rest come with Levels.
+                None => assert!(progression.is_unlocked(item, 1), "{id:?}"),
+                Some(level) => {
+                    assert!(!progression.is_unlocked(item, level - 1), "{id:?}");
+                    assert!(progression.is_unlocked(item, level), "{id:?}");
+                }
+            }
         }
-        // The M16A4 and the tactical Equipment come with Levels.
-        let m16 = UnlockItem::Weapon(WeaponId::M16);
-        assert!(!progression.is_unlocked(m16, 3) && progression.is_unlocked(m16, 4));
+        // The tactical Equipment comes with Levels too.
         let equipment = |id| UnlockItem::Equipment(id);
         assert!(progression.is_unlocked(equipment(crate::class::EquipmentId::Frag), 1));
         assert_eq!(
@@ -771,9 +784,19 @@ mod tests {
         let rifle = WeaponId::AssaultRifle;
         let order = |weapon, level| progression.attachments_unlocked_at(weapon, level);
         assert_eq!(order(rifle, 1), [AttachmentId::RedDot]);
-        assert_eq!(order(rifle, 2), [AttachmentId::Silencer]);
-        assert_eq!(order(rifle, 3), [AttachmentId::Holographic]);
-        assert_eq!(order(rifle, 5), [AttachmentId::Acog]);
+        assert_eq!(
+            order(rifle, 2),
+            [AttachmentId::Silencer, AttachmentId::Reflex]
+        );
+        assert_eq!(
+            order(rifle, 3),
+            [
+                AttachmentId::Holographic,
+                AttachmentId::Compensator,
+                AttachmentId::AngledGrip
+            ]
+        );
+        assert_eq!(order(rifle, 5), [AttachmentId::Acog, AttachmentId::Scope6x]);
         assert_eq!(
             progression.attachment_level(rifle, AttachmentId::Prism),
             Some(4)
@@ -781,9 +804,11 @@ mod tests {
         // The sniper has no Optics and the pistol nothing at all.
         for optic in [
             AttachmentId::RedDot,
+            AttachmentId::Reflex,
             AttachmentId::Holographic,
             AttachmentId::Prism,
             AttachmentId::Acog,
+            AttachmentId::Scope6x,
         ] {
             assert_eq!(
                 progression.attachment_level(WeaponId::SniperRifle, optic),

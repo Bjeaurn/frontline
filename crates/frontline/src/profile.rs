@@ -975,7 +975,8 @@ mod tests {
                     .weapon_levels,
             );
         }
-        // 5, 15 and 30 kills: Weapon Levels 1 (Red Dot), 2 (Silencer), 3 (Holographic).
+        // 5, 15 and 30 kills: Weapon Levels 1 (Red Dot), 2 (Silencer, Reflex), 3 (Holographic,
+        // Compensator, Angled Grip).
         assert_eq!(
             gains,
             [
@@ -987,12 +988,16 @@ mod tests {
                 WeaponLevelGain {
                     weapon: rifle,
                     level: 2,
-                    attachments: vec![AttachmentId::Silencer]
+                    attachments: vec![AttachmentId::Silencer, AttachmentId::Reflex]
                 },
                 WeaponLevelGain {
                     weapon: rifle,
                     level: 3,
-                    attachments: vec![AttachmentId::Holographic]
+                    attachments: vec![
+                        AttachmentId::Holographic,
+                        AttachmentId::Compensator,
+                        AttachmentId::AngledGrip
+                    ]
                 },
             ]
         );

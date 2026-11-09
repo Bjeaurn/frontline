@@ -1,13 +1,27 @@
-// Perks: three Perk Slots, two Perks each. Read at startup from ./data/ (falls back to the copy
-// built into the binary). `effects` are multipliers (1 changes nothing) or flags:
-//   reload_time_mul     scales every Weapon's reload time
-//   damage_mul          scales bullet damage (applied by the server)
-//   move_speed_mul      scales movement speed
-//   sprint_stamina_mul  scales how long a sprint lasts
-//   silent_footsteps    other players don't hear this player's footsteps
-//   scavenger           a dead player's ammo pack gives the full refill instead of a share
+// Perks: three Perk Slots, five Perks each. Read at startup from ./data/ (falls back to the copy
+// built into the binary). `effects` are multipliers (1 changes nothing), counts or flags; Perk
+// Greed pairs stack (multipliers multiply, counts add, flags are either's):
+//   reload_time_mul       scales every Weapon's reload time
+//   damage_mul            scales bullet damage (applied by the server)
+//   move_speed_mul        scales movement speed
+//   sprint_stamina_mul    scales how long a sprint lasts
+//   silent_footsteps      other players don't hear this player's footsteps
+//   scavenger             a dead player's ammo pack gives the full refill instead of a share
+//   extra_magazines       spare magazines added to every Weapon's Reserve
+//   hip_spread_mul        scales the hip-fire spread (standing, moving, airborne)
+//   ads_secs_mul          scales the time to aim down sights
+//   regen_delay_mul       scales the wait before health regenerates (applied by the server)
+//   regen_rate_mul        scales how fast health regenerates (applied by the server)
+//   max_health_mul        scales maximum health (applied by the server)
+//   explosive_damage_mul  scales the damage of this player's Grenades and launcher rounds
+//                         (applied by the server, to others)
+//   flinch_mul            scales how far a hit kicks the view
+//   flash_time_mul        scales how long a Flashbang blinds and deafens this player (server)
+//   fall_guard            falls do no damage (applied by the server)
+// A Perk unlocks at the Level progression.ron says.
 (
     perks: {
+        // Perk Slot 1.
         SleightOfHand: (
             name: "Sleight of Hand",
             description: "Reload 30% faster.",
@@ -20,6 +34,25 @@
             slot: 1,
             effects: (scavenger: true),
         ),
+        Bandolier: (
+            name: "Bandolier",
+            description: "One extra spare magazine for every Weapon.",
+            slot: 1,
+            effects: (extra_magazines: 1),
+        ),
+        SteadyAim: (
+            name: "Steady Aim",
+            description: "Hip-fire spread is 30% tighter.",
+            slot: 1,
+            effects: (hip_spread_mul: 0.7),
+        ),
+        Quickdraw: (
+            name: "Quickdraw",
+            description: "Aim down sights 30% faster.",
+            slot: 1,
+            effects: (ads_secs_mul: 0.7),
+        ),
+        // Perk Slot 2.
         StoppingPower: (
             name: "Stopping Power",
             description: "Bullets deal 25% more damage.",
@@ -32,6 +65,25 @@
             slot: 2,
             effects: (move_speed_mul: 1.1),
         ),
+        QuickRecovery: (
+            name: "Quick Recovery",
+            description: "Health regeneration starts 40% sooner and runs 50% faster.",
+            slot: 2,
+            effects: (regen_delay_mul: 0.6, regen_rate_mul: 1.5),
+        ),
+        Juggernaut: (
+            name: "Juggernaut",
+            description: "25% more maximum health.",
+            slot: 2,
+            effects: (max_health_mul: 1.25),
+        ),
+        DangerClose: (
+            name: "Danger Close",
+            description: "Grenades and the 40mm launcher deal 30% more damage.",
+            slot: 2,
+            effects: (explosive_damage_mul: 1.3),
+        ),
+        // Perk Slot 3.
         Marathon: (
             name: "Marathon",
             description: "Sprint 2.5x as long.",
@@ -43,6 +95,24 @@
             description: "Your footsteps make no sound.",
             slot: 3,
             effects: (silent_footsteps: true),
+        ),
+        Hardened: (
+            name: "Hardened",
+            description: "Hits kick your view 50% less.",
+            slot: 3,
+            effects: (flinch_mul: 0.5),
+        ),
+        TacticalMask: (
+            name: "Tactical Mask",
+            description: "Flashbangs blind and deafen you half as long.",
+            slot: 3,
+            effects: (flash_time_mul: 0.5),
+        ),
+        FallGuard: (
+            name: "Fall Guard",
+            description: "Falls do no damage.",
+            slot: 3,
+            effects: (fall_guard: true),
         ),
     },
     // Ammo packs a dead player drops. Anyone alive who walks within `pickup_radius` of one takes it

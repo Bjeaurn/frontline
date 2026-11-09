@@ -170,7 +170,8 @@ fn play_local_shots(
     mut cue: RearCue,
     mut commands: Commands,
 ) {
-    for shot in fired.read() {
+    // Only a round's first pellet makes its sound; the others are the same shot.
+    for shot in fired.read().filter(|shot| shot.pellet == 0) {
         let speed = pitch(&mut rng) * shot.pitch;
         play_flat(
             &mut commands,
@@ -195,8 +196,8 @@ fn play_remote_shots(
     mut cue: RearCue,
     mut commands: Commands,
 ) {
-    for FromServer(tracer) in tracers.read() {
-        let (volume, shot_pitch) = data.shot_sound(tracer.attachments);
+    for FromServer(tracer) in tracers.read().filter(|tracer| tracer.0.pellet == 0) {
+        let (volume, shot_pitch) = data.shot_sound(tracer.weapon, tracer.attachments);
         let speed = pitch(&mut rng) * shot_pitch;
         cue.play(
             &mut commands,
@@ -229,7 +230,7 @@ fn play_projectile_sounds(
         if Some(shot.shooter) == own {
             continue;
         }
-        let (volume, shot_pitch) = data.shot_sound(shot.attachments);
+        let (volume, shot_pitch) = data.shot_sound(shot.weapon, shot.attachments);
         let speed = pitch(&mut rng) * shot_pitch;
         cue.play(
             &mut commands,

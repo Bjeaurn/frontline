@@ -168,18 +168,25 @@ fn dress_muzzle_flash(
     });
 }
 
+/// The flash of a round's first pellet, as big as its Muzzle Attachment makes it; none with a
+/// Silencer.
 fn show_muzzle_flash(
     mut fired: MessageReader<ShotFired>,
     mut rng: ResMut<WeaponRng>,
     mut flash: Query<(&mut MuzzleFlash, &mut Transform, &mut Visibility)>,
 ) {
-    if fired.read().all(|shot| shot.silenced) {
+    let Some(scale) = fired
+        .read()
+        .filter(|shot| shot.pellet == 0 && !shot.silenced)
+        .map(|shot| shot.flash_scale)
+        .reduce(f32::max)
+    else {
         return;
-    }
+    };
     for (mut flash, mut transform, mut visibility) in &mut flash {
         flash.left = FLASH_SECS;
         transform.rotation = Quat::from_rotation_z(rng.next() * std::f32::consts::TAU);
-        transform.scale = Vec3::splat(FLASH_SCALE.0.lerp(FLASH_SCALE.1, rng.next()));
+        transform.scale = Vec3::splat(FLASH_SCALE.0.lerp(FLASH_SCALE.1, rng.next()) * scale);
         *visibility = Visibility::Inherited;
     }
 }
@@ -256,9 +263,12 @@ fn spawn_local_tracers(
     }
 }
 
-/// Another player's shot: a tracer, and a flash and smoke wisp at where their muzzle should be.
+/// Another player's shot: a tracer, and, for a round's first pellet, a flash and smoke wisp at where
+/// their muzzle should be. The flash is as big as their Muzzle Attachment makes it and left out for
+/// one that hides it from others (`GameData::flash_scale_seen_by_others`).
 fn spawn_remote_tracers(
     mut tracers: MessageReader<FromServer<ShotTracer>>,
+    data: Res<GameData>,
     assets: Res<EffectAssets>,
     particles: Res<ParticleAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -270,27 +280,33 @@ fn spawn_remote_tracers(
         let Ok(direction) = Dir3::new(tracer.end - tracer.origin) else {
             continue;
         };
+        if tracer.pellet != 0 {
+            continue;
+        }
         let muzzle = tracer.origin + *direction * REMOTE_MUZZLE.0 + Vec3::Y * REMOTE_MUZZLE.1;
-        spawn_puff(
-            &mut commands,
-            &mut materials,
-            &particles,
-            PuffSpec {
-                at: muzzle + *direction * 0.1,
-                start_size: 0.3,
-                end_size: 0.12,
-                grow_secs: FLASH_SECS,
-                life: FLASH_SECS,
-                shape: Shape::Star,
-                color: LinearRgba::rgb(5.0, 3.2, 1.1),
-                alpha: 1.0,
-                additive: true,
-                drag: 0.0,
-                fade: Fade::Out { in_secs: 0.01 },
-                angle: rng.next() * std::f32::consts::TAU,
-                ..default()
-            },
-        );
+        let flash = data.flash_scale_seen_by_others(tracer.weapon, tracer.attachments);
+        if flash > 0.0 {
+            spawn_puff(
+                &mut commands,
+                &mut materials,
+                &particles,
+                PuffSpec {
+                    at: muzzle + *direction * 0.1,
+                    start_size: 0.3 * flash,
+                    end_size: 0.12,
+                    grow_secs: FLASH_SECS,
+                    life: FLASH_SECS,
+                    shape: Shape::Star,
+                    color: LinearRgba::rgb(5.0, 3.2, 1.1),
+                    alpha: 1.0,
+                    additive: true,
+                    drag: 0.0,
+                    fade: Fade::Out { in_secs: 0.01 },
+                    angle: rng.next() * std::f32::consts::TAU,
+                    ..default()
+                },
+            );
+        }
         spawn_puff(
             &mut commands,
             &mut materials,

@@ -3,8 +3,9 @@
 //! the hands go, and the procedural hand and sleeve meshes. Also what a third-person holder (a
 //! remote player) needs to carry the same gun: `GunRig::model_transform` and `grip`.
 //!
-//! The first-person guns are the Styloo Guns Asset Pack's (the SMG, Sniper and Pistol) and the
-//! M4 and M16A4 built from primitives by `tools/assets/build_rifles.py` (assets/models/CREDITS.md):
+//! The first-person guns are the Styloo Guns Asset Pack's (the AK-47 and its stockless variant, the
+//! shotgun, the SMG, Sniper and Pistol) and the M4 and M16A4 built from primitives by
+//! `tools/assets/build_rifles.py` (assets/models/CREDITS.md):
 //! authored along +X with +Y up, so `model_transform` turns them to face -Z.
 
 use std::f32::consts::FRAC_PI_2;
@@ -264,6 +265,63 @@ pub fn gun_rig(model: GunModel) -> GunRig {
             left_grip: left_on_grip(Vec3::new(-0.03, 0.0, -0.26)),
             underbarrel: None,
         },
+        GunModel::Ak => GunRig {
+            file: "models/weapons/ak47.glb",
+            scale: Vec3::ONE,
+            offset: Vec3::ZERO,
+            magazine: Some("akmagazine_low"),
+            mag_travel: Vec3::new(0.0, -0.17, 0.06),
+            bare: &["aktrigger_low", "akmagazine_low"],
+            ads_hidden: &["akderriere_low"],
+            optic_hidden: &[],
+            body_top: 0.066,
+            barrel_radius: 0.0055,
+            bolt: None,
+            right: right_on_grip(Vec3::new(0.025, -0.065, 0.041)),
+            left: left_under(Vec3::new(-0.02, -0.012, -0.26)),
+            left_mag: left_on_grip(Vec3::new(-0.03, -0.085, -0.135)),
+            left_grip: left_on_grip(Vec3::new(-0.03, -0.0335, -0.27)),
+            underbarrel: Some(Vec3::new(0.0, 0.004, -0.27)),
+        },
+        // The AK without its stock, its length drawn shorter: the AKS-74U's compact body.
+        GunModel::Compact => GunRig {
+            file: "models/weapons/ak47variant.glb",
+            scale: Vec3::new(0.8, 1.0, 1.0),
+            offset: Vec3::ZERO,
+            magazine: Some("akmagazine_low.001"),
+            mag_travel: Vec3::new(0.0, -0.17, 0.05),
+            bare: &["aktrigger_low.001", "akmagazine_low.001"],
+            ads_hidden: &[],
+            optic_hidden: &[],
+            body_top: 0.066,
+            barrel_radius: 0.0055,
+            bolt: None,
+            right: right_on_grip(Vec3::new(0.025, -0.065, 0.033)),
+            left: left_under(Vec3::new(-0.02, -0.012, -0.21)),
+            left_mag: left_on_grip(Vec3::new(-0.03, -0.085, -0.105)),
+            left_grip: left_on_grip(Vec3::new(-0.03, -0.0335, -0.215)),
+            underbarrel: Some(Vec3::new(0.0, 0.004, -0.215)),
+        },
+        // A pump-action shotgun: the forend is the "magazine", racked back by the left hand in a
+        // reload. No Underbarrel Attachment fits it.
+        GunModel::Shotgun => GunRig {
+            file: "models/weapons/shotgun.glb",
+            scale: Vec3::ONE,
+            offset: Vec3::ZERO,
+            magazine: Some("shotgunpomp"),
+            mag_travel: Vec3::new(0.0, 0.0, 0.07),
+            bare: &["shotguntrigger"],
+            ads_hidden: &[],
+            optic_hidden: &[],
+            body_top: 0.064,
+            barrel_radius: 0.008,
+            bolt: None,
+            right: right_on_grip(Vec3::new(0.027, -0.012, 0.115)),
+            left: left_under(Vec3::new(-0.02, 0.0, -0.146)),
+            left_mag: left_under(Vec3::new(-0.02, 0.0, -0.146)),
+            left_grip: left_under(Vec3::new(-0.02, 0.0, -0.146)),
+            underbarrel: None,
+        },
         GunModel::Pistol => GunRig {
             file: "models/weapons/pew.glb",
             scale: Vec3::splat(1.4),
@@ -289,8 +347,14 @@ pub fn gun_rig(model: GunModel) -> GunRig {
 pub fn grenade_model(kind: GrenadeKind) -> (&'static str, f32, f32) {
     match kind {
         GrenadeKind::Frag => ("models/weapons/nade_low.glb", 0.65, 0.05),
+        // The Semtex is a smaller charge on the frag's body.
+        GrenadeKind::Semtex => ("models/weapons/nade_low.glb", 0.5, 0.05),
+        // The mine is the smoke canister, a little smaller.
+        GrenadeKind::Mine => ("models/weapons/smoke_low.glb", 0.8, 0.02),
         GrenadeKind::Flashbang => ("models/weapons/flashbang_low.glb", 1.0, 0.0),
+        GrenadeKind::Stun => ("models/weapons/flashbang_low.glb", 1.0, 0.0),
         GrenadeKind::Smoke => ("models/weapons/smoke_low.glb", 1.0, 0.02),
+        GrenadeKind::TearGas => ("models/weapons/smoke_low.glb", 1.0, 0.02),
         // The 40mm round has no model of its own.
         GrenadeKind::Launcher => ("models/weapons/nade_low.glb", 0.4, 0.05),
     }
@@ -511,13 +575,24 @@ pub fn glove_mesh(curl: f32, left: bool, trigger: bool) -> Mesh {
 mod tests {
     use super::*;
 
-    const MODELS: [GunModel; 5] = [
+    const MODELS: [GunModel; 8] = [
         GunModel::Carbine,
         GunModel::Rifle,
+        GunModel::Ak,
+        GunModel::Compact,
+        GunModel::Shotgun,
         GunModel::Smg,
         GunModel::Sniper,
         GunModel::Pistol,
     ];
+
+    #[test]
+    fn every_weapon_s_model_is_one_the_tests_cover() {
+        let data = crate::data::GameData::load();
+        for (id, stats) in &data.weapons {
+            assert!(MODELS.contains(&stats.model), "{id:?}: {:?}", stats.model);
+        }
+    }
 
     /// The JSON chunk of a model file, without whitespace.
     fn model_json(rig: &GunRig) -> String {

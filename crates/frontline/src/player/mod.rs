@@ -19,7 +19,7 @@ pub use controller::{ControllerModifiers, EyeCamera, MenuOpen, Motor, MouseCaptu
 pub use life::LocalLife;
 
 /// Body radius used for the local collider and remote capsules, in metres.
-const BODY_RADIUS: f32 = 0.3;
+pub const BODY_RADIUS: f32 = 0.3;
 
 /// Phases of the local controller in `Update`, in order.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]

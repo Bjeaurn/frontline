@@ -54,16 +54,24 @@ impl WildcardId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum EquipmentId {
     Frag,
+    Semtex,
+    Mine,
     Flashbang,
+    Stun,
     Smoke,
+    TearGas,
 }
 
 impl EquipmentId {
-    /// Every piece of equipment, in the order the editor lists them.
-    pub const ALL: [EquipmentId; 3] = [
+    /// Every piece of equipment, in the order the editor lists them (lethal ones, then tactical).
+    pub const ALL: [EquipmentId; 7] = [
         EquipmentId::Frag,
+        EquipmentId::Semtex,
+        EquipmentId::Mine,
         EquipmentId::Flashbang,
+        EquipmentId::Stun,
         EquipmentId::Smoke,
+        EquipmentId::TearGas,
     ];
 }
 

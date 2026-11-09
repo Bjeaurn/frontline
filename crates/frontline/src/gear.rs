@@ -21,6 +21,11 @@ fn one() -> f32 {
     1.0
 }
 
+/// How wide a muzzle device is drawn, relative to the barrel, when its data doesn't say.
+fn default_muzzle_girth() -> f32 {
+    1.9
+}
+
 fn no_camo() -> String {
     NO_CAMO.to_owned()
 }
@@ -35,17 +40,32 @@ pub enum AttachmentId {
     Foregrip,
     /// The M16A4's underslung grenade launcher (the "noob tube"): fires `GrenadeKind::Launcher`.
     GrenadeLauncher,
+    /// A 1x open reflex sight with a crosshair reticle; quick to aim.
+    Reflex,
+    /// A 6x scope: the strongest Optic.
+    Scope6x,
+    /// Muzzle brake: steadier, with a bigger flash.
+    Compensator,
+    /// Muzzle device that hides the flash from everyone else and shrinks it in the shooter's view.
+    FlashHider,
+    /// A grip angled forward: quicker to aim and a little steadier.
+    AngledGrip,
 }
 
 impl AttachmentId {
     /// Every Attachment, in the order menus list them.
-    pub const ALL: [AttachmentId; 7] = [
+    pub const ALL: [AttachmentId; 12] = [
         AttachmentId::RedDot,
+        AttachmentId::Reflex,
         AttachmentId::Holographic,
         AttachmentId::Prism,
         AttachmentId::Acog,
+        AttachmentId::Scope6x,
         AttachmentId::Silencer,
+        AttachmentId::Compensator,
+        AttachmentId::FlashHider,
         AttachmentId::Foregrip,
+        AttachmentId::AngledGrip,
         AttachmentId::GrenadeLauncher,
     ];
 }
@@ -77,6 +97,8 @@ pub struct StatMods {
     pub ads_secs_mul: f32,
     /// Scales the recoil kick: below 1 is steadier.
     pub recoil_mul: f32,
+    /// Scales the idle sway while aimed: below 1 is steadier.
+    pub sway_mul: f32,
 }
 
 impl Default for StatMods {
@@ -85,6 +107,7 @@ impl Default for StatMods {
             falloff_mul: 1.0,
             ads_secs_mul: 1.0,
             recoil_mul: 1.0,
+            sway_mul: 1.0,
         }
     }
 }
@@ -96,6 +119,7 @@ impl StatMods {
             falloff_mul: self.falloff_mul * other.falloff_mul,
             ads_secs_mul: self.ads_secs_mul * other.ads_secs_mul,
             recoil_mul: self.recoil_mul * other.recoil_mul,
+            sway_mul: self.sway_mul * other.sway_mul,
         }
     }
 
@@ -105,6 +129,7 @@ impl StatMods {
         stats.ads_secs *= self.ads_secs_mul;
         stats.recoil_pitch_deg *= self.recoil_mul;
         stats.recoil_yaw_deg *= self.recoil_mul;
+        stats.sway_deg *= self.sway_mul;
     }
 }
 
@@ -140,6 +165,16 @@ pub struct Attachment {
     /// How far it extends the muzzle in front of the barrel, in metres.
     #[serde(default)]
     pub muzzle_length: f32,
+    /// How wide the muzzle device is drawn, as a multiple of the barrel's radius.
+    #[serde(default = "default_muzzle_girth")]
+    pub muzzle_girth: f32,
+    /// Multiplies the size of the muzzle flash in the shooter's own view.
+    #[serde(default = "one")]
+    pub flash_scale: f32,
+    /// Other players see no muzzle flash where this is fitted (the shooter's own view is
+    /// `flash_scale` and `silenced`).
+    #[serde(default)]
+    pub hides_flash_from_others: bool,
 }
 
 /// What is fitted to a Weapon. Copy, so a shot can carry it to the server.
@@ -186,21 +221,39 @@ impl Attachments {
 pub enum PerkId {
     SleightOfHand,
     Scavenger,
+    Bandolier,
+    SteadyAim,
+    Quickdraw,
     StoppingPower,
     Lightweight,
+    QuickRecovery,
+    Juggernaut,
+    DangerClose,
     Marathon,
     Ninja,
+    Hardened,
+    TacticalMask,
+    FallGuard,
 }
 
 impl PerkId {
-    /// Every Perk, in the order menus list them (each Perk Slot's two, in turn).
-    pub const ALL: [PerkId; 6] = [
+    /// Every Perk, in the order menus list them (each Perk Slot's, in turn).
+    pub const ALL: [PerkId; 15] = [
         PerkId::SleightOfHand,
         PerkId::Scavenger,
+        PerkId::Bandolier,
+        PerkId::SteadyAim,
+        PerkId::Quickdraw,
         PerkId::StoppingPower,
         PerkId::Lightweight,
+        PerkId::QuickRecovery,
+        PerkId::Juggernaut,
+        PerkId::DangerClose,
         PerkId::Marathon,
         PerkId::Ninja,
+        PerkId::Hardened,
+        PerkId::TacticalMask,
+        PerkId::FallGuard,
     ];
 }
 
@@ -252,6 +305,26 @@ pub struct PerkEffects {
     pub silent_footsteps: bool,
     /// A dead player's ammo pack gives the full refill instead of a share of the Reserve.
     pub scavenger: bool,
+    /// Spare magazines added to the Reserve of every Weapon.
+    pub extra_magazines: u32,
+    /// Scales the hip-fire spread (standing, moving and airborne): below 1 is steadier.
+    pub hip_spread_mul: f32,
+    /// Scales the time to aim down sights: below 1 is faster.
+    pub ads_secs_mul: f32,
+    /// Scales how long health regeneration waits after damage (applied by the server).
+    pub regen_delay_mul: f32,
+    /// Scales how fast health regenerates (applied by the server).
+    pub regen_rate_mul: f32,
+    /// Scales maximum health (applied by the server, shown by the client).
+    pub max_health_mul: f32,
+    /// Scales the damage this player's Grenades and launcher rounds deal (applied by the server).
+    pub explosive_damage_mul: f32,
+    /// Scales how far a hit kicks the view.
+    pub flinch_mul: f32,
+    /// Scales how long a Flashbang blinds and deafens this player (applied by the server).
+    pub flash_time_mul: f32,
+    /// Falls hurt this player not at all (applied by the server).
+    pub fall_guard: bool,
 }
 
 impl Default for PerkEffects {
@@ -263,12 +336,22 @@ impl Default for PerkEffects {
             sprint_stamina_mul: 1.0,
             silent_footsteps: false,
             scavenger: false,
+            extra_magazines: 0,
+            hip_spread_mul: 1.0,
+            ads_secs_mul: 1.0,
+            regen_delay_mul: 1.0,
+            regen_rate_mul: 1.0,
+            max_health_mul: 1.0,
+            explosive_damage_mul: 1.0,
+            flinch_mul: 1.0,
+            flash_time_mul: 1.0,
+            fall_guard: false,
         }
     }
 }
 
 impl PerkEffects {
-    /// Both sets of effects at once.
+    /// Both sets of effects at once: multipliers multiply, magazines add, flags are either's.
     pub fn combine(self, other: PerkEffects) -> PerkEffects {
         PerkEffects {
             reload_time_mul: self.reload_time_mul * other.reload_time_mul,
@@ -277,7 +360,61 @@ impl PerkEffects {
             sprint_stamina_mul: self.sprint_stamina_mul * other.sprint_stamina_mul,
             silent_footsteps: self.silent_footsteps || other.silent_footsteps,
             scavenger: self.scavenger || other.scavenger,
+            extra_magazines: self.extra_magazines + other.extra_magazines,
+            hip_spread_mul: self.hip_spread_mul * other.hip_spread_mul,
+            ads_secs_mul: self.ads_secs_mul * other.ads_secs_mul,
+            regen_delay_mul: self.regen_delay_mul * other.regen_delay_mul,
+            regen_rate_mul: self.regen_rate_mul * other.regen_rate_mul,
+            max_health_mul: self.max_health_mul * other.max_health_mul,
+            explosive_damage_mul: self.explosive_damage_mul * other.explosive_damage_mul,
+            flinch_mul: self.flinch_mul * other.flinch_mul,
+            flash_time_mul: self.flash_time_mul * other.flash_time_mul,
+            fall_guard: self.fall_guard || other.fall_guard,
         }
+    }
+
+    /// Puts the effects that change a Weapon (reload, handling, Reserve, spread, flinch) on its
+    /// stats, which already carry its Attachments.
+    pub fn apply_to_weapon(&self, stats: &mut WeaponStats) {
+        stats.reload_secs *= self.reload_time_mul;
+        stats.empty_reload_secs *= self.reload_time_mul;
+        stats.move_scale *= self.move_speed_mul;
+        stats.reserve_mags += self.extra_magazines;
+        stats.hip_spread_deg *= self.hip_spread_mul;
+        stats.move_spread_deg *= self.hip_spread_mul;
+        stats.air_spread_deg *= self.hip_spread_mul;
+        stats.ads_secs *= self.ads_secs_mul;
+        stats.flinch_deg *= self.flinch_mul;
+    }
+
+    /// A player's maximum health, given the Match Rules' `base`.
+    pub fn max_health(&self, base: f32) -> f32 {
+        base * self.max_health_mul
+    }
+
+    /// Seconds without damage before regeneration starts, given the Match Rules' `base`.
+    pub fn regen_delay_secs(&self, base: f32) -> f32 {
+        base * self.regen_delay_mul
+    }
+
+    /// Health regenerated per second, given the Match Rules' `base`.
+    pub fn regen_per_sec(&self, base: f32) -> f32 {
+        base * self.regen_rate_mul
+    }
+
+    /// The damage a fall of `damage` really does.
+    pub fn fall_damage(&self, damage: f32) -> f32 {
+        if self.fall_guard { 0.0 } else { damage }
+    }
+
+    /// The damage a Grenade blast or launcher round of `damage` does when this player fired it.
+    pub fn blast_damage(&self, damage: f32) -> f32 {
+        damage * self.explosive_damage_mul
+    }
+
+    /// How long a Flashbang effect of `secs` lasts on this player.
+    pub fn flash_secs(&self, secs: f32) -> f32 {
+        secs * self.flash_time_mul
     }
 }
 
@@ -464,15 +601,41 @@ impl GameData {
             .filter(move |id| self.perk(*id).slot == slot)
     }
 
-    /// The volume and playback speed multipliers the Attachments fitted put on a gunshot.
-    pub fn shot_sound(&self, attachments: Attachments) -> (f32, f32) {
-        attachments.iter().fold((1.0, 1.0), |(volume, pitch), id| {
-            let attachment = self.attachment(id);
-            (
-                volume * attachment.shot_volume,
-                pitch * attachment.shot_pitch,
-            )
-        })
+    /// The Muzzle Attachment really fitted to `weapon`: none on a Weapon without a Muzzle slot.
+    fn fitted_muzzle(&self, weapon: WeaponId, attachments: Attachments) -> Option<&Attachment> {
+        attachments
+            .muzzle
+            .filter(|_| self.weapon(weapon).accepts(AttachmentSlot::Muzzle))
+            .map(|id| self.attachment(id))
+    }
+
+    /// The volume and playback speed of `weapon`'s gunshot with `attachments` fitted: its own
+    /// (`shot_volume`, `shot_pitch` in weapons.ron) times its Muzzle Attachment's.
+    pub fn shot_sound(&self, weapon: WeaponId, attachments: Attachments) -> (f32, f32) {
+        let own = self.weapon(weapon);
+        self.fitted_muzzle(weapon, attachments).map_or(
+            (own.shot_volume, own.shot_pitch),
+            |muzzle| {
+                (
+                    own.shot_volume * muzzle.shot_volume,
+                    own.shot_pitch * muzzle.shot_pitch,
+                )
+            },
+        )
+    }
+
+    /// How big a muzzle flash other players see where `weapon` fires with `attachments` fitted,
+    /// against a plain muzzle's (1): none (0) with a Muzzle Attachment that hides it (the Silencer,
+    /// the Flash Hider), more with a Compensator.
+    pub fn flash_scale_seen_by_others(&self, weapon: WeaponId, attachments: Attachments) -> f32 {
+        self.fitted_muzzle(weapon, attachments)
+            .map_or(1.0, |muzzle| {
+                if muzzle.hides_flash_from_others {
+                    0.0
+                } else {
+                    muzzle.flash_scale
+                }
+            })
     }
 
     /// The Attachments fitted at once, combined.
@@ -522,20 +685,16 @@ impl GameData {
                 }
             }
         }
-        if let Some(muzzle) = attachments
-            .muzzle
-            .filter(|_| stats.accepts(AttachmentSlot::Muzzle))
-            .map(|id| self.attachment(id))
-        {
+        if let Some(muzzle) = self.fitted_muzzle(id, attachments) {
             stats.silenced = muzzle.silenced;
-            stats.shot_volume = muzzle.shot_volume;
-            stats.shot_pitch = muzzle.shot_pitch;
+            stats.shot_volume *= muzzle.shot_volume;
+            stats.shot_pitch *= muzzle.shot_pitch;
             stats.muzzle_length = muzzle.muzzle_length;
+            stats.muzzle_girth = muzzle.muzzle_girth;
+            stats.flash_scale = muzzle.flash_scale;
             stats.muzzle_offset.2 -= muzzle.muzzle_length;
         }
-        stats.reload_secs *= perks.reload_time_mul;
-        stats.empty_reload_secs *= perks.reload_time_mul;
-        stats.move_scale *= perks.move_speed_mul;
+        perks.apply_to_weapon(&mut stats);
         stats
     }
 }
@@ -588,6 +747,129 @@ mod tests {
         assert!((gripped.recoil_pitch_deg - base.recoil_pitch_deg * 0.75).abs() < 1e-4);
         assert!((gripped.recoil_yaw_deg - base.recoil_yaw_deg * 0.75).abs() < 1e-4);
         assert!(gripped.ads_secs > base.ads_secs);
+    }
+
+    #[test]
+    fn grips_steady_the_sway_or_quicken_the_aim() {
+        let data = data();
+        let rifle = WeaponId::AssaultRifle;
+        let with = |id| {
+            data.effective_weapon(
+                rifle,
+                Attachments {
+                    underbarrel: Some(id),
+                    ..Attachments::default()
+                },
+                &PerkEffects::default(),
+            )
+        };
+        let base = data.weapon(rifle);
+        let (foregrip, angled) = (with(AttachmentId::Foregrip), with(AttachmentId::AngledGrip));
+        // The Foregrip steadies recoil and sway; the Angled Grip steadies less but aims faster.
+        assert!(foregrip.sway_deg < base.sway_deg);
+        assert!((angled.sway_deg - base.sway_deg).abs() < 1e-6);
+        assert!(angled.recoil_pitch_deg < base.recoil_pitch_deg);
+        assert!(angled.recoil_pitch_deg > foregrip.recoil_pitch_deg);
+        assert!(angled.ads_secs < base.ads_secs && foregrip.ads_secs > base.ads_secs);
+    }
+
+    #[test]
+    fn muzzle_devices_trade_recoil_flash_and_what_others_see() {
+        let data = data();
+        let rifle = WeaponId::AssaultRifle;
+        let with = |muzzle| Attachments {
+            muzzle,
+            ..Attachments::default()
+        };
+        let stats =
+            |attachments| data.effective_weapon(rifle, attachments, &PerkEffects::default());
+        let plain = stats(Attachments::default());
+        let compensator = stats(with(Some(AttachmentId::Compensator)));
+        assert!(compensator.recoil_pitch_deg < plain.recoil_pitch_deg);
+        assert!(compensator.flash_scale > 1.0 && !compensator.silenced);
+        assert!(compensator.shot_volume > plain.shot_volume);
+        let hider = stats(with(Some(AttachmentId::FlashHider)));
+        assert!(hider.flash_scale > 0.0 && hider.flash_scale < 1.0 && !hider.silenced);
+        assert_eq!(hider.shot_volume, plain.shot_volume);
+        assert!((hider.recoil_pitch_deg - plain.recoil_pitch_deg).abs() < 1e-6);
+
+        // What others see: a plain flash, a bigger one, or none.
+        let seen = |weapon, attachments| data.flash_scale_seen_by_others(weapon, attachments);
+        assert_eq!(seen(rifle, Attachments::default()), 1.0);
+        assert!(seen(rifle, with(Some(AttachmentId::Compensator))) > 1.0);
+        assert_eq!(seen(rifle, with(Some(AttachmentId::FlashHider))), 0.0);
+        assert_eq!(seen(rifle, with(Some(AttachmentId::Silencer))), 0.0);
+        // A Weapon with no Muzzle slot ignores whatever the message says.
+        assert_eq!(
+            seen(WeaponId::Pistol, with(Some(AttachmentId::FlashHider))),
+            1.0
+        );
+    }
+
+    #[test]
+    fn a_gunshot_is_the_weapons_own_loudness_times_its_muzzle_devices() {
+        let data = data();
+        let ak = data.weapon(WeaponId::Ak47);
+        let bare = Attachments::default();
+        assert_eq!(
+            data.shot_sound(WeaponId::Ak47, bare),
+            (ak.shot_volume, ak.shot_pitch)
+        );
+        let silenced = Attachments {
+            muzzle: Some(AttachmentId::Silencer),
+            ..bare
+        };
+        let (volume, pitch) = data.shot_sound(WeaponId::Ak47, silenced);
+        let silencer = data.attachment(AttachmentId::Silencer);
+        assert!((volume - ak.shot_volume * silencer.shot_volume).abs() < 1e-6);
+        assert!((pitch - ak.shot_pitch * silencer.shot_pitch).abs() < 1e-6);
+        // An Optic or grip does not change the sound.
+        let sighted = Attachments {
+            optic: Some(AttachmentId::Scope6x),
+            underbarrel: Some(AttachmentId::Foregrip),
+            ..bare
+        };
+        assert_eq!(
+            data.shot_sound(WeaponId::Ak47, sighted),
+            (ak.shot_volume, ak.shot_pitch)
+        );
+        // The shot the Weapon's effective stats carry is the same one the others hear.
+        let effective = data.effective_weapon(WeaponId::Ak47, silenced, &PerkEffects::default());
+        assert_eq!(
+            data.shot_sound(WeaponId::Ak47, silenced),
+            (effective.shot_volume, effective.shot_pitch)
+        );
+    }
+
+    #[test]
+    fn the_reflex_and_the_6x_scope_are_the_ends_of_the_optic_range() {
+        let data = data();
+        let rifle = |optic| {
+            data.effective_weapon(
+                WeaponId::AssaultRifle,
+                Attachments {
+                    optic: Some(optic),
+                    ..Attachments::default()
+                },
+                &PerkEffects::default(),
+            )
+        };
+        let base = data.weapon(WeaponId::AssaultRifle);
+        let reflex = rifle(AttachmentId::Reflex);
+        assert_eq!(
+            (reflex.sight, reflex.magnification),
+            (SightKind::Reflex, 1.0)
+        );
+        assert!(reflex.ads_secs < base.ads_secs && !reflex.steady_sight());
+        let scope = rifle(AttachmentId::Scope6x);
+        assert_eq!(scope.sight, SightKind::LongScope);
+        assert!(scope.magnification > rifle(AttachmentId::Acog).magnification);
+        assert!(scope.steady_sight() && scope.ads_secs > rifle(AttachmentId::Acog).ads_secs);
+        // Heavy optics cost more class points than the 1x ones.
+        assert!(
+            data.attachment_cost(AttachmentId::Scope6x)
+                > data.attachment_cost(AttachmentId::Reflex)
+        );
     }
 
     #[test]
@@ -699,6 +981,264 @@ mod tests {
         );
         assert!(effects.scavenger, "second of slot 1");
         assert!((effects.damage_mul - 1.25).abs() < 1e-6, "slot 2 unchanged");
+    }
+
+    #[test]
+    fn every_perk_has_a_slot_a_description_and_five_to_a_slot() {
+        let data = data();
+        for id in PerkId::ALL {
+            let perk = data.perk(id);
+            assert!(
+                (1..=PERK_SLOTS).contains(&perk.slot),
+                "{id:?} has a slot 1 to 3"
+            );
+            assert!(!perk.name.trim().is_empty(), "{id:?} has a name");
+            assert!(
+                !perk.description.trim().is_empty(),
+                "{id:?} has a description"
+            );
+        }
+        for slot in 1..=PERK_SLOTS {
+            assert_eq!(data.perks_in_slot(slot).count(), 5, "Perk Slot {slot}");
+        }
+    }
+
+    #[test]
+    fn new_perks_do_nothing_but_their_own_effect() {
+        let data = data();
+        let none = PerkEffects::default();
+        let only = |id: PerkId, expected: PerkEffects| {
+            assert_eq!(data.perk(id).effects, expected, "{id:?}");
+        };
+        only(
+            PerkId::Bandolier,
+            PerkEffects {
+                extra_magazines: 1,
+                ..none
+            },
+        );
+        only(
+            PerkId::SteadyAim,
+            PerkEffects {
+                hip_spread_mul: 0.7,
+                ..none
+            },
+        );
+        only(
+            PerkId::Quickdraw,
+            PerkEffects {
+                ads_secs_mul: 0.7,
+                ..none
+            },
+        );
+        only(
+            PerkId::QuickRecovery,
+            PerkEffects {
+                regen_delay_mul: 0.6,
+                regen_rate_mul: 1.5,
+                ..none
+            },
+        );
+        only(
+            PerkId::Juggernaut,
+            PerkEffects {
+                max_health_mul: 1.25,
+                ..none
+            },
+        );
+        only(
+            PerkId::DangerClose,
+            PerkEffects {
+                explosive_damage_mul: 1.3,
+                ..none
+            },
+        );
+        only(
+            PerkId::Hardened,
+            PerkEffects {
+                flinch_mul: 0.5,
+                ..none
+            },
+        );
+        only(
+            PerkId::TacticalMask,
+            PerkEffects {
+                flash_time_mul: 0.5,
+                ..none
+            },
+        );
+        only(
+            PerkId::FallGuard,
+            PerkEffects {
+                fall_guard: true,
+                ..none
+            },
+        );
+    }
+
+    #[test]
+    fn merging_effects_multiplies_adds_and_ors_each_new_field() {
+        let none = PerkEffects::default();
+        let a = PerkEffects {
+            extra_magazines: 1,
+            hip_spread_mul: 0.7,
+            ads_secs_mul: 0.7,
+            regen_delay_mul: 0.6,
+            regen_rate_mul: 1.5,
+            max_health_mul: 1.25,
+            explosive_damage_mul: 1.3,
+            flinch_mul: 0.5,
+            flash_time_mul: 0.5,
+            fall_guard: true,
+            ..none
+        };
+        assert_eq!(a.combine(none), a, "the defaults change nothing");
+        assert_eq!(none.combine(a), a);
+
+        let both = a.combine(a);
+        assert_eq!(both.extra_magazines, 2);
+        assert!((both.hip_spread_mul - 0.49).abs() < 1e-6);
+        assert!((both.ads_secs_mul - 0.49).abs() < 1e-6);
+        assert!((both.regen_delay_mul - 0.36).abs() < 1e-6);
+        assert!((both.regen_rate_mul - 2.25).abs() < 1e-6);
+        assert!((both.max_health_mul - 1.5625).abs() < 1e-6);
+        assert!((both.explosive_damage_mul - 1.69).abs() < 1e-6);
+        assert!((both.flinch_mul - 0.25).abs() < 1e-6);
+        assert!((both.flash_time_mul - 0.25).abs() < 1e-6);
+        assert!(both.fall_guard);
+
+        let other = PerkEffects {
+            fall_guard: false,
+            ..none
+        };
+        assert!(
+            a.combine(other).fall_guard && other.combine(a).fall_guard,
+            "either's"
+        );
+        assert!(!other.combine(other).fall_guard);
+    }
+
+    #[test]
+    fn perk_greed_pairs_of_the_new_perks_stack() {
+        let data = data();
+        let effects = data.perk_effects([PerkId::Bandolier, PerkId::SteadyAim, PerkId::Quickdraw]);
+        assert_eq!(effects.extra_magazines, 1);
+        assert!((effects.hip_spread_mul - 0.7).abs() < 1e-6);
+        assert!((effects.ads_secs_mul - 0.7).abs() < 1e-6);
+        let tank = data.perk_effects([
+            PerkId::Juggernaut,
+            PerkId::QuickRecovery,
+            PerkId::DangerClose,
+        ]);
+        assert!((tank.max_health_mul - 1.25).abs() < 1e-6);
+        assert!((tank.regen_rate_mul - 1.5).abs() < 1e-6);
+        assert!((tank.explosive_damage_mul - 1.3).abs() < 1e-6);
+        let tough = data.perk_effects([PerkId::Hardened, PerkId::TacticalMask, PerkId::FallGuard]);
+        assert!((tough.flinch_mul - 0.5).abs() < 1e-6);
+        assert!((tough.flash_time_mul - 0.5).abs() < 1e-6);
+        assert!(tough.fall_guard);
+    }
+
+    #[test]
+    fn weapon_perks_change_reserve_spread_aim_time_and_flinch_of_every_weapon() {
+        let data = data();
+        let effects = data.perk_effects([
+            PerkId::Bandolier,
+            PerkId::SteadyAim,
+            PerkId::Quickdraw,
+            PerkId::Hardened,
+        ]);
+        for id in data.weapons.keys().copied() {
+            let base = data.weapon(id);
+            let stats = data.effective_weapon(id, Attachments::default(), &effects);
+            assert_eq!(stats.reserve_mags, base.reserve_mags + 1, "{id:?} Reserve");
+            assert_eq!(
+                stats.reserve_max(),
+                (base.reserve_mags + 1) * base.magazine,
+                "{id:?} one more magazine of rounds"
+            );
+            assert!((stats.hip_spread_deg - base.hip_spread_deg * 0.7).abs() < 1e-5);
+            assert!((stats.move_spread_deg - base.move_spread_deg * 0.7).abs() < 1e-5);
+            assert!((stats.air_spread_deg - base.air_spread_deg * 0.7).abs() < 1e-5);
+            assert_eq!(
+                stats.ads_spread_deg, base.ads_spread_deg,
+                "aimed spread is untouched"
+            );
+            assert!((stats.ads_secs - base.ads_secs * 0.7).abs() < 1e-5);
+            assert!((stats.flinch_deg - base.flinch_deg * 0.5).abs() < 1e-5);
+        }
+        let plain = data.effective_weapon(
+            WeaponId::Smg,
+            Attachments::default(),
+            &PerkEffects::default(),
+        );
+        assert_eq!(plain.reserve_mags, data.weapon(WeaponId::Smg).reserve_mags);
+    }
+
+    #[test]
+    fn quickdraw_stacks_with_a_foregrips_slower_aim() {
+        let data = data();
+        let gripped = Attachments {
+            underbarrel: Some(AttachmentId::Foregrip),
+            ..Attachments::default()
+        };
+        let slow = data.effective_weapon(WeaponId::AssaultRifle, gripped, &PerkEffects::default());
+        let quick = data.effective_weapon(
+            WeaponId::AssaultRifle,
+            gripped,
+            &data.perk_effects([PerkId::Quickdraw]),
+        );
+        assert!((quick.ads_secs - slow.ads_secs * 0.7).abs() < 1e-5);
+    }
+
+    #[test]
+    fn health_perks_scale_maximum_regeneration_and_falls() {
+        let data = data();
+        let none = PerkEffects::default();
+        assert_eq!(none.max_health(100.0), 100.0);
+        assert_eq!(none.regen_delay_secs(5.0), 5.0);
+        assert_eq!(none.regen_per_sec(20.0), 20.0);
+        assert_eq!(none.fall_damage(37.0), 37.0);
+
+        let juggernaut = data.perk_effects([PerkId::Juggernaut]);
+        assert!((juggernaut.max_health(100.0) - 125.0).abs() < 1e-4);
+        assert_eq!(
+            juggernaut.regen_per_sec(20.0),
+            20.0,
+            "only the maximum changes"
+        );
+
+        let recovery = data.perk_effects([PerkId::QuickRecovery]);
+        assert!(
+            (recovery.regen_delay_secs(5.0) - 3.0).abs() < 1e-5,
+            "40% sooner"
+        );
+        assert!(
+            (recovery.regen_per_sec(20.0) - 30.0).abs() < 1e-4,
+            "50% faster"
+        );
+        assert_eq!(recovery.max_health(100.0), 100.0);
+
+        let guard = data.perk_effects([PerkId::FallGuard]);
+        assert_eq!(guard.fall_damage(37.0), 0.0);
+        assert_eq!(guard.fall_damage(0.0), 0.0);
+    }
+
+    #[test]
+    fn danger_close_boosts_blasts_and_the_mask_shortens_flashes() {
+        let data = data();
+        let none = PerkEffects::default();
+        assert_eq!(none.blast_damage(100.0), 100.0);
+        assert_eq!(none.flash_secs(4.0), 4.0);
+
+        let danger = data.perk_effects([PerkId::DangerClose]);
+        assert!((danger.blast_damage(100.0) - 130.0).abs() < 1e-4);
+        assert_eq!(danger.flash_secs(4.0), 4.0, "it doesn't touch flashes");
+
+        let mask = data.perk_effects([PerkId::TacticalMask]);
+        assert!((mask.flash_secs(4.0) - 2.0).abs() < 1e-6);
+        assert_eq!(mask.blast_damage(100.0), 100.0);
+        assert_eq!(mask.flash_secs(0.0), 0.0);
     }
 
     #[test]

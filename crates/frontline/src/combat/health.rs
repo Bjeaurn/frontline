@@ -225,7 +225,13 @@ pub(super) fn apply_hits(
                 XpReason::Kill(weapon),
             ),
             HitSource::Blast { kind, damage } => (
-                damage * rules.damage_scale,
+                // Danger Close boosts what the shooter deals to others, not what they do to
+                // themselves.
+                (if hit.shooter == hit.victim {
+                    damage
+                } else {
+                    effects.blast_damage(damage)
+                }) * rules.damage_scale,
                 false,
                 format!("with a {kind:?} blast"),
                 DeathCause::Explosive {
@@ -331,22 +337,34 @@ pub(super) fn apply_hits(
     }
 }
 
-/// Heals living players `regen_per_sec` once `regen_delay_secs` have passed without damage.
+/// Heals living players `regen_per_sec` once `regen_delay_secs` have passed without damage, up to
+/// their maximum health. Perks scale the delay, the rate and the maximum (`PerkEffects`); health
+/// above a lowered maximum (a Perk swapped after spawning) drops to it.
 pub(super) fn regenerate(
-    mut players: Query<(&mut Health, &LastDamaged)>,
+    mut players: Query<(&mut Health, &LastDamaged, Option<&EquippedPerks>)>,
     state: Single<&MatchState>,
+    data: Res<GameData>,
     time: Res<Time>,
 ) {
     let rules = &state.rule_values;
-    let delay = Duration::from_secs_f32(rules.regen_delay_secs);
-    for (mut health, last_damaged) in &mut players {
-        if health.is_dead()
-            || health.0 >= rules.max_health
-            || time.elapsed().saturating_sub(last_damaged.0) < delay
-        {
+    for (mut health, last_damaged, perks) in &mut players {
+        if health.is_dead() {
             continue;
         }
-        health.0 = (health.0 + rules.regen_per_sec * time.delta_secs()).min(rules.max_health);
+        let effects = perks
+            .map(|perks| data.perk_effects(perks.0.iter()))
+            .unwrap_or_default();
+        let max_health = effects.max_health(rules.max_health);
+        if health.0 > max_health {
+            health.0 = max_health;
+            continue;
+        }
+        let delay = Duration::from_secs_f32(effects.regen_delay_secs(rules.regen_delay_secs));
+        if health.0 >= max_health || time.elapsed().saturating_sub(last_damaged.0) < delay {
+            continue;
+        }
+        health.0 = (health.0 + effects.regen_per_sec(rules.regen_per_sec) * time.delta_secs())
+            .min(max_health);
     }
 }
 
@@ -372,6 +390,8 @@ pub(super) fn respawn_players(
     )>,
     mut senders: Query<&mut MessageSender<Respawn>>,
     mut ledgers: Query<&mut DamageLedger>,
+    perks: Query<&EquippedPerks>,
+    data: Res<GameData>,
     spawns: Res<MapSpawns>,
     runtime: Res<ModeRuntime>,
     spatial: SpatialQuery,
@@ -438,7 +458,11 @@ pub(super) fn respawn_players(
         let Ok((_, mut health, mut pose, ..)) = players.get_mut(entity) else {
             continue;
         };
-        health.0 = state.rule_values.max_health;
+        health.0 = perks
+            .get(entity)
+            .map(|perks| data.perk_effects(perks.0.iter()))
+            .unwrap_or_default()
+            .max_health(state.rule_values.max_health);
         // A new life: damage dealt to the old one no longer pays Assists.
         if let Ok(mut ledger) = ledgers.get_mut(entity) {
             ledger.clear();

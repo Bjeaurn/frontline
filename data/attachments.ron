@@ -4,13 +4,18 @@
 //   falloff_mul        scales both falloff distances (below 1: damage drops off sooner)
 //   ads_secs_mul       scales the time to aim down sights (above 1: slower)
 //   recoil_mul         scales the recoil kick (below 1: steadier)
+//   sway_mul           scales the idle sway of the Weapon (below 1: steadier)
 // `cost` is the class points it takes when that differs from the default in class_points.ron
 // (an Optic of 3x or more already costs more there). Which Weapons offer it, and at which
 // Weapon Level, is `weapon_attachments` in progression.ron.
 // `sight` is what an Optic draws and aims through. `magnification` drives the ADS field of view
 // (it narrows with the square root of it) and, from 3x, hold breath and the scope glint;
-// `sway_scale` multiplies the idle sway and gun motion while aimed through it. `silenced` removes the muzzle flash, and
-// `shot_volume` / `shot_pitch` scale the gunshot's volume and playback speed.
+// `sway_scale` multiplies the idle sway and gun motion while aimed through it.
+// A Muzzle Attachment: `silenced` removes the muzzle flash, `shot_volume` / `shot_pitch` scale the
+// gunshot's volume and playback speed, `muzzle_length` and `muzzle_girth` (a multiple of the barrel's
+// radius, 1.9 when left out) shape the device drawn on the barrel, `flash_scale` scales the muzzle
+// flash the shooter sees (1 when left out) and `hides_flash_from_others` leaves the flash other
+// players would see where you fire out.
 {
     RedDot: (
         name: "Red Dot",
@@ -19,6 +24,15 @@
         sight: RedDot,
         magnification: 1.0,
         sway_scale: 0.9,
+    ),
+    Reflex: (
+        name: "Reflex",
+        description: "A small open sight with a crosshair reticle, 1x. A little quicker to aim than irons.",
+        slot: Optic,
+        sight: Reflex,
+        magnification: 1.0,
+        sway_scale: 0.85,
+        mods: (ads_secs_mul: 0.95),
     ),
     Holographic: (
         name: "Holographic",
@@ -47,21 +61,57 @@
         sway_scale: 1.15,
         mods: (ads_secs_mul: 1.3),
     ),
+    Scope6x: (
+        name: "6x Scope",
+        description: "A long 6x scope with a thin crosshair. Much slower to aim and swayier than the ACOG; hold breath steadies it.",
+        slot: Optic,
+        sight: LongScope,
+        magnification: 6.0,
+        sway_scale: 1.3,
+        mods: (ads_secs_mul: 1.45),
+    ),
     Silencer: (
         name: "Silencer",
         description: "No muzzle flash and a quiet report. Damage falls off sooner.",
         slot: Muzzle,
         mods: (falloff_mul: 0.75),
         silenced: true,
+        hides_flash_from_others: true,
         shot_volume: 0.35,
         shot_pitch: 0.8,
         muzzle_length: 0.16,
     ),
+    Compensator: (
+        name: "Compensator",
+        description: "A muzzle brake: 15% less recoil, a slightly louder shot and a bigger muzzle flash, yours and what others see.",
+        slot: Muzzle,
+        mods: (recoil_mul: 0.85),
+        shot_volume: 1.1,
+        muzzle_length: 0.05,
+        muzzle_girth: 1.6,
+        flash_scale: 1.7,
+    ),
+    FlashHider: (
+        name: "Flash Hider",
+        description: "Other players see no flash where you fire, and yours is much smaller. Shots are as loud as ever and the aim is a touch slower.",
+        slot: Muzzle,
+        mods: (ads_secs_mul: 1.03),
+        hides_flash_from_others: true,
+        muzzle_length: 0.06,
+        muzzle_girth: 1.3,
+        flash_scale: 0.35,
+    ),
     Foregrip: (
         name: "Foregrip",
-        description: "A steadier hold: 25% less recoil. Slightly slower to aim.",
+        description: "A steadier hold: 25% less recoil and 15% less sway. Slightly slower to aim.",
         slot: Underbarrel,
-        mods: (recoil_mul: 0.75, ads_secs_mul: 1.05),
+        mods: (recoil_mul: 0.75, ads_secs_mul: 1.05, sway_mul: 0.85),
+    ),
+    AngledGrip: (
+        name: "Angled Grip",
+        description: "A grip angled forward: quicker to aim and 8% less recoil, but not as steady as the Foregrip.",
+        slot: Underbarrel,
+        mods: (recoil_mul: 0.92, ads_secs_mul: 0.92),
     ),
     // Only the M16A4 offers it (progression.ron). V fires its 40mm round (equipment.ron: Launcher):
     // 3 rounds per life, an arcing grenade that bursts on impact. The weight slows the aim a little.

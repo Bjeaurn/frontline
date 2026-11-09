@@ -57,6 +57,7 @@ impl Plugin for CombatServerPlugin {
                     packs::tick_packs,
                     hitbox::sync_hitboxes,
                     projectiles::fly_bullets,
+                    grenades::cap_mines,
                     grenades::fly_grenades,
                     grenades::apply_detonations,
                 )

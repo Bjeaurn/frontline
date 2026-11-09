@@ -16,9 +16,11 @@ textures are shared by all pieces and live in `downtown/textures/`.
 
 First-person guns and grenades from the **Styloo Guns Asset Pack GLTF FBX V1.1** by
 [Styloo](https://styloo.itch.io/), from the user's own copy (`content/assets/`, never committed).
-**Licence: not verified (user-owned pack)**: the pack ships no licence file; the project owner
-chose to use it. Embedded in the binary (`src/assets.rs`), used by the viewmodel (`src/weapon/viewmodel.rs`,
-`src/weapon/rig.rs`) and, for the guns, by remote players' held weapons.
+**Licence: not stated by the pack.** Its `Read Me .txt` has no licence text: it only gives advice on the
+materials (use a diffuse or emission shader rather than metallic-roughness), says the author makes
+"FREE assets" and asks for a donation on itch.io. So the licence is unverified; the project owner
+chose to use the pack (user-owned copy). Embedded in the binary (`src/assets.rs`), used by the viewmodel
+(`src/weapon/viewmodel.rs`, `src/weapon/rig.rs`) and, for the guns, by remote players' held weapons.
 
 | File here | Original file (Normal version, GLB) | Used for |
 | --- | --- | --- |
@@ -27,6 +29,9 @@ chose to use it. Embedded in the binary (`src/assets.rs`), used by the viewmodel
 | `mac10.glb` | `mac10.glb` | MP5 (Smg) |
 | `awp.glb` | `awp.glb` | M40 (Sniper) |
 | `pew.glb` | `pew.glb` | M9 (Pistol) |
+| `ak47.glb` | `ak47.glb` | AK-47 (Ak) |
+| `ak47variant.glb` | `ak47variant.glb` | AKS-74U (Compact; the stockless AK, drawn 20% shorter) |
+| `shotgun.glb` | `shotgun.glb` | M870 (Shotgun; its `shotgunpomp` forend is the "magazine" a reload racks) |
 | `nade_low.glb` | `nade_low.glb` | Frag Grenade (and the launcher's 40mm round, smaller) |
 | `flashbang_low.glb` | `flashbang_low.glb` | Flashbang |
 | `smoke_low.glb` | `smoke_low.glb` | Smoke Grenade |
@@ -35,6 +40,11 @@ chose to use it. Embedded in the binary (`src/assets.rs`), used by the viewmodel
 1024 px and re-encoded as JPEG, the colour map graded duller and darker (the pack's own colours are
 cartoon bright) and the material given some metal and gloss. The arms, gloves and sleeves are
 procedural meshes (no asset).
+
+The AK-47, its stockless variant (`ak47variant.glb`, used for the AKS-74U at 0.8x length) and the shotgun were
+imported with the same script (`python3 tools/assets/import_weapons.py --zip ... ak47 ak47variant shotgun`). Node
+names the rig (`src/weapon/rig.rs`) uses: `akmagazine_low`, `aktrigger_low`, `akderriere_low` (the stock, hidden
+while aimed); `akmagazine_low.001`, `aktrigger_low.001`; `shotgunpomp` (the forend), `shotguntrigger`.
 
 ### The M4 and M16A4 (`m4.glb`, `m16.glb`)
 

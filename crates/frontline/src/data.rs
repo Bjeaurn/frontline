@@ -55,14 +55,23 @@ pub enum WeaponId {
     Pistol,
     /// The M16A4: a 3-round burst rifle, the only Weapon that takes the grenade launcher.
     M16,
+    /// The AK-47: a hard-hitting, harder-kicking automatic rifle.
+    Ak47,
+    /// The AKS-74U: a stockless compact AK, a second SMG that hits harder and reaches less far.
+    Aks74u,
+    /// A semi-automatic shotgun: a round is a spread of pellets (`pellets`).
+    Shotgun,
 }
 
 impl WeaponId {
     /// Every Weapon, in the order menus list them.
-    pub const ALL: [WeaponId; 5] = [
+    pub const ALL: [WeaponId; 8] = [
         WeaponId::AssaultRifle,
         WeaponId::M16,
+        WeaponId::Ak47,
         WeaponId::Smg,
+        WeaponId::Aks74u,
+        WeaponId::Shotgun,
         WeaponId::SniperRifle,
         WeaponId::Pistol,
     ];
@@ -104,6 +113,12 @@ pub enum GunModel {
     Smg,
     Sniper,
     Pistol,
+    /// AK-47: wooden furniture, curved magazine, fixed stock.
+    Ak,
+    /// AKS-74U: the AK without its stock.
+    Compact,
+    /// Pump-style shotgun body: long tube, pump forend. The forend is its "magazine" node.
+    Shotgun,
 }
 
 /// The Loadout slot a Weapon goes in (CONTEXT.md: Primary, Secondary).
@@ -125,12 +140,21 @@ pub enum SightKind {
     /// Short tube with a chevron reticle.
     Prism,
     Acog,
+    /// Open window with a crosshair reticle.
+    Reflex,
+    /// A long variable-power scope tube with a thin crosshair; an Optic, so the Weapon still shows
+    /// its own receiver.
+    LongScope,
     /// A scope tube; aiming looks through its mask.
     Scope,
 }
 
 fn one() -> f32 {
     1.0
+}
+
+fn one_pellet() -> u8 {
+    1
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Reflect)]
@@ -303,21 +327,39 @@ pub struct WeaponStats {
     /// A Silencer is fitted: no muzzle flash.
     #[serde(skip_deserializing)]
     pub silenced: bool,
-    /// Gunshot volume and playback speed multipliers (a Silencer lowers both).
-    #[serde(skip_deserializing, default = "one")]
+    /// The Weapon's own gunshot loudness and playback speed (`data/weapons.ron`, 1 when left out),
+    /// times what a Muzzle Attachment does to them (a Silencer lowers both). A gun that shares
+    /// another's recording sounds different through them.
+    #[serde(default = "one")]
     pub shot_volume: f32,
-    #[serde(skip_deserializing, default = "one")]
+    #[serde(default = "one")]
     pub shot_pitch: f32,
-    /// How far a Silencer extends the muzzle beyond the barrel, in metres (already included
-    /// in `muzzle_offset`).
+    /// How far a muzzle device extends the muzzle beyond the barrel, in metres (already included
+    /// in `muzzle_offset`), and how much wider than the barrel it is drawn.
     #[serde(skip_deserializing)]
     pub muzzle_length: f32,
+    #[serde(skip_deserializing)]
+    pub muzzle_girth: f32,
+    /// Size of the muzzle flash in the shooter's view relative to a plain muzzle (a Compensator
+    /// makes it bigger, a Flash Hider smaller).
+    #[serde(skip_deserializing, default = "one")]
+    pub flash_scale: f32,
+    /// Bullets in one round, each its own ray with its own spread (a shotgun's pellets). Every
+    /// pellet deals `damage_near` and falls off alike; recoil, ammo and sound count the round once.
+    #[serde(default = "one_pellet")]
+    pub pellets: u8,
 }
 
 impl WeaponStats {
     /// The most rounds the Reserve holds: `reserve_mags` full magazines.
     pub fn reserve_max(&self) -> u32 {
         self.reserve_mags * self.magazine
+    }
+
+    /// What a round deals at point blank to an unarmoured Hit Zone with a multiplier of 1: all its
+    /// pellets together. The Weapon pickers compare Weapons by it.
+    pub fn damage_per_round(&self) -> f32 {
+        self.damage_near * f32::from(self.pellets)
     }
 
     /// The rounds `share` of the Reserve is worth, rounded up so that any share above 0 gives at
@@ -485,6 +527,9 @@ impl WeaponStats {
             shot_volume: 1.0,
             shot_pitch: 1.0,
             muzzle_length: 0.0,
+            muzzle_girth: 0.0,
+            flash_scale: 1.0,
+            pellets: 1,
         }
     }
 }
@@ -1066,6 +1111,10 @@ impl GameData {
                     || (weapon.rack_secs_scoped > 0.0 && weapon.rack_secs_unscoped > 0.0),
                 "{WEAPONS_FILE}: bolt-action {id:?} needs rack_secs_scoped and rack_secs_unscoped"
             );
+            assert!(
+                weapon.pellets >= 1 && (weapon.pellets == 1 || weapon.projectile.is_none()),
+                "{WEAPONS_FILE}: {id:?} needs at least 1 pellet, and a projectile Weapon fires only 1"
+            );
             if let Some(projectile) = weapon.projectile {
                 assert!(
                     projectile.muzzle_speed > 0.0 && projectile.gravity >= 0.0,
@@ -1129,6 +1178,15 @@ impl GameData {
                     .map(|error| error.describe(&data))
                     .collect::<Vec<_>>()
                     .join("; ")
+            );
+        }
+        for id in AttachmentId::ALL {
+            assert!(
+                data.progression
+                    .weapon_attachments
+                    .values()
+                    .any(|unlocks| unlocks.iter().any(|unlock| unlock.attachment == id)),
+                "{PROGRESSION_FILE}: no Weapon offers {id:?}"
             );
         }
         for (weapon, unlocks) in &data.progression.weapon_attachments {
@@ -1366,8 +1424,10 @@ mod tests {
                 );
             }
             if stats.fire_modes.contains(&FireMode::Semi) {
+                // A pump-action shotgun (pellets) cycles far slower than a rifle's semi.
+                let slowest = if stats.pellets > 1 { 1.0 } else { 0.25 };
                 assert!(
-                    (0.1..=0.25).contains(&stats.semi_interval_secs),
+                    (0.1..=slowest).contains(&stats.semi_interval_secs),
                     "{id:?}: semi interval {:.2} s",
                     stats.semi_interval_secs
                 );

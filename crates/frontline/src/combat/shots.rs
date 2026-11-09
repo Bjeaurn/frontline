@@ -113,6 +113,7 @@ pub(super) fn resolve_shots(
                 attachments: shot.attachments,
                 origin: shot.origin,
                 end: shot.origin + direction * distance,
+                pellet: shot.pellet,
             };
             for (other, mut sender) in &mut tracer_senders {
                 if other != link {

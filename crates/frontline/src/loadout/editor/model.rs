@@ -48,6 +48,12 @@ impl Slot {
     pub(super) fn on_gun(self) -> bool {
         matches!(self, Slot::Attachment(_) | Slot::Camo)
     }
+
+    /// Whether this is picked from a dropdown list under its tile, which is everything but the
+    /// Primary and what goes on it (those have stat bars and a screen of their own).
+    pub(super) fn listed(self) -> bool {
+        !matches!(self, Slot::Primary | Slot::Attachment(_) | Slot::Camo)
+    }
 }
 
 /// What a slot can be set to.
@@ -491,6 +497,156 @@ pub(super) fn pages(len: usize) -> usize {
     len.div_ceil(PAGE_SIZE).max(1)
 }
 
+// ------------------------------------------------------------------ dropdown
+
+/// Height of one entry of a dropdown list: name and tag on top, a one-line description below.
+pub(super) const ROW_H: f32 = 58.0;
+/// Width of a dropdown list and of the preview card beside it.
+pub(super) const LIST_W: f32 = 520.0;
+pub(super) const CARD_W: f32 = 420.0;
+/// Padding plus border between the list's edge and its first entry.
+pub(super) const LIST_INSET: f32 = 7.0;
+/// Height of the `^ 2 more` and `v 3 more` lines a list that has to scroll carries.
+pub(super) const HINT_H: f32 = 24.0;
+/// Room kept free between a list and the window edge or the tile it hangs from.
+const EDGE: f32 = 12.0;
+const TILE_GAP: f32 = 4.0;
+const CARD_GAP: f32 = 8.0;
+
+/// A rectangle in UI pixels, the origin at the top left of the window.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+/// Where a dropdown list and its preview card go.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Placement {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// How many entries fit; fewer than the options means the list scrolls.
+    pub visible: usize,
+    /// The list hangs over its tile instead of under it.
+    pub above: bool,
+    /// Where the preview card's top left goes, when it fits beside the list.
+    pub card: Option<(f32, f32)>,
+}
+
+impl Placement {
+    pub(super) fn scrolls(&self, rows: usize) -> bool {
+        self.visible < rows
+    }
+}
+
+/// The height of a list showing `visible` of `rows` entries.
+fn list_height(visible: usize, rows: usize) -> f32 {
+    let hints = if visible < rows { 2.0 * HINT_H } else { 0.0 };
+    visible as f32 * ROW_H + hints + 2.0 * LIST_INSET
+}
+
+/// Where the list of `rows` entries opened from the tile `anchor` goes in a `window` (width,
+/// height): under the tile when it fits, else over it, else on the roomier side showing as
+/// many entries as fit and scrolling for the rest. It starts at the tile's left edge, pulled in
+/// to stay inside the window. The preview card (`card_h` high) sits beside the list, on its
+/// right or else its left, and is left out when neither side has room.
+pub(super) fn place(anchor: Rect, window: (f32, f32), rows: usize, card_h: f32) -> Placement {
+    let rows = rows.max(1);
+    let w = LIST_W.max(anchor.w).min((window.0 - 2.0 * EDGE).max(1.0));
+    let x = anchor.x.clamp(EDGE, (window.0 - w - EDGE).max(EDGE));
+    let below = (window.1 - EDGE - (anchor.y + anchor.h + TILE_GAP)).max(0.0);
+    let over = (anchor.y - TILE_GAP - EDGE).max(0.0);
+    let full = list_height(rows, rows);
+    let above = full > below && (full <= over || over > below);
+    let room = if above { over } else { below };
+    let visible = if full <= room {
+        rows
+    } else {
+        let rows_room = room - 2.0 * HINT_H - 2.0 * LIST_INSET;
+        ((rows_room / ROW_H).floor().max(1.0) as usize).min(rows)
+    };
+    let h = list_height(visible, rows);
+    let y = if above {
+        anchor.y - TILE_GAP - h
+    } else {
+        anchor.y + anchor.h + TILE_GAP
+    };
+    let y = y.clamp(EDGE, (window.1 - h - EDGE).max(EDGE));
+    let card_y = y.clamp(EDGE, (window.1 - card_h - EDGE).max(EDGE));
+    let right = x + w + CARD_GAP;
+    let left = x - CARD_GAP - CARD_W;
+    let card = if right + CARD_W <= window.0 - EDGE {
+        Some((right, card_y))
+    } else if left >= EDGE {
+        Some((left, card_y))
+    } else {
+        None
+    };
+    Placement {
+        x,
+        y,
+        w,
+        h,
+        visible,
+        above,
+        card,
+    }
+}
+
+/// The first entry to show so `cursor` is inside the `visible` rows of a list of `len`, moving
+/// the window from `first` as little as possible.
+pub(super) fn reveal(cursor: usize, first: usize, visible: usize, len: usize) -> usize {
+    let visible = visible.max(1);
+    let first = if cursor < first {
+        cursor
+    } else if cursor >= first + visible {
+        cursor + 1 - visible
+    } else {
+        first
+    };
+    first.min(len.saturating_sub(visible))
+}
+
+/// The first entry shown after scrolling `delta` rows (down is positive), kept inside the list.
+pub(super) fn scrolled(first: usize, delta: isize, visible: usize, len: usize) -> usize {
+    first
+        .saturating_add_signed(delta)
+        .min(len.saturating_sub(visible.max(1)))
+}
+
+/// The highlight after the window moved: it stays on the same entry while that is still shown,
+/// else it takes the nearest shown one, so Enter never picks something out of sight.
+pub(super) fn keep_shown(cursor: usize, first: usize, visible: usize) -> usize {
+    cursor.clamp(first, first + visible.max(1) - 1)
+}
+
+/// Whole rows to scroll for a wheel turn of `lines` (a scroll up is positive), collecting what
+/// is less than a row in `rest` so a slow trackpad still gets there. The result is the change
+/// of the first shown entry: negative when scrolling up.
+pub(super) fn wheel_rows(rest: &mut f32, lines: f32) -> isize {
+    *rest += lines;
+    let whole = rest.trunc();
+    *rest -= whole;
+    -(whole as isize)
+}
+
+/// `text` cut to at most `max` characters at a word end, with `...` when something was cut.
+pub(super) fn brief(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let cut: String = text.chars().take(max.saturating_sub(3)).collect();
+    let cut = match cut.rsplit_once(' ') {
+        Some((words, _)) if !words.is_empty() => words,
+        _ => &cut,
+    };
+    format!("{}...", cut.trim_end_matches(['.', ',', ';', ':', ' ']))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -681,12 +837,21 @@ mod tests {
                 .map(|choice| choice.name)
                 .collect()
         };
-        assert_eq!(names(&class), ["None", "M9 (Pistol)"]);
+        let count = |class: WeaponClass| {
+            WeaponId::ALL
+                .into_iter()
+                .filter(|id| data.weapon(*id).class == class)
+                .count()
+        };
+        let (secondaries, primaries) = (count(WeaponClass::Secondary), count(WeaponClass::Primary));
+        let before = names(&class);
+        assert_eq!(before.len(), 1 + secondaries, "None and the secondaries");
+        assert_eq!(before[0], "None");
         take(&mut class, Slot::Wildcards, "Overkill", &profile, &data);
         assert_eq!(
             names(&class).len(),
-            6,
-            "None, the pistol and the four primaries"
+            1 + secondaries + primaries,
+            "None, the secondaries and the primaries"
         );
         take(&mut class, Slot::Secondary, "M40 (Sniper)", &profile, &data);
         // Overkill can't be taken out from under a Primary in the second slot.
@@ -830,5 +995,155 @@ mod tests {
         assert_eq!(step(9, 10, 1), 9);
         assert_eq!(step(2, 10, PAGE_SIZE as isize), 9);
         assert_eq!(step(3, 0, 1), 0);
+    }
+
+    const WINDOW: (f32, f32) = (1280.0, 720.0);
+
+    fn tile(x: f32, y: f32) -> Rect {
+        Rect {
+            x,
+            y,
+            w: 285.0,
+            h: 206.0,
+        }
+    }
+
+    #[test]
+    fn a_list_that_fits_hangs_under_its_tile_with_the_card_on_its_right() {
+        let place = place(tile(52.0, 130.0), WINDOW, 5, 300.0);
+        assert!(!place.above && !place.scrolls(5));
+        assert_eq!((place.x, place.y), (52.0, 130.0 + 206.0 + TILE_GAP));
+        assert_eq!(place.visible, 5);
+        assert_eq!(place.h, 5.0 * ROW_H + 2.0 * LIST_INSET);
+        assert_eq!(place.card, Some((52.0 + LIST_W + CARD_GAP, place.y)));
+    }
+
+    #[test]
+    fn a_tile_near_the_bottom_gets_its_list_over_it_and_a_right_hand_tile_the_card_on_the_left() {
+        let place = place(tile(943.0, 400.0), WINDOW, 5, 300.0);
+        assert!(place.above);
+        assert_eq!(place.y + place.h, 400.0 - TILE_GAP);
+        assert_eq!(
+            place.x,
+            WINDOW.0 - LIST_W - EDGE,
+            "pulled inside the window"
+        );
+        let (card_x, _) = place.card.expect("room on the left");
+        assert_eq!(card_x, place.x - CARD_GAP - CARD_W);
+    }
+
+    #[test]
+    fn a_long_list_scrolls_inside_the_roomier_side() {
+        // Under the tile: 368 px, so 5 of 12 entries next to the two hint lines.
+        let below = place(tile(52.0, 130.0), WINDOW, 12, 300.0);
+        assert!(!below.above && below.scrolls(12));
+        assert_eq!(below.visible, 5);
+        assert!(below.y + below.h <= WINDOW.1 - EDGE);
+        // Over the tile when that has the room.
+        let above = place(tile(52.0, 420.0), (1280.0, 800.0), 12, 300.0);
+        assert!(above.above && above.scrolls(12));
+        assert_eq!(above.visible, 5);
+        assert!(above.y >= EDGE);
+    }
+
+    #[test]
+    fn a_cramped_window_still_shows_one_entry_inside_it_and_drops_the_card() {
+        let tiny = (600.0, 300.0);
+        let place = place(tile(300.0, 20.0), tiny, 9, 300.0);
+        assert!(place.visible >= 1);
+        assert!(place.x >= EDGE && place.x + place.w <= tiny.0 - EDGE);
+        assert!(place.y >= EDGE);
+        assert_eq!(place.card, None, "neither side has 420 px");
+    }
+
+    #[test]
+    fn the_card_stays_inside_the_window_when_the_list_starts_low() {
+        let place = place(tile(52.0, 400.0), (1280.0, 760.0), 2, 400.0);
+        let (_, card_y) = place.card.expect("fits on the right");
+        assert!(card_y + 400.0 <= 760.0 - EDGE);
+    }
+
+    #[test]
+    fn scrolling_keeps_the_window_inside_the_list_and_the_highlight_inside_the_window() {
+        // 10 entries, 4 shown.
+        assert_eq!(scrolled(0, -3, 4, 10), 0);
+        assert_eq!(scrolled(2, 3, 4, 10), 5);
+        assert_eq!(scrolled(5, 9, 4, 10), 6, "the last entry ends the window");
+        assert_eq!(scrolled(0, 3, 12, 10), 0, "a list that fits never moves");
+        // Arrowing past an edge moves the window one entry; jumping moves it just far enough.
+        assert_eq!(reveal(4, 0, 4, 10), 1);
+        assert_eq!(reveal(1, 3, 4, 10), 1);
+        assert_eq!(reveal(2, 1, 4, 10), 1, "already shown: no move");
+        assert_eq!(reveal(9, 0, 4, 10), 6);
+        // After the wheel the highlight takes the nearest shown entry.
+        assert_eq!(keep_shown(0, 3, 4), 3);
+        assert_eq!(keep_shown(9, 3, 4), 6);
+        assert_eq!(keep_shown(5, 3, 4), 5);
+    }
+
+    #[test]
+    fn the_wheel_scrolls_whole_rows_and_remembers_the_rest() {
+        let mut rest = 0.0;
+        assert_eq!(
+            wheel_rows(&mut rest, -1.0),
+            1,
+            "wheel down shows later entries"
+        );
+        assert_eq!(wheel_rows(&mut rest, 2.0), -2);
+        let moved: isize = (0..5).map(|_| wheel_rows(&mut rest, -0.4)).sum();
+        assert_eq!(moved, 2, "5 slow ticks of 0.4 add up to two rows");
+    }
+
+    #[test]
+    fn descriptions_are_cut_at_a_word_for_the_one_line_of_a_list_entry() {
+        assert_eq!(brief("Reload 30% faster.", 40), "Reload 30% faster.");
+        let cut = brief(
+            "Bursts into a cloud that blocks the view for about 14 s.",
+            30,
+        );
+        assert_eq!(cut, "Bursts into a cloud that...");
+        assert!(cut.chars().count() <= 30);
+        assert_eq!(brief("Unbroken", 5), "Un...");
+    }
+
+    #[test]
+    fn only_the_small_slots_have_a_dropdown() {
+        use crate::class::EquipmentSlot;
+        for slot in [
+            Slot::Secondary,
+            Slot::Perk(2),
+            Slot::Greed(0),
+            Slot::Wildcards,
+            Slot::Equipment(EquipmentSlot::Tactical),
+        ] {
+            assert!(slot.listed(), "{slot:?}");
+        }
+        for slot in [Slot::Primary, Slot::Attachment(1), Slot::Camo] {
+            assert!(!slot.listed(), "{slot:?}");
+        }
+    }
+
+    #[test]
+    fn an_equipment_list_starts_with_none_marks_the_held_item_and_holds_only_its_kind() {
+        use crate::class::EquipmentSlot;
+        let data = data();
+        let profile = veteran(&data);
+        let mut class = bare(WeaponId::AssaultRifle);
+        let lethal = Slot::Equipment(EquipmentSlot::Lethal);
+        let empty = choices(&class, lethal, &profile, &data);
+        assert_eq!(empty[0].pick, Pick::Empty);
+        assert!(empty[0].current && empty.iter().filter(|c| c.current).count() == 1);
+        let first = empty[1].name.clone();
+        take(&mut class, lethal, &first, &profile, &data);
+        let held = choices(&class, lethal, &profile, &data);
+        assert_eq!(held[0].pick, Pick::Empty);
+        assert!(!held[0].current);
+        assert!(named(&held, &first).current);
+        for choice in &held[1..] {
+            let Pick::Equipment(id) = choice.pick else {
+                panic!("{:?}", choice.pick);
+            };
+            assert_eq!(data.class_points.equipment[&id].slot, EquipmentSlot::Lethal);
+        }
     }
 }

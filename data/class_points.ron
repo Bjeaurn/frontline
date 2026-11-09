@@ -35,17 +35,38 @@
     equipment: {
         Frag: (
             name: "Frag Grenade",
-            description: "Lethal. Bounces, then bursts after about 3 s: heavy damage that fades with distance. Throw with G.",
+            description: "Lethal. Bounces, then bursts after 3 s: heavy damage that fades with distance. Throw with G.",
             slot: Lethal,
+        ),
+        Semtex: (
+            name: "Semtex",
+            description: "Lethal. Sticks to the first wall, floor or player it touches and bursts 1.5 s later: a smaller blast than a Frag, but it doesn't roll away. Throw with G.",
+            slot: Lethal,
+        ),
+        Mine: (
+            name: "Proximity Mine",
+            description: "Lethal. Thrown onto a surface, it arms after 1.5 s and bursts, with a heavy blast, when an enemy comes within 2.6 m in the open. You keep two down; a third removes your oldest. Throw with G.",
+            slot: Lethal,
+            cost: Some(2),
         ),
         Flashbang: (
             name: "Flashbang",
-            description: "Tactical. Bursts after about 1.6 s: anyone near it looking its way is blinded, and everyone near is deafened. Throw with Q.",
+            description: "Tactical. Bursts after 2.4 s: anyone near it looking its way is blinded, and everyone near is deafened. Throw with Q.",
+            slot: Tactical,
+        ),
+        Stun: (
+            name: "Stun Grenade",
+            description: "Tactical. Bursts after 2 s: everyone within 12 m, even behind cover, is slowed and has the view shaken for up to 6 s, fading with distance. No damage. Throw with Q.",
             slot: Tactical,
         ),
         Smoke: (
             name: "Smoke Grenade",
-            description: "Tactical. Bursts into a cloud that blocks the view for about 14 s. Throw with Q.",
+            description: "Tactical. Bursts into a cloud that blocks the view for about 25 s. Throw with Q.",
+            slot: Tactical,
+        ),
+        TearGas: (
+            name: "Tear Gas",
+            description: "Tactical. Bursts after 2 s into a cloud for about 16 s: whoever stands in it coughs, is slowed and sees only a narrow tunnel, for a moment after leaving too. No damage. Throw with Q.",
             slot: Tactical,
         ),
     },

@@ -307,6 +307,12 @@ pub struct ControllerModifiers {
     pub sprint_blocked: bool,
     /// Movement is locked (planting or defusing the bomb).
     pub frozen: bool,
+    /// Multiplies movement speed on top of `move_scale`: what a stun or gas takes off
+    /// (`equipment::client`).
+    pub status_move: f32,
+    /// How far the view is shaken (pitch, yaw, roll in radians; a stun, a cough). The camera
+    /// shows it; where shots go is not touched.
+    pub view_shake: Vec3,
 }
 
 impl Default for ControllerModifiers {
@@ -319,6 +325,8 @@ impl Default for ControllerModifiers {
             stamina_scale: 1.0,
             sprint_blocked: false,
             frozen: false,
+            status_move: 1.0,
+            view_shake: Vec3::ZERO,
         }
     }
 }
@@ -938,6 +946,7 @@ pub(super) fn move_player(
             Stance::Crouching => tuning.crouch_speed,
             Stance::Prone => tuning.prone_speed,
         } * modifiers.move_scale
+            * modifiers.status_move
             * motor.landing_scale(tuning);
         let wish = facing * Vec3::new(input.x, 0.0, -input.y).normalize_or_zero() * speed;
         fall = slide(
@@ -1172,10 +1181,10 @@ fn slide(
 /// mantling.
 pub(super) fn update_eye(
     time: Res<Time>,
-    mut player: Query<(&PlayerPose, &mut Motor), With<LocalPlayer>>,
+    mut player: Query<(&PlayerPose, &mut Motor, &ControllerModifiers), With<LocalPlayer>>,
     mut camera: Query<(&mut EyeCamera, &mut Transform)>,
 ) {
-    let Ok((pose, mut motor)) = player.single_mut() else {
+    let Ok((pose, mut motor, modifiers)) = player.single_mut() else {
         return;
     };
     let mantle = motor
@@ -1189,12 +1198,14 @@ pub(super) fn update_eye(
     motor
         .view_lag
         .smooth_nudge(&0.0, STEP_VIEW_RATE, time.delta_secs());
+    let shake = modifiers.view_shake;
     for (mut eye, mut transform) in &mut camera {
         eye.height
             .smooth_nudge(&pose.stance.eye_height(), rate, time.delta_secs());
         transform.translation = Vec3::Y * (eye.height - MANTLE_VIEW_DIP * mantle - motor.view_lag);
-        transform.rotation =
-            Quat::from_rotation_x(pose.pitch) * Quat::from_rotation_z(MANTLE_VIEW_ROLL * mantle);
+        transform.rotation = Quat::from_rotation_y(shake.y)
+            * Quat::from_rotation_x(pose.pitch + shake.x)
+            * Quat::from_rotation_z(MANTLE_VIEW_ROLL * mantle + shake.z);
     }
 }
 

@@ -165,11 +165,19 @@ A modification fitted to one **Attachment Slot** on a **Weapon**.
 _Avoid_: Mod, upgrade
 
 **Attachment Slot**:
-A position on a **Weapon** that holds at most one **Attachment**: Optic (e.g. Red Dot, Holographic, Prism, ACOG), Muzzle (e.g. Silencer) or Underbarrel (e.g. Foregrip).
+A position on a **Weapon** that holds at most one **Attachment**: Optic (e.g. Red Dot, Reflex, Holographic, Prism, ACOG, 6x Scope), Muzzle (Silencer, Compensator, Flash Hider) or Underbarrel (Foregrip, Angled Grip, Grenade Launcher). A Muzzle Attachment changes the **Muzzle Flash** and the gunshot; a Weapon offers only the slots and **Attachments** its entry in `data/progression.ron` lists (the shotgun has no Underbarrel one).
 _Avoid_: Rail, socket
 
+**Muzzle Flash**:
+The bright burst at the muzzle when a round is fired. The shooter sees it in the viewmodel, other players see a flash puff where a shot leaves; a Silencer removes the shooter's, and a Silencer or a Flash Hider removes the one others see; a Compensator makes both bigger.
+_Avoid_: Muzzle blast
+
+**Pellet**:
+One of the bullets of a round of a **Weapon** with `pellets` above 1 (the shotgun): each is its own ray with its own spread and its own hit, dealing the Weapon's per-bullet damage with the usual falloff. A round is still one magazine round, one recoil kick, one gunshot and one **Muzzle Flash**, whatever its pellets.
+_Avoid_: Shot (a shot is a pellet on the wire: one `FireShot` per pellet), slug
+
 **Magnification**:
-The zoom number of a sight (iron sights and Red Dot 1x, Holographic 1.5x, Prism 2x, ACOG 4x, the Sniper's scope 8x). It sets the aimed field of view, and from 3x it allows **Hold Breath** and shows a **Glint**. Each sight also has a **Sway Scale**.
+The zoom number of a sight (iron sights, Red Dot and Reflex 1x, Holographic 1.5x, Prism 2x, ACOG 4x, 6x Scope 6x, the Sniper's scope 8x). It sets the aimed field of view, and from 3x it allows **Hold Breath** and shows a **Glint**. Each sight also has a **Sway Scale**.
 _Avoid_: Zoom level, scope power
 
 **Sway**:
@@ -209,7 +217,7 @@ Pulling the trigger on an empty magazine: a click per pull and a flashing RELOAD
 _Avoid_: Empty click
 
 **Grenade**:
-A physical projectile the server flies with gravity, bounces and a fuse: the lethal Frag (blast damage that falls off with distance), the tactical Flashbang (blinds a viewer facing it, deafens everyone near) and Smoke (a cloud that blocks the view for a while), and the Grenade Launcher's 40mm round. A thrown one is readied by holding its key and thrown when the key is let go, along an arc that depends on the look angle (far at the horizon, farther looking up, a short toss looking down).
+A physical projectile the server flies with gravity, bounces or sticking, and a fuse. Lethal: the Frag (blast damage that falls off with distance), Semtex (sticks to the first surface or player it touches and bursts shortly after, with a smaller blast) and the Proximity Mine (sticks to a surface, arms after a moment and bursts when an enemy comes near; a player keeps a couple down). Tactical: the Flashbang (blinds a viewer facing it, deafens everyone near), the Stun Grenade (slows and shakes the view of everyone near for seconds, no damage), Smoke (a cloud that blocks the view for a while) and Tear Gas (a damage-free cloud whose occupants cough, are slowed and see only a narrow tunnel). The Grenade Launcher's 40mm round is one too. A thrown one is readied by holding its key and thrown when the key is let go, along an arc that depends on the look angle (far at the horizon, farther looking up, a short toss looking down). The server limits how many Grenades and clouds exist at once.
 _Avoid_: Nade, bomb (a **Bomb** is the Search & Destroy objective)
 
 **Grenade Launcher**:
@@ -223,7 +231,7 @@ A player's chosen **Primary**, optional **Secondary**, **Attachments**, **Perks*
 _Avoid_: Kit, build
 
 **Class Points** ("Pick 10"):
-The budget every **Loadout** has (10) and what each choice costs: a **Primary** 1, a **Secondary** 1, each **Attachment** 1 (an Optic of 3× or more, and the grenade launcher, 2), each **Perk** 1, each piece of equipment 1 and each **Wildcard** 1. Everything but the **Primary** is optional, so dropping something frees points. The costs live in `data/class_points.ron`.
+The budget every **Loadout** has (10) and what each choice costs: a **Primary** 1, a **Secondary** 1, each **Attachment** 1 (an Optic of 3× or more, and the grenade launcher, 2), each **Perk** 1, each piece of equipment 1 (the Proximity Mine, 2) and each **Wildcard** 1. Everything but the **Primary** is optional, so dropping something frees points. The costs live in `data/class_points.ron`.
 _Avoid_: Cost, credits, slots (for the budget)
 
 **Wildcard**:
@@ -231,7 +239,7 @@ A **Loadout** choice, costing a point, that breaks one slot rule: Perk 1, 2 or 3
 _Avoid_: Perk (a Wildcard isn't one), modifier
 
 **Perk**:
-A passive ability that occupies one **Perk Slot** in a **Loadout**.
+A passive ability that occupies one **Perk Slot** in a **Loadout**; a pure data entry (`data/perks.ron`) of effects the rest of the game reads. Slot 1: Sleight of Hand (faster reload), Scavenger (full refill from an **Ammo Pack**), Bandolier (one more spare magazine in every **Reserve**), Steady Aim (tighter hip-fire spread), Quickdraw (faster aim down sights). Slot 2: Stopping Power (more bullet damage), Lightweight (faster movement), Quick Recovery (health regenerates sooner and faster), Juggernaut (more maximum health), Danger Close (more **Grenade** and launcher damage to others). Slot 3: Marathon (longer sprint), Ninja (silent footsteps), Hardened (less view flinch from hits), Tactical Mask (shorter Flashbang blind and deafness), Fall Guard (no fall damage). The effects of a **Perk Greed** pair stack. The server applies health and damage ones from the **Perks** the client reports; the client applies those of the **Weapon** it holds.
 _Avoid_: Skill, trait, buff
 
 **Perk Slot**:
@@ -239,7 +247,7 @@ One of three positions in a **Loadout**, each holding one **Perk** from that slo
 _Avoid_: Perk tier
 
 **Create a Class**:
-The three-level editor, opened from the main menu (CREATE A CLASS) or from the Loadout screen in game, where a player fills one of the **Profile**'s custom **Loadouts** within its **Class Points**: a class list, a slot overview (big tiles for **Primary** with its **Attachments**, **Secondary**, equipment, **Perks**, **Wildcards**, plus a name) and a full-screen picker per slot.
+The three-level editor, opened from the main menu (CREATE A CLASS) or from the Loadout screen in game, where a player fills one of the **Profile**'s custom **Loadouts** within its **Class Points**: a class list, a slot overview (big tiles for **Primary** with its **Attachments**, **Secondary**, equipment, **Perks**, **Wildcards**, plus a name) and a pick per slot. The small slots (**Secondary**, equipment, **Perks** with their Greed **Perk**, **Wildcards**) are picked from a dropdown list under their tile (a click on the tile, then on an entry); the **Primary** and what goes on it (**Attachments**, **Camo**) have a full-screen picker with stat bars.
 _Avoid_: Class builder, loadout editor (as the in-game name)
 
 **Reserve**:

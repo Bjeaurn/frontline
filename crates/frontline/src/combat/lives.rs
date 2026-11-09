@@ -9,6 +9,7 @@ use super::health::{LastDamaged, PendingRespawn, end_life};
 use super::hitbox::Hitboxes;
 use super::match_flow::is_live;
 use crate::data::{GameData, GameModeId};
+use crate::gear::EquippedPerks;
 use crate::net::LinkPlayer;
 use crate::net::protocol::{
     DeathCause, EventChannel, FallDamage, ForceRespawn, KillFeed, RequestRespawn,
@@ -43,6 +44,7 @@ pub(super) fn apply_falls(
         &PlayerPose,
         &Hitboxes,
     )>,
+    perks: Query<&EquippedPerks>,
     mut feeds: KillFeeds,
     state: Single<&MatchState>,
     data: Res<GameData>,
@@ -60,7 +62,16 @@ pub(super) fn apply_falls(
             if !is_live(&state) || health.is_dead() || team.0.is_none() {
                 continue;
             }
-            let damage = rules.fall_damage.damage(height, rules.max_health);
+            // A Juggernaut's fall hurts in proportion to their larger health; Fall Guard cancels it.
+            let effects = perks
+                .get(player.0)
+                .map(|perks| data.perk_effects(perks.0.iter()))
+                .unwrap_or_default();
+            let damage = effects.fall_damage(
+                rules
+                    .fall_damage
+                    .damage(height, effects.max_health(rules.max_health)),
+            );
             if damage <= 0.0 {
                 continue;
             }

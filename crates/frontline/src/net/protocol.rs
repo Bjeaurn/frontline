@@ -93,6 +93,16 @@ pub struct Flashed {
     pub deaf_secs: f32,
 }
 
+/// Server -> the player a stun grenade caught (`EventChannel`): shake their view for `secs`
+/// at `strength` (0 to 1, from how near they were) and take the share `slow` off their speed,
+/// both easing off as it wears out.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Stunned {
+    pub secs: f32,
+    pub strength: f32,
+    pub slow: f32,
+}
+
 /// Unreliable channel where only the newest pose is kept.
 pub struct PoseChannel;
 
@@ -108,19 +118,22 @@ pub struct EventChannel;
 /// Unreliable channel for cosmetic effects such as tracers (server -> client).
 pub struct EffectChannel;
 
-/// Client -> server: the local player fired one round. `direction` already includes spread
+/// Client -> server: the local player fired one bullet. `direction` already includes spread
 /// and recoil (clients are trusted, docs/adr/0002); the server decides what it hit.
 /// `attachments` are the ones fitted to the Weapon fired; the server applies the same stat
-/// modifiers as the client.
+/// modifiers as the client. A round of a Weapon with `pellets` is one `FireShot` per pellet,
+/// each its own ray; `pellet` counts them from 0, and the round's gunshot and flash belong to 0.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FireShot {
     pub weapon: WeaponId,
     pub attachments: Attachments,
     pub origin: Vec3,
     pub direction: Vec3,
+    pub pellet: u8,
 }
 
-/// Server -> all clients except the shooter: draw a tracer for someone else's shot.
+/// Server -> all clients except the shooter: draw a tracer for someone else's shot. `pellet` is
+/// the `FireShot`'s: only pellet 0 comes with the gunshot and the muzzle flash.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ShotTracer {
     pub shooter: PeerId,
@@ -128,6 +141,7 @@ pub struct ShotTracer {
     pub attachments: Attachments,
     pub origin: Vec3,
     pub end: Vec3,
+    pub pellet: u8,
 }
 
 /// Server -> all clients, shooter included (`EventChannel`): a projectile Weapon's bullet left
@@ -369,6 +383,8 @@ pub(super) fn register(app: &mut App) {
     app.register_message::<GrenadeDetonated>()
         .add_direction(NetworkDirection::ServerToClient);
     app.register_message::<Flashed>()
+        .add_direction(NetworkDirection::ServerToClient);
+    app.register_message::<Stunned>()
         .add_direction(NetworkDirection::ServerToClient);
 }
 
