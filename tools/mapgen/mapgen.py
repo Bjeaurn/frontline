@@ -115,6 +115,11 @@ _BASE_AXES = [
 ]
 
 
+# The surface of a brush that is solid but not drawn: the collider under a prop model. The game
+# builds no mesh for faces textured `clip` (bevy_trenchbroom's `auto_remove_textures`).
+CLIP = "clip"
+
+
 @dataclass
 class Face:
     """A brush plane in TrenchBroom space: outward unit normal and a point on it."""
@@ -136,11 +141,13 @@ class Face:
         points = " ".join(f"( {' '.join(_num(c) for c in p)} )" for p in (p1, p2, p3))
 
         _, u_axis, v_axis = max(_BASE_AXES, key=lambda axes: _dot(axes[0], n))
+        u_text = " ".join(_num(c) for c in u_axis)
+        v_text = " ".join(_num(c) for c in v_axis)
+        if self.surface == CLIP:
+            return f"{points} {CLIP} [ {u_text} 0 ] [ {v_text} 0 ] 0 1 1"
         (metres_u, metres_v), (width, height) = SURFACES[self.surface]
         scale_u = metres_u * UNITS_PER_METRE / width
         scale_v = metres_v * UNITS_PER_METRE / height
-        u_text = " ".join(_num(c) for c in u_axis)
-        v_text = " ".join(_num(c) for c in v_axis)
         return (
             f"{points} {self.surface}/color [ {u_text} 0 ] [ {v_text} 0 ] 0 "
             f"{_num(scale_u)} {_num(scale_v)}"
