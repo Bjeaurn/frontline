@@ -51,11 +51,17 @@ while aimed); `akmagazine_low.001`, `aktrigger_low.001`; `shotgunpomp` (the fore
 The pack has no AR-15 rifle (its only rifle, `ak47`, read as an AK: curved magazine, wood, slab
 receiver, and was used for both until a playtest said so), and none of the user's other packs
 (FPS Lite, LowPoly FPS Lite, NiceLabs) hold a gun. So these two are **original geometry, no third
-party asset in them**: `tools/assets/build_rifles.py` writes them from boxes, lofts and cylinders
-(no texture, no input file; four flat-coloured materials). Same licence as the rest of the project;
+party asset in them**: `tools/assets/build_rifles.py` runs Blender headless on `tools/assets/blender_rifles.py`,
+which builds both rifles from scratch in code (rings of vertices: lofts, lathes and extruded outlines; no
+input file, no scan, no texture, no sculpt): chamfered, smooth-shaded receivers, Picatinny rails, round
+barrels with a flash hider, curved ribbed magazines, sling loops, the real-world AR-15 shapes with no maker's
+logo or marking, exported with Blender's glTF exporter. Their look is six solid-colour PBR materials (phosphate
+metal, anodised receiver, black polymer, rubber, bare steel and a lighter "worn" one on the chamfered edges),
+each rifle about 5,000 triangles and 250 to 270 KB. Same licence as the rest of the project;
 nothing from the Styloo pack is in them. The M4 is a collapsed-stock carbine with a quad-rail handguard, flat-top rail,
-STANAG magazine and flip-up iron sights; the M16A4 has the fixed A2 stock, a round full-length
-handguard, the removable carry handle and the long barrel.
+STANAG magazine and flip-up iron sights; the M16A4 has the fixed A2 stock, a round fluted full-length
+handguard, the removable carry handle and the long barrel. `tools/assets/blender_rifles_preview.py` renders
+the check sheets and the overlay of the `rig.rs` reference points.
 
 ## Soldiers
 

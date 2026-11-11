@@ -4,7 +4,7 @@
 //! remote player) needs to carry the same gun: `GunRig::model_transform` and `grip`.
 //!
 //! The first-person guns are the Styloo Guns Asset Pack's (the AK-47 and its stockless variant, the
-//! shotgun, the SMG, Sniper and Pistol) and the M4 and M16A4 built from primitives by
+//! shotgun, the SMG, Sniper and Pistol) and the M4 and M16A4 built in Blender by
 //! `tools/assets/build_rifles.py` (assets/models/CREDITS.md):
 //! authored along +X with +Y up, so `model_transform` turns them to face -Z.
 
