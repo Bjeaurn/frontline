@@ -17,6 +17,7 @@ use crate::maps::map_ready;
 
 pub use controller::{ControllerModifiers, EyeCamera, MenuOpen, Motor, MouseCaptured, PITCH_LIMIT};
 pub use life::LocalLife;
+pub use remote::RemoteDeath;
 
 /// Body radius used for the local collider and remote capsules, in metres.
 pub const BODY_RADIUS: f32 = 0.3;
@@ -96,24 +97,19 @@ impl Plugin for LocalControllerPlugin {
 }
 
 /// Draws every `RemotePlayer` as a soldier in its Faction's gear following its `PlayerPose`,
-/// hidden while dead, and leaves a body where it died. Client and Host only.
-pub struct RemotePlayerVisualsPlugin;
+/// hidden while dead, and leaves a body where it died. Client and Host only (and MapEdit's
+/// soldier viewer, which adds just this, `LocalLife` and `MapRegistry`).
+pub struct SoldierVisualsPlugin;
 
-impl Plugin for RemotePlayerVisualsPlugin {
+impl Plugin for SoldierVisualsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<remote::RemoteDeath>()
+        app.add_message::<RemoteDeath>()
             .add_systems(
                 Startup,
-                (
-                    remote::load_remote_assets,
-                    footsteps::load_footstep_sounds,
-                    packs::load_pack_assets,
-                ),
+                (soldier::load_soldiers, remote::load_remote_assets),
             )
             .add_observer(remote::attach_remote_visuals)
-            .add_observer(footsteps::attach_stride)
-            .add_observer(footsteps::attach_own_stride)
-            .add_observer(packs::show_pack)
+            .add_observer(soldier::bind_soldier)
             .add_systems(
                 Update,
                 (
@@ -123,7 +119,24 @@ impl Plugin for RemotePlayerVisualsPlugin {
                     corpse::animate_corpses,
                 )
                     .chain(),
+            );
+    }
+}
+
+/// Everything remote players add to the game: their soldiers (`SoldierVisualsPlugin`), their
+/// footsteps and the ammo packs they drop. Client and Host only.
+pub struct RemotePlayerVisualsPlugin;
+
+impl Plugin for RemotePlayerVisualsPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(SoldierVisualsPlugin)
+            .add_systems(
+                Startup,
+                (footsteps::load_footstep_sounds, packs::load_pack_assets),
             )
+            .add_observer(footsteps::attach_stride)
+            .add_observer(footsteps::attach_own_stride)
+            .add_observer(packs::show_pack)
             .add_systems(
                 Update,
                 (

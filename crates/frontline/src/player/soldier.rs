@@ -1,67 +1,151 @@
-//! A procedural low-poly soldier drawn for remote players and their bodies: boots, fatigues,
-//! vest and pack, a head with its Faction's headgear and a rifle held at the shoulder.
+//! The soldier drawn for remote players and their bodies: one skinned glTF model
+//! (`assets/models/characters/soldier.glb`, built by `tools/assets/build_soldier.py`) with a
+//! helmet or cap, a plate carrier with pouches, a pack, boots and gloves, holding a rifle.
 //!
-//! The soldier is seven rigid parts (torso, head, aim group, two thighs and two shins), each one
-//! mesh with vertex colours, so a Faction's look is just a different set of meshes under one
-//! shared material. Team colour is two more small meshes (chest and back panels, armbands) under
-//! a separate material. `pose` places the parts for a stance, a walk cycle and the aim pitch;
-//! nothing here is skeletal and nothing touches hit zones: it is all visuals.
+//! The model has no animation clips. `pose` works out, every frame, how far each bone is turned
+//! from its rest pose for a stance, a walk cycle and the aim pitch, and `Rest::locals` turns that
+//! into the bones' local transforms; the skin does the rest, so knees and elbows bend without
+//! gaps. The rest pose is the soldier standing with the rifle at the shoulder: the arms never
+//! move relative to the `shoulders` bone, which pitches with the aim and carries the rifle.
 //!
-//! Local space: feet at the origin, facing -Z, +X to the soldier's right.
+//! A Faction's look is the model's materials with other tints (`Slot`), headgear nodes shown or
+//! hidden, and a balaclava and goggles when the look asks for them. Team colour is the `team`
+//! material (chest and back patches, armbands) in the friendly or enemy colour. Nothing here
+//! touches hit zones: it is all visuals.
+//!
+//! Local space: feet at the origin, facing -Z, +X to the soldier's right. Bones, nodes and
+//! materials by name:
+//!
+//! - bones: `hips` (the root, at the hip joints' height), `spine`, `chest`, `neck`, `head`;
+//!   `shoulders` (pivot between the shoulders: arms and rifle hang from it); `upper_arm_{r,l}`,
+//!   `forearm_{r,l}`, `hand_{r,l}`; `thigh_{r,l}`, `shin_{r,l}`, `foot_{r,l}`
+//! - nodes: `gun_mount` (child of `shoulders`: where the rifle's origin is), `headgear_<kind>` for
+//!   each `Headgear`, `mask` (balaclava), `goggles`, and the body meshes
+//! - materials: `uniform`, `gear`, `skin`, `headgear` and `mask` (tinted per Faction), `fixed`
+//!   (boots, gloves, straps: as the model has them) and `team`
 
+use std::collections::HashMap;
 use std::f32::consts::{FRAC_PI_2, TAU};
 
+use bevy::asset::AssetPath;
+use bevy::ecs::system::SystemParam;
+use bevy::gltf::GltfMaterialName;
 use bevy::prelude::*;
-use bevy::world_serialization::WorldAsset;
+use bevy::world_serialization::{WorldAsset, WorldInstanceReady};
 
-use crate::data::{GunModel, Headgear, SoldierLook};
+use crate::assets::EMBEDDED_ROOT;
+use crate::data::{GameData, GunModel, Headgear, SoldierLook};
 use crate::shared::Stance;
 use crate::weapon::rig::gun_rig;
 
-/// Rigid parts of a soldier.
-#[derive(Clone, Copy, Debug)]
-pub(super) enum Part {
-    Torso,
+/// Embedded model file, under the assets folder.
+pub(super) const MODEL: &str = "models/characters/soldier.glb";
+
+/// The bones of the model, parents before children (`BONES` is in this order).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Bone {
+    Hips,
+    Spine,
+    Chest,
+    Neck,
     Head,
-    /// Shoulders, arms and rifle: pitches with the aim.
-    Aim,
-    ThighLeft,
-    ShinLeft,
-    ThighRight,
-    ShinRight,
+    /// Pivot between the shoulders: arms and rifle pitch about it with the aim.
+    Shoulders,
+    UpperArmR,
+    ForearmR,
+    HandR,
+    UpperArmL,
+    ForearmL,
+    HandL,
+    ThighR,
+    ShinR,
+    FootR,
+    ThighL,
+    ShinL,
+    FootL,
 }
 
-pub(super) const PART_COUNT: usize = 7;
-const PARTS: [Part; PART_COUNT] = [
-    Part::Torso,
-    Part::Head,
-    Part::Aim,
-    Part::ThighLeft,
-    Part::ShinLeft,
-    Part::ThighRight,
-    Part::ShinRight,
+pub(super) const BONE_COUNT: usize = 18;
+
+pub(super) const BONES: [Bone; BONE_COUNT] = [
+    Bone::Hips,
+    Bone::Spine,
+    Bone::Chest,
+    Bone::Neck,
+    Bone::Head,
+    Bone::Shoulders,
+    Bone::UpperArmR,
+    Bone::ForearmR,
+    Bone::HandR,
+    Bone::UpperArmL,
+    Bone::ForearmL,
+    Bone::HandL,
+    Bone::ThighR,
+    Bone::ShinR,
+    Bone::FootR,
+    Bone::ThighL,
+    Bone::ShinL,
+    Bone::FootL,
 ];
+
+impl Bone {
+    /// The node name in the model.
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Bone::Hips => "hips",
+            Bone::Spine => "spine",
+            Bone::Chest => "chest",
+            Bone::Neck => "neck",
+            Bone::Head => "head",
+            Bone::Shoulders => "shoulders",
+            Bone::UpperArmR => "upper_arm_r",
+            Bone::ForearmR => "forearm_r",
+            Bone::HandR => "hand_r",
+            Bone::UpperArmL => "upper_arm_l",
+            Bone::ForearmL => "forearm_l",
+            Bone::HandL => "hand_l",
+            Bone::ThighR => "thigh_r",
+            Bone::ShinR => "shin_r",
+            Bone::FootR => "foot_r",
+            Bone::ThighL => "thigh_l",
+            Bone::ShinL => "shin_l",
+            Bone::FootL => "foot_l",
+        }
+    }
+
+    pub(super) fn parent(self) -> Option<Bone> {
+        match self {
+            Bone::Hips => None,
+            Bone::Spine | Bone::ThighR | Bone::ThighL => Some(Bone::Hips),
+            Bone::Chest => Some(Bone::Spine),
+            Bone::Neck | Bone::Shoulders => Some(Bone::Chest),
+            Bone::Head => Some(Bone::Neck),
+            Bone::UpperArmR | Bone::UpperArmL => Some(Bone::Shoulders),
+            Bone::ForearmR => Some(Bone::UpperArmR),
+            Bone::HandR => Some(Bone::ForearmR),
+            Bone::ForearmL => Some(Bone::UpperArmL),
+            Bone::HandL => Some(Bone::ForearmL),
+            Bone::ShinR => Some(Bone::ThighR),
+            Bone::FootR => Some(Bone::ShinR),
+            Bone::ShinL => Some(Bone::ThighL),
+            Bone::FootL => Some(Bone::ShinL),
+        }
+    }
+}
 
 /// Hip joint height standing, in metres.
 const STAND_HIP: f32 = 0.93;
-const CROUCH_HIP: Vec3 = Vec3::new(0.0, 0.42, 0.15);
+const CROUCH_HIP: Vec3 = Vec3::new(0.0, 0.44, 0.15);
 const PRONE_HIP: Vec3 = Vec3::new(0.0, 0.14, 0.62);
-const HIP_HALF_WIDTH: f32 = 0.1;
-const THIGH_LENGTH: f32 = 0.46;
-/// Neck and shoulder joints above the hip, along the torso.
-const NECK: Vec3 = Vec3::new(0.0, 0.58, 0.0);
-const SHOULDER: Vec3 = Vec3::new(0.0, 0.5, 0.0);
-/// Head centre above the neck joint.
-const HEAD_CENTRE: f32 = 0.13;
 /// Metres of ground covered by one full walk cycle (both legs), so steps match footsteps.
 const STRIDE_LENGTH: f32 = 2.2;
 /// Crouched: thighs near horizontal, shins slanting back to the heel.
 const CROUCH_THIGH: f32 = 1.48;
 const CROUCH_KNEE: f32 = -2.11;
 const CROUCH_LEAN: f32 = -0.45;
-
-const BOOT: Color = Color::srgb(0.09, 0.08, 0.07);
-const GLOVE: Color = Color::srgb(0.08, 0.08, 0.08);
+/// How much of the torso's forward lean each of the hips, spine and chest takes (cumulative: the
+/// chest ends up at the whole lean).
+const LEAN_SPLIT: [f32; 3] = [0.3, 0.7, 1.0];
 
 /// How far into its walk cycle a soldier is and how hard it moves.
 #[derive(Clone, Copy, Debug, Default)]
@@ -85,9 +169,21 @@ impl Gait {
     }
 }
 
-/// The part transforms (relative to the feet) of a soldier in `stance` mid-`gait`, aiming
-/// `pitch` radians up. Indexed like `Part`.
-pub(super) fn pose(stance: Stance, gait: Gait, pitch: f32) -> [Transform; PART_COUNT] {
+/// How a soldier stands: where the hips are, and how far every bone is turned from its rest pose.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Pose {
+    /// The hips' position relative to the feet.
+    hips: Vec3,
+    /// Extra height of the `shoulders` pivot over where the spine carries it (a prone soldier
+    /// props the rifle on its elbows).
+    shoulders_lift: Vec3,
+    /// Each bone's rotation relative to its rest pose in feet space (not relative to its parent),
+    /// indexed like `BONES`.
+    delta: [Quat; BONE_COUNT],
+}
+
+/// The pose of a soldier in `stance` mid-`gait`, aiming `pitch` radians up.
+pub(super) fn pose(stance: Stance, gait: Gait, pitch: f32) -> Pose {
     let pitch = pitch.clamp(-1.3, 1.3);
     let w = gait.walk;
     let r = gait.run;
@@ -97,90 +193,98 @@ pub(super) fn pose(stance: Stance, gait: Gait, pitch: f32) -> [Transform; PART_C
     let sin = |side: f32| side * phase.sin();
     let cos = |side: f32| side * phase.cos();
 
-    let (torso, head, aim, thighs, shins) = match stance {
+    // Per leg (right, left): the thigh's pitch and splay, the knee bend, the foot's turn.
+    let mut legs = [(0.0, 0.0, 0.0, 0.0); 2];
+    let (hips, lean, head, aim, shoulders_lift) = match stance {
         Stance::Standing => {
             let hip = Vec3::new(0.0, STAND_HIP + 0.018 * w * (2.0 * phase).cos(), 0.0);
-            let torso =
-                Transform::from_translation(hip).with_rotation(rot_x(-(0.03 * w + 0.2 * r)));
             let swing = (0.45 + 0.3 * r) * w;
             let knee = (0.8 + 0.5 * r) * w;
-            let legs = [1.0, -1.0].map(|side| {
-                leg(
-                    hip,
-                    -side,
-                    swing * sin(side),
-                    -knee * cos(side).max(0.0) - 0.04 * w,
-                    0.0,
-                )
-            });
+            for (leg, side) in legs.iter_mut().zip([-1.0, 1.0]) {
+                let thigh = swing * sin(side);
+                let bend = -knee * cos(side).max(0.0) - 0.04 * w;
+                // Toes up as the foot reaches forward, down as it trails.
+                *leg = (thigh, 0.0, bend, 0.5 * (thigh + bend));
+            }
             (
-                torso,
-                rot_x(pitch * 0.8),
-                rot_x(pitch - 0.55 * r),
-                legs.map(|(thigh, _)| thigh),
-                legs.map(|(_, shin)| shin),
+                hip,
+                LEAN_SPLIT.map(|share| -(0.03 * w + 0.2 * r) * share),
+                pitch * 0.8,
+                pitch - 0.55 * r,
+                Vec3::ZERO,
             )
         }
         Stance::Crouching => {
             let hip = CROUCH_HIP + Vec3::Y * 0.01 * w * (2.0 * phase).cos();
-            let torso =
-                Transform::from_translation(hip).with_rotation(rot_x(CROUCH_LEAN - 0.05 * w));
-            let legs = [1.0, -1.0].map(|side| {
-                leg(
-                    hip,
-                    -side,
-                    CROUCH_THIGH + 0.25 * w * sin(side),
-                    CROUCH_KNEE - 0.15 * w * cos(side).max(0.0),
-                    0.0,
-                )
-            });
+            for (leg, side) in legs.iter_mut().zip([-1.0, 1.0]) {
+                let thigh = CROUCH_THIGH + 0.25 * w * sin(side);
+                let bend = CROUCH_KNEE - 0.15 * w * cos(side).max(0.0);
+                *leg = (thigh, 0.0, bend, 0.15 * w * sin(side));
+            }
             (
-                torso,
-                rot_x(pitch * 0.8),
-                rot_x(pitch),
-                legs.map(|(thigh, _)| thigh),
-                legs.map(|(_, shin)| shin),
+                hip,
+                LEAN_SPLIT.map(|share| (CROUCH_LEAN - 0.05 * w) * share),
+                pitch * 0.8,
+                pitch,
+                Vec3::ZERO,
             )
         }
         Stance::Prone => {
-            let torso = Transform::from_translation(PRONE_HIP).with_rotation(rot_x(-FRAC_PI_2));
-            let legs = [1.0, -1.0].map(|side| {
-                leg(
-                    PRONE_HIP,
-                    -side,
+            for (leg, side) in legs.iter_mut().zip([-1.0, 1.0]) {
+                *leg = (
                     -FRAC_PI_2 + 0.1 * w * sin(side),
-                    0.0,
                     0.07 * side,
-                )
-            });
+                    0.0,
+                    -FRAC_PI_2,
+                );
+            }
             (
-                torso,
-                rot_x(pitch.clamp(-0.5, 0.9)),
-                rot_x(pitch.clamp(-0.3, 0.5)),
-                legs.map(|(thigh, _)| thigh),
-                legs.map(|(_, shin)| shin),
+                PRONE_HIP,
+                [-FRAC_PI_2, -1.5, -1.3],
+                pitch.clamp(-0.5, 0.9),
+                pitch.clamp(-0.3, 0.5),
+                Vec3::Y * 0.1,
             )
         }
     };
-
-    let lift = if stance == Stance::Prone { 0.07 } else { 0.0 };
-    let head = Transform::from_translation(torso.transform_point(NECK) + Vec3::Y * lift)
-        .with_rotation(head);
-    let aim_lift = if stance == Stance::Prone { 0.17 } else { 0.0 };
-    let aim = Transform::from_translation(torso.transform_point(SHOULDER) + Vec3::Y * aim_lift)
-        .with_rotation(aim);
-    [torso, head, aim, thighs[0], shins[0], thighs[1], shins[1]]
-}
-
-/// A thigh and its shin: the hip joint `hip` and the joint's side (`x` sign), the thigh's
-/// pitch and splay (`yaw`), and the knee's bend relative to the thigh. Negative bends take the
-/// foot backwards.
-fn leg(hip: Vec3, x_sign: f32, thigh_pitch: f32, knee: f32, yaw: f32) -> (Transform, Transform) {
-    let thigh = Transform::from_translation(hip + Vec3::X * HIP_HALF_WIDTH * x_sign)
-        .with_rotation(Quat::from_rotation_y(yaw) * Quat::from_rotation_x(thigh_pitch));
-    let shin = Transform::from_translation(thigh.transform_point(Vec3::NEG_Y * THIGH_LENGTH))
-        .with_rotation(thigh.rotation * Quat::from_rotation_x(knee));
-    (thigh, shin)
+    let mut delta = [Quat::IDENTITY; BONE_COUNT];
+    let set = |delta: &mut [Quat; BONE_COUNT], bone: Bone, rotation: Quat| {
+        delta[bone as usize] = rotation;
+    };
+    set(&mut delta, Bone::Hips, rot_x(lean[0]));
+    set(&mut delta, Bone::Spine, rot_x(lean[1]));
+    set(&mut delta, Bone::Chest, rot_x(lean[2]));
+    set(&mut delta, Bone::Neck, rot_x((lean[2] + head) / 2.0));
+    set(&mut delta, Bone::Head, rot_x(head));
+    for bone in [
+        Bone::Shoulders,
+        Bone::UpperArmR,
+        Bone::ForearmR,
+        Bone::HandR,
+        Bone::UpperArmL,
+        Bone::ForearmL,
+        Bone::HandL,
+    ] {
+        set(&mut delta, bone, rot_x(aim));
+    }
+    for (side, [thigh, shin, foot]) in [
+        [Bone::ThighR, Bone::ShinR, Bone::FootR],
+        [Bone::ThighL, Bone::ShinL, Bone::FootL],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (pitch, yaw, knee, turn) = legs[side];
+        let thigh_rotation = Quat::from_rotation_y(yaw) * rot_x(pitch);
+        set(&mut delta, thigh, thigh_rotation);
+        set(&mut delta, shin, thigh_rotation * rot_x(knee));
+        set(&mut delta, foot, rot_x(turn));
+    }
+    Pose {
+        hips,
+        shoulders_lift,
+        delta,
+    }
 }
 
 /// Where the corpse tips about: height above the feet of the soldier's back surface, so a body
@@ -193,596 +297,640 @@ pub(super) fn back_height(stance: Stance) -> f32 {
     }
 }
 
-/// The meshes of one Faction's soldier.
-pub(super) struct SoldierMeshes {
-    parts: [Handle<Mesh>; PART_COUNT],
-    /// Chest and back panels, under the torso.
-    mark_torso: Handle<Mesh>,
-    /// Armbands, under the aim group.
-    mark_aim: Handle<Mesh>,
-    /// The rifle every soldier carries (the first-person M4 model).
+/// The model's bones at rest, to turn a `Pose` into local transforms.
+#[derive(Clone, Debug)]
+pub(super) struct Rest {
+    /// Local transforms of the bones in the model.
+    local: [Transform; BONE_COUNT],
+    /// Rotation of each bone in feet space at rest.
+    world: [Quat; BONE_COUNT],
+    /// Rotation, in feet space, of the node `hips` hangs from (the model's armature).
+    root: Quat,
+}
+
+impl Rest {
+    /// The rest pose of bones with local transforms `local`, `hips` hanging from a node turned by
+    /// `root`.
+    pub(super) fn new(local: [Transform; BONE_COUNT], root: Quat) -> Self {
+        let mut world = [Quat::IDENTITY; BONE_COUNT];
+        for (i, bone) in BONES.iter().enumerate() {
+            let parent = bone.parent().map_or(root, |parent| world[parent as usize]);
+            world[i] = parent * local[i].rotation;
+        }
+        Self { local, world, root }
+    }
+
+    /// The bones' local transforms for `pose`.
+    pub(super) fn locals(&self, pose: &Pose) -> [Transform; BONE_COUNT] {
+        let mut turned = [Quat::IDENTITY; BONE_COUNT];
+        let mut locals = self.local;
+        for (i, bone) in BONES.iter().enumerate() {
+            turned[i] = pose.delta[i] * self.world[i];
+            let parent = bone
+                .parent()
+                .map_or(self.root, |parent| turned[parent as usize]);
+            locals[i].rotation = parent.inverse() * turned[i];
+        }
+        locals[Bone::Hips as usize].translation = self.root.inverse() * pose.hips;
+        locals[Bone::Shoulders as usize].translation +=
+            turned[Bone::Chest as usize].inverse() * pose.shoulders_lift;
+        locals
+    }
+}
+
+/// The held rifle's transform relative to the `gun_mount` node: the viewmodel's rifle, in the
+/// same place in the hands as in first person.
+fn gun_model() -> Transform {
+    gun_rig(GunModel::Carbine).model_transform()
+}
+
+/// What a material of the model is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Slot {
+    Uniform,
+    Gear,
+    Skin,
+    Headgear,
+    Mask,
+    /// Boots, gloves, straps, goggles: as the model has them.
+    Fixed,
+    /// Patches and armbands in the team colour.
+    Team,
+}
+
+const SLOT_COUNT: usize = 7;
+
+impl Slot {
+    fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "uniform" => Slot::Uniform,
+            "gear" => Slot::Gear,
+            "skin" => Slot::Skin,
+            "headgear" => Slot::Headgear,
+            "mask" => Slot::Mask,
+            "fixed" => Slot::Fixed,
+            "team" => Slot::Team,
+            _ => return None,
+        })
+    }
+}
+
+/// The model's tintable materials are a grey fabric detail map times the Faction's colour; this
+/// brings the colour back up to what the Faction's look says.
+const DETAIL_GAIN: f32 = 1.45;
+/// A balaclava is the uniform's colour, darker.
+const MASK_SHADE: f32 = 0.35;
+
+fn tint(slot: Slot, look: &SoldierLook) -> Option<Color> {
+    let srgb = |(r, g, b): (f32, f32, f32)| Color::srgb(r, g, b).to_linear();
+    let linear = match slot {
+        Slot::Uniform => srgb(look.uniform),
+        Slot::Gear => srgb(look.vest),
+        Slot::Skin => srgb(look.skin),
+        Slot::Headgear => srgb(look.headgear_color),
+        Slot::Mask => srgb(look.uniform) * MASK_SHADE,
+        Slot::Fixed | Slot::Team => return None,
+    };
+    Some(Color::linear_rgb(
+        linear.red * DETAIL_GAIN,
+        linear.green * DETAIL_GAIN,
+        linear.blue * DETAIL_GAIN,
+    ))
+}
+
+/// The node of a Headgear in the model.
+fn headgear_node(headgear: Headgear) -> &'static str {
+    match headgear {
+        Headgear::Helmet => "headgear_helmet",
+        Headgear::Beret => "headgear_beret",
+        Headgear::Boonie => "headgear_boonie",
+        Headgear::Cap => "headgear_cap",
+        Headgear::Beanie => "headgear_beanie",
+        Headgear::Shemagh => "headgear_shemagh",
+        Headgear::Ushanka => "headgear_ushanka",
+    }
+}
+
+const HEADGEARS: [Headgear; 7] = [
+    Headgear::Helmet,
+    Headgear::Beret,
+    Headgear::Boonie,
+    Headgear::Cap,
+    Headgear::Beanie,
+    Headgear::Shemagh,
+    Headgear::Ushanka,
+];
+
+/// The soldier model, the rifle it holds and every material made from the model's own.
+#[derive(Resource)]
+pub(super) struct Soldiers {
+    scene: Handle<WorldAsset>,
     gun: Handle<WorldAsset>,
+    /// The model's own material of each slot, as loaded (with the fabric detail map).
+    base: HashMap<Slot, Handle<StandardMaterial>>,
+    /// The base material in each Faction's tint.
+    tinted: HashMap<(usize, Slot), Handle<StandardMaterial>>,
+    friendly: Handle<StandardMaterial>,
+    enemy: Handle<StandardMaterial>,
 }
 
-/// The entities of a spawned soldier.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Rig {
-    pub parts: [Entity; PART_COUNT],
-    pub marks: [Entity; 2],
+pub(super) fn load_soldiers(
+    mut commands: Commands,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
+) {
+    let scene = |file: &str| {
+        asset_server.load(AssetPath::from(format!("{EMBEDDED_ROOT}{file}")).with_label("Scene0"))
+    };
+    commands.insert_resource(Soldiers {
+        scene: scene(MODEL),
+        gun: scene(gun_rig(GunModel::Carbine).file),
+        base: HashMap::new(),
+        tinted: HashMap::new(),
+        friendly: materials.add(super::remote::team_material(super::remote::team_color(
+            true,
+        ))),
+        enemy: materials.add(super::remote::team_material(super::remote::team_color(
+            false,
+        ))),
+    });
 }
 
-impl SoldierMeshes {
-    pub fn new(look: &SoldierLook, meshes: &mut Assets<Mesh>, gun: Handle<WorldAsset>) -> Self {
-        Self {
-            parts: PARTS.map(|part| meshes.add(build_part(part, look))),
-            mark_torso: meshes.add(build_mark_torso()),
-            mark_aim: meshes.add(build_mark_aim()),
-            gun,
-        }
-    }
+/// A soldier whose model is still loading: what to put on it once it is there.
+#[derive(Component, Debug)]
+pub(super) struct Dressing {
+    faction: usize,
+    friendly: bool,
+    pose: Pose,
+    /// Materials of its own, so it can fade without its Faction's other soldiers fading with it.
+    own_materials: bool,
+}
 
-    pub fn part(&self, part: usize) -> &Handle<Mesh> {
-        &self.parts[part]
-    }
+/// A spawned soldier's parts, on the entity the model hangs from.
+#[derive(Component, Debug)]
+pub(super) struct SoldierBones {
+    pub bones: [Entity; BONE_COUNT],
+    pub rest: Rest,
+    /// Every mesh of the model with its material slot.
+    meshes: Vec<(Entity, Slot)>,
+    headgear: [Entity; HEADGEARS.len()],
+    mask: Entity,
+    goggles: Entity,
+    own_materials: bool,
+}
 
-    pub fn mark(&self, mark: usize) -> &Handle<Mesh> {
-        if mark == 0 {
-            &self.mark_torso
-        } else {
-            &self.mark_aim
-        }
+impl SoldierBones {
+    /// The entities with the model's meshes, whose materials a body with its own fades.
+    pub fn mesh_entities(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.meshes.iter().map(|&(entity, _)| entity)
     }
+}
 
-    /// Spawns the soldier under `parent`, posed as `poses`.
+impl Soldiers {
+    /// Spawns a soldier under `parent`, dressed as Faction `faction` in `pose` once its model is
+    /// there. Returns the entity the model hangs from (`SoldierBones` is added to it then).
     pub fn spawn(
         &self,
         commands: &mut Commands,
         parent: Entity,
-        body: &Handle<StandardMaterial>,
-        team: &Handle<StandardMaterial>,
-        poses: &[Transform; PART_COUNT],
-    ) -> Rig {
-        let parts = std::array::from_fn(|i| {
-            commands
-                .spawn((
-                    Name::new(format!("Soldier{:?}", PARTS[i])),
-                    Mesh3d(self.parts[i].clone()),
-                    MeshMaterial3d(body.clone()),
-                    poses[i],
-                    ChildOf(parent),
-                ))
-                .id()
-        });
-        let mark = |commands: &mut Commands, mesh: &Handle<Mesh>, to: Entity| {
-            commands
-                .spawn((
-                    Name::new("SoldierTeamMark"),
-                    Mesh3d(mesh.clone()),
-                    MeshMaterial3d(team.clone()),
-                    Transform::default(),
-                    ChildOf(to),
-                ))
-                .id()
-        };
-        commands.spawn((
-            Name::new("SoldierGun"),
-            WorldAssetRoot(self.gun.clone()),
-            gun_mount(),
-            ChildOf(parts[Part::Aim as usize]),
-        ));
-        Rig {
-            marks: [
-                mark(commands, &self.mark_torso, parts[Part::Torso as usize]),
-                mark(commands, &self.mark_aim, parts[Part::Aim as usize]),
-            ],
-            parts,
-        }
+        faction: usize,
+        friendly: bool,
+        pose: Pose,
+        own_materials: bool,
+    ) -> Entity {
+        commands
+            .spawn((
+                Name::new("Soldier"),
+                WorldAssetRoot(self.scene.clone()),
+                Transform::default(),
+                Visibility::default(),
+                Dressing {
+                    faction,
+                    friendly,
+                    pose,
+                    own_materials,
+                },
+                ChildOf(parent),
+            ))
+            .id()
     }
 }
 
-/// Merges coloured primitives into one mesh with vertex colours.
-#[derive(Default)]
-struct Builder(Option<Mesh>);
+/// Dresses spawned soldiers: the material of each mesh, the headgear shown.
+#[derive(SystemParam)]
+pub(super) struct Dresser<'w, 's> {
+    soldiers: ResMut<'w, Soldiers>,
+    materials: ResMut<'w, Assets<StandardMaterial>>,
+    data: Res<'w, GameData>,
+    commands: Commands<'w, 's>,
+}
 
-impl Builder {
-    fn add(&mut self, mesh: Mesh, at: Transform, color: Color) -> &mut Self {
-        let mut mesh = mesh.transformed_by(at);
-        let linear = color.to_linear();
-        let rgba = [linear.red, linear.green, linear.blue, linear.alpha];
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![rgba; mesh.count_vertices()]);
-        match &mut self.0 {
-            None => self.0 = Some(mesh),
-            Some(all) => all.merge(&mesh).expect("primitives share their attributes"),
-        }
-        self
-    }
-
-    /// A box of `size` centred at `at`.
-    fn cuboid(&mut self, size: Vec3, at: Vec3, color: Color) -> &mut Self {
-        self.add(
-            Cuboid::new(size.x, size.y, size.z).into(),
-            Transform::from_translation(at),
-            color,
-        )
-    }
-
-    /// A box turned by `rotation`.
-    fn cuboid_rotated(&mut self, size: Vec3, at: Vec3, rotation: Quat, color: Color) -> &mut Self {
-        self.add(
-            Cuboid::new(size.x, size.y, size.z).into(),
-            Transform::from_translation(at).with_rotation(rotation),
-            color,
-        )
-    }
-
-    /// A tapering tube from `a` (radius `ra`) to `b` (radius `rb`).
-    fn limb(&mut self, a: Vec3, b: Vec3, ra: f32, rb: f32, color: Color) -> &mut Self {
-        let axis = b - a;
-        let mesh = ConicalFrustum {
-            radius_top: rb,
-            radius_bottom: ra,
-            height: axis.length(),
-        }
-        .mesh()
-        .resolution(8)
-        .build();
-        self.add(
-            mesh,
-            Transform::from_translation((a + b) / 2.0)
-                .with_rotation(Quat::from_rotation_arc(Vec3::Y, axis.normalize())),
-            color,
-        )
-    }
-
-    /// A tube along Y centred at `at`, turned by `rotation`.
-    fn tube(
+impl Dresser<'_, '_> {
+    /// The material for `slot` in Faction `faction`'s look.
+    fn material(
         &mut self,
-        radius: f32,
-        height: f32,
-        at: Vec3,
-        rotation: Quat,
-        color: Color,
-    ) -> &mut Self {
-        self.add(
-            Cylinder::new(radius, height).mesh().resolution(10).build(),
-            Transform::from_translation(at).with_rotation(rotation),
-            color,
-        )
-    }
-
-    /// An ellipsoid with half-axes `radii`.
-    fn ball(&mut self, radii: Vec3, at: Vec3, color: Color) -> &mut Self {
-        self.add(
-            Sphere::new(1.0).mesh().uv(12, 8),
-            Transform::from_translation(at).with_scale(radii),
-            color,
-        )
-    }
-
-    /// The upper half of an ellipsoid with half-axes `radii`, flat at `at`'s height, tilted by
-    /// `rotation`.
-    fn dome(&mut self, radii: Vec3, at: Vec3, rotation: Quat, color: Color) -> &mut Self {
-        let mut mesh = Sphere::new(1.0).mesh().uv(12, 8);
-        clip_y(&mut mesh, 0.0, f32::INFINITY);
-        self.add(
-            mesh,
-            Transform::from_translation(at)
-                .with_rotation(rotation)
-                .with_scale(radii),
-            color,
-        )
-    }
-
-    fn build(self) -> Mesh {
-        self.0.expect("a part has geometry")
-    }
-}
-
-/// Flattens vertices of `mesh` (a unit sphere) into the band `min..=max` in y.
-fn clip_y(mesh: &mut Mesh, min: f32, max: f32) {
-    if let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
-        mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
-    {
-        for position in positions {
-            position[1] = position[1].clamp(min, max);
+        slot: Slot,
+        faction: usize,
+        friendly: bool,
+        own: bool,
+    ) -> Option<Handle<StandardMaterial>> {
+        let shared = match slot {
+            Slot::Team => {
+                if friendly {
+                    self.soldiers.friendly.clone()
+                } else {
+                    self.soldiers.enemy.clone()
+                }
+            }
+            Slot::Fixed => self.soldiers.base.get(&slot)?.clone(),
+            _ => {
+                let key = (faction, slot);
+                if let Some(handle) = self.soldiers.tinted.get(&key) {
+                    handle.clone()
+                } else {
+                    let look = &self.data.factions[faction.min(self.data.factions.len() - 1)].look;
+                    let mut material = self.materials.get(self.soldiers.base.get(&slot)?)?.clone();
+                    material.base_color = tint(slot, look)?;
+                    let handle = self.materials.add(material);
+                    self.soldiers.tinted.insert(key, handle.clone());
+                    handle
+                }
+            }
+        };
+        if !own {
+            return Some(shared);
         }
+        let material = self.materials.get(&shared)?.clone();
+        Some(self.materials.add(material))
+    }
+
+    /// Puts Faction `faction`'s look on the soldier, with team marks for a friend or a foe.
+    pub fn dress(&mut self, bones: &SoldierBones, faction: usize, friendly: bool) {
+        let mut made: [Option<Handle<StandardMaterial>>; SLOT_COUNT] = Default::default();
+        for &(entity, slot) in &bones.meshes {
+            let handle = match &made[slot as usize] {
+                Some(handle) => Some(handle.clone()),
+                None => {
+                    let handle = self.material(slot, faction, friendly, bones.own_materials);
+                    made[slot as usize].clone_from(&handle);
+                    handle
+                }
+            };
+            if let Some(handle) = handle {
+                self.commands.entity(entity).insert(MeshMaterial3d(handle));
+            }
+        }
+        let look = &self.data.factions[faction.min(self.data.factions.len() - 1)].look;
+        let show = |on: bool| {
+            if on {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            }
+        };
+        for (headgear, entity) in HEADGEARS.into_iter().zip(bones.headgear) {
+            self.commands
+                .entity(entity)
+                .insert(show(headgear == look.headgear));
+        }
+        self.commands.entity(bones.mask).insert(show(look.mask));
+        self.commands
+            .entity(bones.goggles)
+            .insert(show(look.goggles));
     }
 }
 
-fn rgb(color: (f32, f32, f32)) -> Color {
-    Color::srgb(color.0, color.1, color.2)
-}
-
-/// `color` with every linear channel scaled by `factor`.
-fn shade(color: Color, factor: f32) -> Color {
-    let linear = color.to_linear();
-    Color::linear_rgb(
-        linear.red * factor,
-        linear.green * factor,
-        linear.blue * factor,
-    )
-}
-
-fn v(x: f32, y: f32, z: f32) -> Vec3 {
-    Vec3::new(x, y, z)
-}
-
-fn build_part(part: Part, look: &SoldierLook) -> Mesh {
-    match part {
-        Part::Torso => build_torso(look),
-        Part::Head => build_head(look),
-        Part::Aim => build_aim(look),
-        Part::ThighLeft | Part::ThighRight => build_thigh(look),
-        Part::ShinLeft | Part::ShinRight => build_shin(look),
-    }
-}
-
-/// Origin at the hip joint, the leg hanging down.
-fn build_thigh(look: &SoldierLook) -> Mesh {
-    let uniform = rgb(look.uniform);
-    let mut b = Builder::default();
-    b.limb(
-        v(0.0, -THIGH_LENGTH, 0.0),
-        Vec3::ZERO,
-        0.077,
-        0.105,
-        uniform,
-    )
-    // Cargo pocket and knee pad.
-    .cuboid(
-        v(0.12, 0.12, 0.04),
-        v(0.0, -0.2, -0.085),
-        shade(uniform, 0.8),
-    )
-    .cuboid(
-        v(0.1, 0.1, 0.05),
-        v(0.0, -0.455, -0.07),
-        shade(rgb(look.vest), 0.7),
-    );
-    b.build()
-}
-
-/// Origin at the knee, the leg hanging down to the sole 0.47 m below.
-fn build_shin(look: &SoldierLook) -> Mesh {
-    let uniform = rgb(look.uniform);
-    let mut b = Builder::default();
-    b.limb(v(0.0, -0.3, 0.0), Vec3::ZERO, 0.062, 0.077, uniform)
-        .limb(v(0.0, -0.46, 0.0), v(0.0, -0.28, 0.0), 0.062, 0.07, BOOT)
-        .cuboid(v(0.11, 0.07, 0.2), v(0.0, -0.43, -0.06), BOOT)
-        .cuboid(
-            v(0.125, 0.03, 0.27),
-            v(0.0, -0.455, -0.045),
-            shade(BOOT, 0.5),
-        );
-    b.build()
-}
-
-/// Origin at the hip centre, the spine along +Y up to the neck joint at `NECK`.
-fn build_torso(look: &SoldierLook) -> Mesh {
-    let uniform = rgb(look.uniform);
-    let vest = rgb(look.vest);
-    let pouch = shade(vest, 0.7);
-    let pack = shade(vest, 0.85);
-    let mut b = Builder::default();
-    b.cuboid(v(0.34, 0.2, 0.21), v(0.0, 0.05, 0.0), uniform)
-        .cuboid(v(0.35, 0.04, 0.225), v(0.0, 0.15, 0.0), shade(vest, 0.6))
-        .cuboid(v(0.37, 0.42, 0.22), v(0.0, 0.37, 0.0), uniform)
-        // Plate carrier with ammo pouches and shoulder straps.
-        .cuboid(v(0.39, 0.34, 0.255), v(0.0, 0.4, 0.0), vest);
-    for x in [-0.11, 0.0, 0.11] {
-        b.cuboid(v(0.085, 0.12, 0.06), v(x, 0.28, -0.15), pouch);
-    }
-    b.cuboid(v(0.07, 0.03, 0.25), v(-0.1, 0.575, 0.0), vest)
-        .cuboid(v(0.07, 0.03, 0.25), v(0.1, 0.575, 0.0), vest)
-        .cuboid(v(0.2, 0.05, 0.16), v(0.0, 0.6, 0.0), uniform)
-        .tube(0.05, 0.1, v(0.0, 0.62, 0.0), Quat::IDENTITY, rgb(look.skin))
-        // Assault pack with a rolled mat on top, and hip pouches.
-        .cuboid(v(0.3, 0.34, 0.13), v(0.0, 0.4, 0.19), pack)
-        .tube(
-            0.055,
-            0.28,
-            v(0.0, 0.6, 0.2),
-            Quat::from_rotation_z(FRAC_PI_2),
-            shade(vest, 0.6),
-        )
-        .cuboid(v(0.06, 0.1, 0.1), v(-0.205, 0.08, 0.04), pouch)
-        .cuboid(v(0.06, 0.1, 0.1), v(0.205, 0.08, 0.04), pouch);
-    b.build()
-}
-
-/// Origin at the neck joint; the head centre `HEAD_CENTRE` above it, facing -Z.
-fn build_head(look: &SoldierLook) -> Mesh {
-    let skin = rgb(look.skin);
-    let cloth = rgb(look.headgear_color);
-    let dark = Color::srgb(0.06, 0.06, 0.07);
-    let centre = v(0.0, HEAD_CENTRE, 0.0);
-    let mut b = Builder::default();
-    b.ball(v(0.088, 0.108, 0.1), centre, skin).cuboid(
-        v(0.02, 0.03, 0.03),
-        centre + v(0.0, -0.01, -0.1),
-        shade(skin, 0.9),
-    );
-    if look.mask {
-        // Balaclava over the lower face, leaving a strip for the eyes.
-        let mut mask = Sphere::new(1.0).mesh().uv(12, 8);
-        clip_y(&mut mask, -1.0, 0.18);
-        b.add(
-            mask,
-            Transform::from_translation(centre).with_scale(v(0.094, 0.113, 0.106)),
-            shade(rgb(look.uniform), 0.35),
-        );
-    } else {
-        for x in [-0.035, 0.035] {
-            b.cuboid(v(0.022, 0.012, 0.012), centre + v(x, 0.015, -0.093), dark);
-        }
-    }
-    if look.goggles {
-        b.cuboid(v(0.185, 0.045, 0.045), centre + v(0.0, 0.018, -0.082), dark)
-            .cuboid(v(0.19, 0.03, 0.2), centre + v(0.0, 0.018, 0.02), dark);
-    }
-    let top = HEAD_CENTRE + 0.02;
-    match look.headgear {
-        Headgear::Helmet => {
-            b.dome(
-                v(0.126, 0.115, 0.135),
-                v(0.0, top, 0.01),
-                Quat::IDENTITY,
-                cloth,
-            )
-            .cuboid(
-                v(0.05, 0.04, 0.03),
-                v(0.0, top + 0.07, -0.125),
-                shade(cloth, 0.4),
-            )
-            .cuboid(
-                v(0.19, 0.035, 0.04),
-                v(0.0, top + 0.01, 0.135),
-                shade(cloth, 0.9),
-            );
-        }
-        Headgear::Beret => {
-            b.dome(
-                v(0.14, 0.07, 0.15),
-                v(0.015, top + 0.015, 0.0),
-                Quat::from_rotation_z(-0.18),
-                cloth,
-            )
-            .cuboid(
-                v(0.015, 0.03, 0.015),
-                v(0.0, top + 0.08, 0.0),
-                shade(cloth, 0.7),
-            );
-        }
-        Headgear::Boonie => {
-            b.dome(
-                v(0.108, 0.09, 0.118),
-                v(0.0, top, 0.0),
-                Quat::IDENTITY,
-                cloth,
-            )
-            .tube(
-                0.19,
-                0.012,
-                v(0.0, top + 0.002, 0.0),
-                Quat::IDENTITY,
-                shade(cloth, 0.9),
-            );
-        }
-        Headgear::Cap => {
-            b.dome(
-                v(0.108, 0.09, 0.118),
-                v(0.0, top, 0.0),
-                Quat::IDENTITY,
-                cloth,
-            )
-            .cuboid_rotated(
-                v(0.15, 0.012, 0.1),
-                v(0.0, top + 0.01, -0.135),
-                Quat::from_rotation_x(0.22),
-                shade(cloth, 0.85),
-            );
-        }
-        Headgear::Beanie => {
-            b.dome(
-                v(0.106, 0.1, 0.116),
-                v(0.0, top - 0.005, 0.0),
-                Quat::IDENTITY,
-                cloth,
-            )
-            .tube(
-                0.108,
-                0.04,
-                v(0.0, top + 0.005, 0.0),
-                Quat::IDENTITY,
-                shade(cloth, 1.4),
-            );
-        }
-        Headgear::Shemagh => {
-            b.dome(
-                v(0.115, 0.1, 0.125),
-                v(0.0, top - 0.01, 0.005),
-                Quat::IDENTITY,
-                cloth,
-            )
-            .tube(
-                0.1,
-                0.07,
-                v(0.0, 0.03, 0.0),
-                Quat::IDENTITY,
-                shade(cloth, 0.9),
-            )
-            .cuboid_rotated(
-                v(0.2, 0.15, 0.03),
-                v(0.0, 0.09, 0.115),
-                Quat::from_rotation_x(-0.2),
-                shade(cloth, 0.95),
-            );
-        }
-        Headgear::Ushanka => {
-            b.dome(
-                v(0.12, 0.1, 0.13),
-                v(0.0, top - 0.005, 0.005),
-                Quat::IDENTITY,
-                cloth,
-            )
-            .cuboid(
-                v(0.2, 0.045, 0.04),
-                v(0.0, top + 0.015, -0.12),
-                shade(cloth, 1.3),
-            )
-            .cuboid(
-                v(0.035, 0.11, 0.13),
-                v(-0.118, top - 0.06, 0.01),
-                shade(cloth, 1.25),
-            )
-            .cuboid(
-                v(0.035, 0.11, 0.13),
-                v(0.118, top - 0.06, 0.01),
-                shade(cloth, 1.25),
-            );
-        }
-    }
-    b.build()
-}
-
-/// Where the held rifle's origin (its receiver) is, in aim space.
-const GUN_ORIGIN: Vec3 = Vec3::new(0.1, -0.17, -0.28);
-const UPPER_ARM: f32 = 0.29;
-const FOREARM: f32 = 0.29;
-
-/// The held rifle's model transform in aim space: the viewmodel's rifle, in the same place in the
-/// hands as in first person.
-fn gun_mount() -> Transform {
-    Transform::from_translation(GUN_ORIGIN) * gun_rig(GunModel::Carbine).model_transform()
-}
-
-/// Shoulder, elbow and hand (aim space) of the arm on `side` (+1 the soldier's right, -1 the
-/// left) reaching `hand`: two equal bones, the elbow bent outward and down.
-fn arm(side: f32, hand: Vec3) -> [Vec3; 3] {
-    let shoulder = v(0.21 * side, 0.0, 0.0);
-    let reach = hand - shoulder;
-    let len = reach.length();
-    let elbow = if len >= UPPER_ARM + FOREARM {
-        shoulder + reach * (UPPER_ARM / (UPPER_ARM + FOREARM))
-    } else {
-        let along = (UPPER_ARM * UPPER_ARM - FOREARM * FOREARM + len * len) / (2.0 * len);
-        let height = (UPPER_ARM * UPPER_ARM - along * along).max(0.0).sqrt();
-        let direction = reach / len;
-        let pole = v(0.5 * side, -1.0, 0.3);
-        let bend = (pole - direction * pole.dot(direction)).normalize_or(Vec3::NEG_Y);
-        shoulder + direction * along + bend * height
+/// A soldier's model is ready: finds its bones, meshes and nodes, dresses it, poses it and puts
+/// the rifle in its hands.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn bind_soldier(
+    ready: On<WorldInstanceReady>,
+    dressings: Query<&Dressing>,
+    children: Query<&Children>,
+    names: Query<&Name>,
+    parents: Query<&ChildOf>,
+    transforms: Query<&Transform>,
+    meshes: Query<(&GltfMaterialName, &MeshMaterial3d<StandardMaterial>)>,
+    mut dresser: Dresser,
+) {
+    let root = ready.entity;
+    let Ok(dressing) = dressings.get(root) else {
+        return;
     };
-    [shoulder, elbow, hand]
-}
-
-/// Both arms, in aim space: the right on the grip, the left under the handguard.
-fn arms() -> [[Vec3; 3]; 2] {
-    let rig = gun_rig(GunModel::Carbine);
-    [
-        arm(1.0, GUN_ORIGIN + rig.grip()),
-        arm(-1.0, GUN_ORIGIN + rig.left.position),
-    ]
-}
-
-/// Origin at the shoulder centre: both arms holding the rifle (a separate model) along -Z.
-fn build_aim(look: &SoldierLook) -> Mesh {
-    let uniform = rgb(look.uniform);
-    let mut b = Builder::default();
-    for [shoulder, elbow, hand] in arms() {
-        b.limb(shoulder, elbow, 0.062, 0.05, uniform)
-            .limb(elbow, hand, 0.05, 0.04, uniform)
-            .ball(Vec3::splat(0.045), hand, GLOVE);
+    dresser.commands.entity(root).remove::<Dressing>();
+    let mut bone_entities: [Option<Entity>; BONE_COUNT] = [None; BONE_COUNT];
+    let mut headgear: [Option<Entity>; HEADGEARS.len()] = [None; HEADGEARS.len()];
+    let (mut mask, mut goggles, mut mount) = (None, None, None);
+    let mut mesh_slots = Vec::new();
+    for entity in children.iter_descendants(root) {
+        if let Ok(name) = names.get(entity) {
+            let name = name.as_str();
+            if let Some(i) = BONES.iter().position(|bone| bone.name() == name) {
+                bone_entities[i] = Some(entity);
+            } else if let Some(i) = HEADGEARS
+                .iter()
+                .position(|&headgear| headgear_node(headgear) == name)
+            {
+                headgear[i] = Some(entity);
+            } else if name == "mask" {
+                mask = Some(entity);
+            } else if name == "goggles" {
+                goggles = Some(entity);
+            } else if name == "gun_mount" {
+                mount = Some(entity);
+            }
+        }
+        if let Ok((material_name, material)) = meshes.get(entity)
+            && let Some(slot) = Slot::from_name(material_name)
+        {
+            dresser
+                .soldiers
+                .base
+                .entry(slot)
+                .or_insert_with(|| material.0.clone());
+            mesh_slots.push((entity, slot));
+        }
     }
-    b.build()
-}
+    let (Some(bones), Some(headgear), Some(mask), Some(goggles), Some(mount)) = (
+        bone_entities.into_iter().collect::<Option<Vec<_>>>(),
+        headgear.into_iter().collect::<Option<Vec<_>>>(),
+        mask,
+        goggles,
+        mount,
+    ) else {
+        error!("{MODEL} lacks bones or nodes the soldier needs; not drawing it");
+        return;
+    };
+    let bones: [Entity; BONE_COUNT] = bones.try_into().expect("one entity per bone");
+    let headgear: [Entity; HEADGEARS.len()] = headgear.try_into().expect("one per headgear");
 
-/// Chest and back panels, in torso space.
-fn build_mark_torso() -> Mesh {
-    let mut b = Builder::default();
-    b.cuboid(v(0.14, 0.06, 0.012), v(0.0, 0.5, -0.134), Color::WHITE)
-        .cuboid(v(0.2, 0.15, 0.012), v(0.0, 0.42, 0.262), Color::WHITE);
-    b.build()
-}
-
-/// Armbands on both upper arms, in aim space.
-fn build_mark_aim() -> Mesh {
-    let mut b = Builder::default();
-    for [shoulder, elbow, _] in arms() {
-        let along = |t: f32| shoulder.lerp(elbow, t);
-        // The upper arm tapers from 0.062 to 0.05.
-        let radius = |t: f32| 0.062 + (0.05 - 0.062) * t + 0.005;
-        b.limb(
-            along(0.35),
-            along(0.55),
-            radius(0.35),
-            radius(0.55),
-            Color::WHITE,
-        );
+    let local = bones.map(|bone| transforms.get(bone).copied().unwrap_or_default());
+    // The nodes between the model's root and `hips` (its armature) turn the rest pose.
+    let mut root_rotation = Quat::IDENTITY;
+    let mut node = parents.get(bones[0]).map(ChildOf::parent).ok();
+    while let Some(current) = node.filter(|&current| current != root) {
+        root_rotation = transforms
+            .get(current)
+            .map_or(Quat::IDENTITY, |t| t.rotation)
+            * root_rotation;
+        node = parents.get(current).map(ChildOf::parent).ok();
     }
-    b.build()
+    let rest = Rest::new(local, root_rotation);
+    for (bone, transform) in bones.iter().zip(rest.locals(&dressing.pose)) {
+        dresser.commands.entity(*bone).insert(transform);
+    }
+    let soldier = SoldierBones {
+        bones,
+        rest,
+        meshes: mesh_slots,
+        headgear,
+        mask,
+        goggles,
+        own_materials: dressing.own_materials,
+    };
+    dresser.dress(&soldier, dressing.faction, dressing.friendly);
+    let gun = dresser.soldiers.gun.clone();
+    dresser.commands.spawn((
+        Name::new("SoldierGun"),
+        WorldAssetRoot(gun),
+        gun_model(),
+        ChildOf(mount),
+    ));
+    dresser.commands.entity(root).insert(soldier);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
-    /// The head centre of a pose, in feet space.
-    fn head_centre(poses: &[Transform; PART_COUNT]) -> Vec3 {
-        poses[Part::Head as usize].transform_point(Vec3::Y * HEAD_CENTRE)
+    /// The shipped model's JSON chunk.
+    fn model_json() -> Value {
+        let path = format!("{}/assets/{MODEL}", env!("CARGO_MANIFEST_DIR"));
+        let glb = std::fs::read(&path).unwrap_or_else(|error| panic!("{path}: {error}"));
+        assert_eq!(&glb[..4], b"glTF", "{path}");
+        let length = u32::from_le_bytes(glb[12..16].try_into().unwrap()) as usize;
+        serde_json::from_slice(&glb[20..20 + length]).expect("a JSON chunk")
     }
 
-    /// The sole of a shin, in feet space.
-    fn sole(poses: &[Transform; PART_COUNT], shin: Part) -> Vec3 {
-        poses[shin as usize].transform_point(Vec3::NEG_Y * 0.47)
+    fn node_named<'a>(json: &'a Value, name: &str) -> (usize, &'a Value) {
+        json["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .find(|(_, node)| node["name"] == name)
+            .unwrap_or_else(|| panic!("{MODEL} has no node {name}"))
     }
 
-    #[test]
-    fn head_sits_at_eye_height() {
-        for stance in [Stance::Standing, Stance::Crouching, Stance::Prone] {
-            let head = head_centre(&pose(stance, Gait::default(), 0.0));
-            assert!(
-                (head.y - stance.eye_height()).abs() < 0.05,
-                "{stance:?}: head at {} for eye height {}",
-                head.y,
-                stance.eye_height()
-            );
+    fn local(node: &Value) -> Transform {
+        let floats = |key: &str| -> Option<Vec<f32>> {
+            node[key]
+                .as_array()
+                .map(|values| values.iter().map(|v| v.as_f64().unwrap() as f32).collect())
+        };
+        Transform {
+            translation: floats("translation").map_or(Vec3::ZERO, |v| Vec3::from_slice(&v)),
+            rotation: floats("rotation").map_or(Quat::IDENTITY, |v| Quat::from_slice(&v)),
+            scale: floats("scale").map_or(Vec3::ONE, |v| Vec3::from_slice(&v)),
         }
     }
 
     #[test]
-    fn upright_stances_stand_on_the_ground() {
-        for stance in [Stance::Standing, Stance::Crouching] {
-            let poses = pose(stance, Gait::default(), 0.0);
-            for shin in [Part::ShinLeft, Part::ShinRight] {
-                let sole = sole(&poses, shin);
-                assert!(sole.y.abs() < 0.03, "{stance:?}: sole at {}", sole.y);
+    fn the_model_has_every_bone_node_slot_and_headgear_the_code_looks_up() {
+        let json = model_json();
+        for bone in BONES {
+            node_named(&json, bone.name());
+        }
+        for headgear in HEADGEARS {
+            node_named(&json, headgear_node(headgear));
+        }
+        for name in ["mask", "goggles", "gun_mount"] {
+            node_named(&json, name);
+        }
+        let materials: Vec<&str> = json["materials"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|material| material["name"].as_str().unwrap())
+            .collect();
+        for name in [
+            "uniform", "gear", "skin", "headgear", "mask", "fixed", "team",
+        ] {
+            assert!(Slot::from_name(name).is_some(), "no Slot for {name}");
+            assert!(materials.contains(&name), "no material {name}");
+        }
+        assert_eq!(SLOT_COUNT, 7);
+        assert!(
+            materials.iter().all(|name| Slot::from_name(name).is_some()),
+            "a material no Slot knows: {materials:?}"
+        );
+    }
+
+    #[test]
+    fn the_bones_hang_from_the_parents_the_code_names() {
+        let json = model_json();
+        let nodes = json["nodes"].as_array().unwrap();
+        for bone in BONES {
+            let Some(parent) = bone.parent() else {
+                continue;
+            };
+            let (_, parent_node) = node_named(&json, parent.name());
+            let (index, _) = node_named(&json, bone.name());
+            let children = parent_node["children"].as_array().unwrap();
+            assert!(
+                children
+                    .iter()
+                    .any(|child| child.as_u64() == Some(index as u64)),
+                "{} is not a child of {} (of {} nodes)",
+                bone.name(),
+                parent.name(),
+                nodes.len()
+            );
+        }
+    }
+
+    /// The model's bones at rest, from its node tree.
+    fn rest() -> Rest {
+        let json = model_json();
+        let nodes = json["nodes"].as_array().unwrap();
+        let (hips, _) = node_named(&json, Bone::Hips.name());
+        // The nodes above `hips` (the armature) turn the rest pose.
+        let mut root_rotation = Quat::IDENTITY;
+        let mut current = hips;
+        while let Some(parent) = nodes.iter().position(|node| {
+            node["children"]
+                .as_array()
+                .is_some_and(|children| children.iter().any(|c| c.as_u64() == Some(current as u64)))
+        }) {
+            root_rotation = local(&nodes[parent]).rotation * root_rotation;
+            current = parent;
+        }
+        let transforms = BONES.map(|bone| local(node_named(&json, bone.name()).1));
+        Rest::new(transforms, root_rotation)
+    }
+
+    /// Where each bone's joint is, relative to the feet, with the hips' parent turned by `rest`'s
+    /// root.
+    fn joints(rest: &Rest, pose: &Pose) -> [Vec3; BONE_COUNT] {
+        let locals = rest.locals(pose);
+        let mut world = [Transform::IDENTITY; BONE_COUNT];
+        for (i, bone) in BONES.iter().enumerate() {
+            let parent = bone
+                .parent()
+                .map_or(Transform::from_rotation(rest.root), |parent| {
+                    world[parent as usize]
+                });
+            world[i] = parent * locals[i];
+        }
+        world.map(|transform| transform.translation)
+    }
+
+    fn at(joints: &[Vec3; BONE_COUNT], bone: Bone) -> Vec3 {
+        joints[bone as usize]
+    }
+
+    #[test]
+    fn standing_still_the_feet_are_on_the_ground_under_the_hips() {
+        let rest = rest();
+        let joints = joints(&rest, &pose(Stance::Standing, Gait::default(), 0.0));
+        for foot in [Bone::FootR, Bone::FootL] {
+            let ankle = at(&joints, foot);
+            assert!(
+                (0.05..0.13).contains(&ankle.y),
+                "{foot:?} ankle at {}",
+                ankle.y
+            );
+        }
+        let hips = at(&joints, Bone::Hips);
+        assert!((hips.y - STAND_HIP).abs() < 0.01, "hips at {}", hips.y);
+        let head = at(&joints, Bone::Head);
+        assert!((1.5..1.7).contains(&head.y), "head joint at {}", head.y);
+    }
+
+    #[test]
+    fn crouched_and_prone_the_soldier_is_lower_and_the_feet_stay_near_the_ground() {
+        let rest = rest();
+        let standing = joints(&rest, &pose(Stance::Standing, Gait::default(), 0.0));
+        let mut last = at(&standing, Bone::Head).y;
+        for stance in [Stance::Crouching, Stance::Prone] {
+            let joints = joints(&rest, &pose(stance, Gait::default(), 0.0));
+            let head = at(&joints, Bone::Head).y;
+            assert!(head < last - 0.3, "{stance:?} head at {head}");
+            last = head;
+            for foot in [Bone::FootR, Bone::FootL] {
+                let ankle = at(&joints, foot).y;
+                assert!(
+                    (-0.02..0.25).contains(&ankle),
+                    "{stance:?} {foot:?} ankle at {ankle}"
+                );
             }
         }
     }
 
     #[test]
-    fn walking_swings_the_legs_and_keeps_the_feet_above_the_ground() {
-        let mut gait = Gait::default();
-        let mut forward = [f32::MAX, f32::MIN];
-        for _ in 0..200 {
-            gait.advance(2.5, 2.5, 5.0, 0.01);
-            let poses = pose(Stance::Standing, gait, 0.0);
-            let left = sole(&poses, Part::ShinLeft);
-            let right = sole(&poses, Part::ShinRight);
-            assert!(left.y > -0.05 && right.y > -0.05, "{left} {right}");
-            forward[0] = forward[0].min(left.z);
-            forward[1] = forward[1].max(left.z);
+    fn a_walking_soldier_always_has_a_foot_down_and_a_sprinting_one_never_sinks() {
+        let rest = rest();
+        // (run, the highest the lower ankle may be): a walk keeps one foot planted, a sprint has
+        // a short flight phase where both feet are off the ground.
+        for (run, highest) in [(0.0, 0.18), (1.0, 0.35)] {
+            for step in 0..32 {
+                let gait = Gait {
+                    phase: TAU * step as f32 / 32.0,
+                    walk: 1.0,
+                    run,
+                };
+                let joints = joints(&rest, &pose(Stance::Standing, gait, 0.0));
+                let lower = at(&joints, Bone::FootR).y.min(at(&joints, Bone::FootL).y);
+                assert!(
+                    (0.05..highest).contains(&lower),
+                    "run {run} step {step}: lower ankle at {lower}"
+                );
+            }
         }
-        assert!(forward[0] < -0.2 && forward[1] > 0.1, "{forward:?}");
     }
 
     #[test]
-    fn gait_scales_with_speed() {
+    fn a_full_cycle_covers_one_stride() {
         let mut gait = Gait::default();
-        gait.advance(0.0, 2.5, 5.0, 0.1);
-        assert_eq!((gait.walk, gait.run, gait.phase), (0.0, 0.0, 0.0));
-        gait.advance(5.0, 2.5, 5.0, 0.1);
-        assert_eq!((gait.walk, gait.run), (1.0, 1.0));
-        assert!(gait.phase > 0.0);
+        let speed = 2.0;
+        // Time for `STRIDE_LENGTH` metres, in 60 steps.
+        let dt = STRIDE_LENGTH / speed / 60.0;
+        for _ in 0..60 {
+            gait.advance(speed, 2.0, 5.0, dt);
+        }
+        assert!(
+            gait.phase < 0.01 || TAU - gait.phase < 0.01,
+            "{} rad into the cycle after one stride",
+            gait.phase
+        );
+        assert_eq!((gait.walk, gait.run), (1.0, 0.0));
+        gait.advance(3.5, 2.0, 5.0, 0.0);
+        assert_eq!((gait.walk, gait.run), (1.0, 0.5));
+    }
+
+    #[test]
+    fn aiming_pitches_the_hands_about_the_shoulders() {
+        let rest = rest();
+        let joints_at_rest = joints(&rest, &pose(Stance::Standing, Gait::default(), 0.0));
+        let level = joints_at_rest;
+        let up = joints(&rest, &pose(Stance::Standing, Gait::default(), 0.7));
+        let down = joints(&rest, &pose(Stance::Standing, Gait::default(), -0.7));
+        for hand in [Bone::HandR, Bone::HandL] {
+            let (level, up, down) = (at(&level, hand), at(&up, hand), at(&down, hand));
+            // Aiming up lifts a hand over where aiming down puts it.
+            assert!(up.y > down.y + 0.1, "{hand:?} up {up} down {down}");
+            assert!(
+                level.distance(up) > 0.05 && level.distance(down) > 0.05,
+                "{hand:?}"
+            );
+            // About the pivot: the distance to the shoulders does not change.
+            let pivot = at(&joints_at_rest, Bone::Shoulders);
+            for pitched in [up, down] {
+                assert!((pitched.distance(pivot) - level.distance(pivot)).abs() < 0.01);
+            }
+        }
+        // The shoulders are the pivot: aiming turns the arms about them, it does not move them.
+        assert!(at(&up, Bone::Shoulders).distance(at(&level, Bone::Shoulders)) < 0.02);
     }
 }

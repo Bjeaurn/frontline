@@ -89,6 +89,7 @@ const EMBEDDED: &[(&str, &[u8])] = embed![
     "models/weapons/nade_low.glb",
     "models/weapons/flashbang_low.glb",
     "models/weapons/smoke_low.glb",
+    "models/characters/soldier.glb",
 ];
 
 /// The colour, normal and roughness maps of each surface folder under `assets/textures/`

@@ -44,8 +44,8 @@
         icon: "embedded://frontline/icons/factions/northern_sabre.png",
         color: (0.44, 0.55, 0.67),
         look: (
-            uniform: (0.30, 0.34, 0.40),
-            vest: (0.14, 0.15, 0.17),
+            uniform: (0.52, 0.55, 0.58),
+            vest: (0.18, 0.20, 0.23),
             headgear: Beanie,
             headgear_color: (0.12, 0.13, 0.15),
             skin: (0.80, 0.64, 0.54),
@@ -59,9 +59,9 @@
         icon: "embedded://frontline/icons/factions/volkov.png",
         color: (0.58, 0.20, 0.17),
         look: (
-            uniform: (0.27, 0.30, 0.20),
-            vest: (0.30, 0.22, 0.15),
-            headgear: Helmet,
+            uniform: (0.24, 0.28, 0.17),
+            vest: (0.34, 0.22, 0.14),
+            headgear: Cap,
             headgear_color: (0.25, 0.29, 0.19),
             skin: (0.80, 0.62, 0.52),
         ),

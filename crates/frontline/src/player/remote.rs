@@ -1,14 +1,14 @@
 //! Soldier visuals for `RemotePlayer`s, smoothed toward their replicated `PlayerPose`: the
-//! Faction of their Team (`data/factions.ron`) decides what they wear, an armband and chest and
-//! back panels show friendly or enemy relative to the local player's Team, and they are hidden
-//! while dead or teamless. The stance and aim come from the pose, the walk cycle from how fast
-//! the visual moves. A player aimed through a 3x or stronger sight shows a glint toward anyone it
-//! points at.
+//! Faction of their Team (`data/factions.ron`) decides what they wear, patches and armbands show
+//! friendly or enemy relative to the local player's Team, and they are hidden while dead or
+//! teamless. The stance and aim come from the pose, the walk cycle from how fast the visual
+//! moves; the skinned soldier model and how its bones are posed are in `soldier`. A player aimed
+//! through a 3x or stronger sight shows a glint toward anyone it points at.
 //!
 //! Respawns never glide: a pose jump over `TELEPORT_DISTANCE` snaps the visual, and a revived
 //! player stays hidden until its (interpolated, so later-arriving) pose has reached the spawn.
 
-use bevy::asset::{AssetPath, RenderAssetUsages};
+use bevy::asset::RenderAssetUsages;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -16,15 +16,13 @@ use lightyear::prelude::ConfirmedHistory;
 
 use super::controller::EyeCamera;
 use super::life::LocalLife;
-use super::soldier::{self, Gait, Rig, SoldierMeshes};
-use crate::assets::EMBEDDED_ROOT;
-use crate::data::{GameData, GunModel, STEADY_MAGNIFICATION};
+use super::soldier::{self, Dresser, Gait, SoldierBones, Soldiers};
+use crate::data::{GameData, STEADY_MAGNIFICATION};
 use crate::maps::MapRegistry;
 use crate::match_hud::is_friendly;
 use crate::shared::{
     Health, MatchState, PlayerPose, PlayerTeam, RemotePlayer, Stance, TELEPORT_DISTANCE, Team,
 };
-use crate::weapon::rig::gun_rig;
 
 /// Exponential decay rate (1/s) of the transform toward the pose; higher follows tighter.
 const FOLLOW_RATE: f32 = 20.0;
@@ -46,30 +44,11 @@ const GLINT_ANGULAR_SIZE: f32 = 0.03;
 /// Side of the generated glint texture, in pixels.
 const GLINT_TEXTURE_PX: u32 = 64;
 
+/// What remote players share besides their soldiers (`soldier::Soldiers`).
 #[derive(Resource)]
 pub(super) struct RemoteAssets {
-    /// One soldier per Faction, indexed like `GameData::factions`.
-    soldiers: Vec<SoldierMeshes>,
-    /// White: the soldier meshes carry their colours in their vertices.
-    body_material: Handle<StandardMaterial>,
-    friendly_material: Handle<StandardMaterial>,
-    enemy_material: Handle<StandardMaterial>,
     glint: Handle<Mesh>,
     glint_material: Handle<StandardMaterial>,
-}
-
-impl RemoteAssets {
-    fn team_material(&self, friendly: bool) -> Handle<StandardMaterial> {
-        if friendly {
-            self.friendly_material.clone()
-        } else {
-            self.enemy_material.clone()
-        }
-    }
-
-    pub(super) fn soldier(&self, faction: usize) -> &SoldierMeshes {
-        &self.soldiers[faction.min(self.soldiers.len() - 1)]
-    }
 }
 
 /// Index into `GameData::factions` of the Faction `team` plays as on the current Map (`state`,
@@ -94,7 +73,8 @@ pub(super) fn faction_index(
 /// Visual state attached to a remote player entity.
 #[derive(Component, Debug)]
 pub(super) struct RemoteVisuals {
-    rig: Rig,
+    /// The entity the soldier model hangs from (`SoldierBones` is on it once the model is in).
+    soldier: Entity,
     /// Index of the Faction the soldier is dressed as.
     faction: usize,
     stance: Stance,
@@ -116,7 +96,7 @@ pub(super) struct RemoteVisuals {
 
 /// A remote player just died where its visual stood; `corpse` leaves a body there.
 #[derive(Message, Clone, Copy, Debug)]
-pub(super) struct RemoteDeath {
+pub struct RemoteDeath {
     /// The player's visual transform (feet, yaw) at death.
     pub transform: Transform,
     pub stance: Stance,
@@ -140,16 +120,6 @@ pub(super) fn team_material(color: Color) -> StandardMaterial {
         emissive: color.to_linear() * 0.12,
         perceptual_roughness: 0.9,
         reflectance: 0.0,
-        ..default()
-    }
-}
-
-/// The material of soldier meshes: their vertex colours show through unchanged.
-pub(super) fn soldier_material() -> StandardMaterial {
-    StandardMaterial {
-        base_color: Color::WHITE,
-        perceptual_roughness: 0.85,
-        reflectance: 0.15,
         ..default()
     }
 }
@@ -184,28 +154,11 @@ fn glint_texture() -> Image {
 
 pub(super) fn load_remote_assets(
     mut commands: Commands,
-    data: Res<GameData>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
-    asset_server: Res<AssetServer>,
 ) {
-    let gun = asset_server.load(
-        AssetPath::from(format!(
-            "{EMBEDDED_ROOT}{}",
-            gun_rig(GunModel::Carbine).file
-        ))
-        .with_label("Scene0"),
-    );
     commands.insert_resource(RemoteAssets {
-        soldiers: data
-            .factions
-            .iter()
-            .map(|faction| SoldierMeshes::new(&faction.look, &mut meshes, gun.clone()))
-            .collect(),
-        body_material: materials.add(soldier_material()),
-        friendly_material: materials.add(team_material(FRIENDLY_BODY)),
-        enemy_material: materials.add(team_material(ENEMY_BODY)),
         glint: meshes.add(Rectangle::from_size(Vec2::ONE)),
         glint_material: materials.add(StandardMaterial {
             base_color: Color::linear_rgb(5.0, 5.0, 4.4),
@@ -223,6 +176,7 @@ pub(super) fn attach_remote_visuals(
     add: On<Add<RemotePlayer>>,
     mut commands: Commands,
     assets: Res<RemoteAssets>,
+    soldiers: Res<Soldiers>,
     data: Res<GameData>,
     maps: Res<MapRegistry>,
     life: Res<LocalLife>,
@@ -237,12 +191,13 @@ pub(super) fn attach_remote_visuals(
     let team = team.and_then(|team| team.0);
     let friendly = is_friendly(life.team(), team);
     let faction = faction_index(&data, &maps, state.single().ok(), team);
-    let rig = assets.soldier(faction).spawn(
+    let soldier = soldiers.spawn(
         &mut commands,
         entity,
-        &assets.body_material,
-        &assets.team_material(friendly),
-        &soldier::pose(pose.stance, Gait::default(), pose.pitch),
+        faction,
+        friendly,
+        soldier::pose(pose.stance, Gait::default(), pose.pitch),
+        false,
     );
     let eye_height = pose.stance.eye_height();
     let glint = commands
@@ -258,7 +213,7 @@ pub(super) fn attach_remote_visuals(
         .id();
     commands.entity(entity).insert((
         RemoteVisuals {
-            rig,
+            soldier,
             faction,
             stance: pose.stance,
             eye_height,
@@ -287,7 +242,6 @@ pub(super) fn attach_remote_visuals(
 /// its team marks when either side's Team changes.
 pub(super) fn follow_remote_poses(
     time: Res<Time>,
-    assets: Res<RemoteAssets>,
     data: Res<GameData>,
     maps: Res<MapRegistry>,
     life: Res<LocalLife>,
@@ -304,14 +258,9 @@ pub(super) fn follow_remote_poses(
         ),
         With<RemotePlayer>,
     >,
-    mut parts: Query<
-        (
-            &mut Transform,
-            &mut Mesh3d,
-            &mut MeshMaterial3d<StandardMaterial>,
-        ),
-        Without<RemotePlayer>,
-    >,
+    mut limbs: Query<&mut Transform, Without<RemotePlayer>>,
+    soldiers: Query<&SoldierBones>,
+    mut dresser: Dresser,
     mut deaths: MessageWriter<RemoteDeath>,
 ) {
     let dt = time.delta_secs();
@@ -387,41 +336,29 @@ pub(super) fn follow_remote_poses(
         };
         let speed = visuals.speed;
         visuals.gait.advance(speed, walk, sprint, dt);
-        let poses = soldier::pose(pose.stance, visuals.gait, pose.pitch);
-        for (entity, target) in visuals.rig.parts.into_iter().zip(&poses) {
-            let Ok((mut part, ..)) = parts.get_mut(entity) else {
+        let Ok(soldier) = soldiers.get(visuals.soldier) else {
+            continue;
+        };
+        let locals = soldier
+            .rest
+            .locals(&soldier::pose(pose.stance, visuals.gait, pose.pitch));
+        for (&bone, target) in soldier.bones.iter().zip(&locals) {
+            let Ok(mut limb) = limbs.get_mut(bone) else {
                 continue;
             };
             if snap {
-                *part = *target;
+                *limb = *target;
             } else {
-                part.translation
+                limb.translation
                     .smooth_nudge(&target.translation, LIMB_RATE, dt);
-                part.rotation.smooth_nudge(&target.rotation, LIMB_RATE, dt);
+                limb.rotation.smooth_nudge(&target.rotation, LIMB_RATE, dt);
             }
         }
 
-        if visuals.faction != faction {
+        if visuals.faction != faction || visuals.friendly != friendly {
             visuals.faction = faction;
-            let soldier = assets.soldier(faction);
-            for (i, entity) in visuals.rig.parts.into_iter().enumerate() {
-                if let Ok((_, mut mesh, _)) = parts.get_mut(entity) {
-                    mesh.0 = soldier.part(i).clone();
-                }
-            }
-            for (i, entity) in visuals.rig.marks.into_iter().enumerate() {
-                if let Ok((_, mut mesh, _)) = parts.get_mut(entity) {
-                    mesh.0 = soldier.mark(i).clone();
-                }
-            }
-        }
-        if visuals.friendly != friendly {
             visuals.friendly = friendly;
-            for entity in visuals.rig.marks {
-                if let Ok((_, _, mut material)) = parts.get_mut(entity) {
-                    material.0 = assets.team_material(friendly);
-                }
-            }
+            dresser.dress(soldier, faction, friendly);
         }
     }
 }

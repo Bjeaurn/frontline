@@ -8,8 +8,8 @@ use std::hash::{BuildHasher, RandomState};
 use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
 use bevy::prelude::*;
 
-use super::remote::{RemoteAssets, RemoteDeath, soldier_material, team_color, team_material};
-use super::soldier::{self, Gait};
+use super::remote::RemoteDeath;
+use super::soldier::{self, Gait, SoldierBones, Soldiers};
 use crate::data::GameData;
 use crate::flow::AppState;
 use crate::shared::{GameLayer, Stance};
@@ -41,9 +41,9 @@ pub(super) struct Corpse {
     fall_direction: Vec3,
     /// How far it tips: a quarter turn upright, none when already prone.
     tip_angle: f32,
-    team_color: Color,
-    /// The soldier's and the team marks' materials, faded together while sinking.
-    materials: [Handle<StandardMaterial>; 2],
+    /// The entity the soldier model hangs from: its materials are the body's own, faded together
+    /// while sinking.
+    soldier: Entity,
 }
 
 impl Corpse {
@@ -71,10 +71,9 @@ impl Corpse {
 pub(super) fn spawn_corpses(
     mut deaths: MessageReader<RemoteDeath>,
     data: Res<GameData>,
-    assets: Res<RemoteAssets>,
+    soldiers: Res<Soldiers>,
     spatial: SpatialQuery,
     corpses: Query<(Entity, &Corpse)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
 ) {
     let max = data.presentation.max_corpses;
@@ -117,35 +116,30 @@ pub(super) fn spawn_corpses(
             Stance::Standing | Stance::Crouching => FRAC_PI_2,
             Stance::Prone => 0.0,
         };
-        let team_look = team_material(team_color(death.friendly));
-        let team_color = team_look.base_color;
-        let body = materials.add(soldier_material());
-        let team = materials.add(team_look);
+        let entity = commands.spawn_empty().id();
+        let soldier = soldiers.spawn(
+            &mut commands,
+            entity,
+            death.faction,
+            death.friendly,
+            soldier::pose(death.stance, Gait::default(), DROPPED_PITCH),
+            true,
+        );
         let corpse = Corpse {
             age: 0.0,
             feet,
             pivot_height: soldier::back_height(death.stance),
             fall_direction,
             tip_angle,
-            team_color,
-            materials: [body.clone(), team.clone()],
+            soldier,
         };
-        let entity = commands
-            .spawn((
-                Name::new("Corpse"),
-                DespawnOnExit(AppState::InGame),
-                corpse.transform(data.presentation.corpse_secs),
-                Visibility::default(),
-                corpse,
-            ))
-            .id();
-        assets.soldier(death.faction).spawn(
-            &mut commands,
-            entity,
-            &body,
-            &team,
-            &soldier::pose(death.stance, Gait::default(), DROPPED_PITCH),
-        );
+        commands.entity(entity).insert((
+            Name::new("Corpse"),
+            DespawnOnExit(AppState::InGame),
+            corpse.transform(data.presentation.corpse_secs),
+            Visibility::default(),
+            corpse,
+        ));
         lying.insert(0, (entity, 0.0));
     }
 }
@@ -155,6 +149,8 @@ pub(super) fn animate_corpses(
     time: Res<Time>,
     data: Res<GameData>,
     mut corpses: Query<(Entity, &mut Corpse, &mut Transform)>,
+    soldiers: Query<&SoldierBones>,
+    meshes: Query<&MeshMaterial3d<StandardMaterial>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut commands: Commands,
 ) {
@@ -167,16 +163,17 @@ pub(super) fn animate_corpses(
         }
         *transform = corpse.transform(corpse_secs);
         let sinking = corpse.sinking(corpse_secs);
-        if sinking > 0.0 {
+        if sinking > 0.0
+            && let Ok(soldier) = soldiers.get(corpse.soldier)
+        {
             let alpha = 1.0 - sinking;
-            for (handle, color) in corpse
-                .materials
-                .iter()
-                .zip([Color::WHITE, corpse.team_color])
+            for handle in soldier
+                .mesh_entities()
+                .filter_map(|mesh| meshes.get(mesh).ok())
             {
-                if let Some(mut material) = materials.get_mut(handle) {
+                if let Some(mut material) = materials.get_mut(&handle.0) {
                     material.alpha_mode = AlphaMode::Blend;
-                    material.base_color = color.with_alpha(alpha);
+                    material.base_color.set_alpha(alpha);
                 }
             }
         }
@@ -196,8 +193,7 @@ mod tests {
             pivot_height: PIVOT,
             fall_direction: Vec3::Z,
             tip_angle: FRAC_PI_2,
-            team_color: Color::WHITE,
-            materials: [Handle::default(), Handle::default()],
+            soldier: Entity::PLACEHOLDER,
         }
     }
 

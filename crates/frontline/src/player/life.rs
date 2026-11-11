@@ -30,6 +30,15 @@ pub struct LocalLife {
 }
 
 impl LocalLife {
+    /// A local player alive on `team`, for tools that draw remote players without a game
+    /// (MapEdit's soldier viewer).
+    pub fn on_team(team: Team) -> Self {
+        Self {
+            team: Some(team),
+            ..default()
+        }
+    }
+
     /// Whether the local player is out of play: dead, or still choosing a Team.
     pub fn is_dead(&self) -> bool {
         self.dead

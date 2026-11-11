@@ -32,5 +32,9 @@ ron.workspace = true
 dirs.workspace = true
 zip.workspace = true
 
+[dev-dependencies]
+# Reads the node tree of the shipped soldier model in its tests.
+serde_json = "1"
+
 [lints]
 workspace = true

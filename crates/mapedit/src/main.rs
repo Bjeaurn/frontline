@@ -1,10 +1,13 @@
 //! MapEdit: look at Frontline Maps on the game's own rendering (materials, looks, props,
 //! lights) with a free-fly camera, the Map's entities and zones drawn over it, reload on file
 //! change and screenshots. It shares the game's library (`frontline`), so a Map looks here as it
-//! does in the game.
+//! does in the game. Its viewer mode (`viewer`) shows one model, or a soldier as other players
+//! are drawn, instead of a Map.
 //!
 //!     cargo run -p mapedit -- --map z_town
 //!     cargo run -p mapedit -- --map z_town --top --shot /tmp/top.png
+//!     cargo run -p mapedit -- --model models/weapons/ak47.glb
+//!     cargo run -p mapedit -- --soldier ranger --stance crouching --walk --shot /tmp/ranger.png
 
 mod camera;
 mod edit;
@@ -20,6 +23,7 @@ mod remote;
 mod selection;
 mod session;
 mod transform;
+mod viewer;
 
 use std::path::PathBuf;
 
@@ -29,6 +33,7 @@ use clap::Parser;
 use frontline::cli::Mode;
 use frontline::flow::AppState;
 use frontline::maps::{DEFAULT_MAP, MapId, MapRegistry, MapsPlugin};
+use frontline::shared::Stance;
 use frontline::video::{ActiveVideo, VideoSettings};
 use frontline::{assets, atmosphere, data, maps, materials, ui, world};
 
@@ -53,13 +58,49 @@ struct Args {
     /// Show only what this Game Mode uses (tdm, dom, hq, sd).
     #[arg(long)]
     mode: Option<String>,
-    /// Start camera: x y z (metres) then yaw and pitch (degrees; yaw 0 looks north, -z).
+    /// Look at one glTF model instead of a Map: an asset path under the game's assets folder
+    /// (models/weapons/ak47.glb) or any .glb file. Drag to orbit, wheel to zoom.
+    #[arg(long, conflicts_with_all = ["soldier", "top"])]
+    model: Option<String>,
+    /// Look at a soldier instead of a Map, drawn as other players are in a Match: a Faction id
+    /// from data/factions.ron (ranger, harmattan, ...).
+    #[arg(long, conflicts_with = "top")]
+    soldier: Option<String>,
+    /// The soldier's stance: standing, crouching or prone.
+    #[arg(long, default_value = "standing", requires = "soldier")]
+    stance: String,
+    /// The soldier walks along its facing (at the walking speed of its stance).
+    #[arg(long, requires = "soldier", conflicts_with = "sprint")]
+    walk: bool,
+    /// The soldier sprints.
+    #[arg(long, requires = "soldier")]
+    sprint: bool,
+    /// The soldier's aim pitch in degrees, up positive.
+    #[arg(
+        long,
+        default_value_t = 0.0,
+        allow_negative_numbers = true,
+        requires = "soldier"
+    )]
+    aim: f32,
+    /// The soldier wears the enemy's team colour instead of the friendly one.
+    #[arg(long, requires = "soldier")]
+    enemy: bool,
+    /// Show the body the soldier leaves when it dies instead of the soldier.
+    #[arg(long, requires = "soldier")]
+    corpse: bool,
+    /// Frames to wait before a `--shot` of a model or soldier (150 by default, stepped at a
+    /// fixed 60 Hz).
+    #[arg(long)]
+    frames: Option<u32>,
+    /// Start camera: x y z (metres) then yaw and pitch (degrees; yaw 0 looks north, -z). With
+    /// `--model` or `--soldier` the camera orbits what it looks at from there.
     #[arg(long, num_args = 5, value_names = ["X", "Y", "Z", "YAW", "PITCH"], allow_negative_numbers = true)]
     cam: Option<Vec<f32>>,
     /// Start in the top view.
     #[arg(long, conflicts_with = "cam")]
     top: bool,
-    /// Take a screenshot once the Map is ready, then exit.
+    /// Take a screenshot once the Map (model, soldier) is ready, then exit.
     #[arg(long)]
     shot: Option<PathBuf>,
     /// Window size, e.g. 1600x900.
@@ -87,12 +128,63 @@ fn parse_size(size: &str) -> Option<(u32, u32)> {
     Some((w.parse().ok()?, h.parse().ok()?))
 }
 
+/// The viewer mode (`--model`, `--soldier`).
+fn run_viewer(args: Args, size: (u32, u32)) -> AppExit {
+    let subject = match (args.model, args.soldier) {
+        (Some(model), _) => viewer::Subject::Model(model),
+        (None, Some(faction)) => {
+            let stance = match args.stance.as_str() {
+                "standing" => Stance::Standing,
+                "crouching" => Stance::Crouching,
+                "prone" => Stance::Prone,
+                other => {
+                    eprintln!(
+                        "Unknown stance \"{other}\" (--stance); known: standing, crouching, prone"
+                    );
+                    return AppExit::error();
+                }
+            };
+            let pace = match (args.walk, args.sprint) {
+                (_, true) => viewer::Pace::Sprint,
+                (true, false) => viewer::Pace::Walk,
+                (false, false) => viewer::Pace::Still,
+            };
+            viewer::Subject::Soldier(viewer::SoldierArgs {
+                faction,
+                stance,
+                pace,
+                aim_degrees: args.aim,
+                enemy: args.enemy,
+                corpse: args.corpse,
+            })
+        }
+        (None, None) => unreachable!("the caller checked for a model or a soldier"),
+    };
+    let cam = match args.cam.as_deref() {
+        None => None,
+        Some(&[x, y, z, yaw, pitch]) => Some([x, y, z, yaw, pitch]),
+        Some(_) => unreachable!("clap takes exactly five numbers"),
+    };
+    viewer::run(viewer::ViewerArgs {
+        subject,
+        look: args.look,
+        cam,
+        shot: args.shot,
+        frames: args.frames,
+        size,
+        assets_dir: assets_dir(),
+    })
+}
+
 fn main() -> AppExit {
     let args = Args::parse();
     let Some((width, height)) = parse_size(&args.size) else {
         eprintln!("--size takes WIDTHxHEIGHT, e.g. 1600x900");
         return AppExit::error();
     };
+    if args.model.is_some() || args.soldier.is_some() {
+        return run_viewer(args, (width, height));
+    }
     let mode_filter = match args.mode.as_deref() {
         None => None,
         Some(key) => match MODE_KEYS.iter().find(|known| **known == key) {
