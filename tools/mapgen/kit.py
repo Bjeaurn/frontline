@@ -15,7 +15,7 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 
-from mapgen import UNITS_PER_METRE, Brush, Entity, Map, box, oriented_box, point_entity, wedge
+from mapgen import CLIP, UNITS_PER_METRE, Brush, Entity, Map, box, oriented_box, point_entity, wedge
 
 REPO = Path(__file__).resolve().parents[2]
 MAPS_DIR = REPO / "crates" / "frontline" / "assets" / "maps"
@@ -89,7 +89,12 @@ class Level:
         self.sites: dict[str, list[tuple[str, float, float, float]]] = {}
         self.props: list[tuple[str, float, float, float, tuple[Vec3, Vec3] | None]] = []
         self._bounds = model_bounds(models)
+        self._folders: dict[str, dict[str, tuple[Vec3, Vec3]]] = {}  # bounds of other model folders, by folder
         self._mirror = False
+        # Indices into `solids` that are `clip` blocks (the colliders under prop models), and the
+        # ones `model()` added (dressing, as against the cover blockouts' own stand-ins).
+        self.clips: set[int] = set()
+        self.placed: set[int] = set()
         # Indices into `solids` that are fence stand-ins: see-through (sight and shots pass).
         self.fenced: list[int] = []
         self.fence_bars: set[int] = set()  # the lattice's own thin bars in `solids`
@@ -125,6 +130,8 @@ class Level:
     # ---- solids ----------------------------------------------------------------------------
 
     def _add(self, brush: Brush, lo: Vec3, hi: Vec3) -> None:
+        if brush.faces[0].surface == CLIP:
+            self.clips.add(len(self.solids))
         self.map.brushes.append(brush)
         self.solids.append((lo, hi, _planes(brush)))
 
@@ -262,6 +269,65 @@ class Level:
                 point_entity("prop", (s * x, origin_y, s * z), yaw, model=f"{self.models_dir}/{name}.glb", collider=collider)
             )
 
+    def model(self, path: str, x: float, z: float, facing: float = 0.0, y: float = 0.0, solid: bool = True, clip: Vec3 | None = None, mounted: bool = False) -> None:
+        """A model from another folder of the game's models (`path` is `<folder>/<name>`, e.g.
+        "props/barrel_red" for models/props/barrel_red.glb; `bounds.json` of that folder gives its
+        size) standing at (x, z) with the base of its bounds at height `y`, turned `facing`
+        degrees as in `prop`. The `prop` entity has no collider of its own; when `solid`, a `clip`
+        brush (solid, not drawn) of the model's bounds, turned with it, stands under it, and
+        that brush is what the walkability, climb and sight checks (and the player, and a shot)
+        meet, so **a prop's clip box is its bounds: its bounds are its cover height**. `clip`
+        overrides the box's size (length, height, width in the model's own x, y, z) where a
+        blockout it replaces had other measures. Thin or open things (chairs, bags, ladders,
+        anything lying under 0.2 m, wall-mounted units and shutters) are `solid=False`: decoration
+        that bodies and bullets pass. `mounted` props hang on a wall or stand on another prop,
+        so the checker does not look for ground under them."""
+        bounds = self._folder_bounds(path)
+        self._model_entity(path, x, z, facing, y, bounds, mounted)
+        if solid:
+            start = len(self.solids)
+            self._clip_box(bounds, x, z, facing, y, clip)
+            self.placed.update(range(start, len(self.solids)))
+
+    def on_wall(self, path: str, axis: str, c: float, along: float, outward: int, y: float = 0.0, gap: float = 0.02, solid: bool = False, mounted: bool = True) -> None:
+        """A model fixed to a wall's face, its back `gap` metres off it and its front (+z in the
+        model) looking away from the wall. `axis` "x" is a wall in the plane x = c (running along
+        z; `outward` is -1 for the face looking west, +1 east); "z" one in z = c (running along x;
+        -1 north, +1 south); `along` is the position along it. The model's depth comes from its
+        bounds."""
+        bounds = self._folder_bounds(path)
+        offset = c + outward * (gap - bounds[0][2])  # the model's back face is at local z = bounds min
+        if axis == "x":
+            self.model(path, offset, along, 90.0 if outward > 0 else 270.0, y, solid, None, mounted)
+        else:
+            self.model(path, along, offset, 0.0 if outward > 0 else 180.0, y, solid, None, mounted)
+
+    def _folder_bounds(self, path: str) -> tuple[Vec3, Vec3]:
+        folder, name = path.rsplit("/", 1)
+        if folder not in self._folders:
+            self._folders[folder] = model_bounds(f"models/{folder}")
+        assert name in self._folders[folder], f"no bounds for models/{path}.glb (run tools/assets/import_polyhaven.py)"
+        return self._folders[folder][name]
+
+    def _model_entity(self, path: str, x: float, z: float, facing: float, y: float, bounds: tuple[Vec3, Vec3], mounted: bool) -> None:
+        origin_y = y - bounds[0][1]
+        x, z = x + self._dx, z + self._dz
+        for s in self._signs():
+            yaw = math.radians(facing + (180.0 if s < 0 else 0.0))
+            if not mounted:
+                self.props.append((path, s * x, y, s * z, bounds))
+            self.map.entities.append(point_entity("prop", (s * x, origin_y, s * z), yaw, model=f"models/{path}.glb", collider="none"))
+
+    def _clip_box(self, bounds: tuple[Vec3, Vec3], x: float, z: float, facing: float, y: float, clip: Vec3 | None = None) -> None:
+        """A `clip` block of a model's bounds (or of `clip`'s size, same centre) standing with its
+        base at `y`, turned like the model at (x, z)."""
+        (x0, y0, z0), (x1, y1, z1) = bounds
+        sx, sy, sz = clip or (x1 - x0, y1 - y0, z1 - z0)
+        yaw = math.radians(facing)
+        c, n = math.cos(yaw), math.sin(yaw)
+        lx, lz = (x0 + x1) / 2, (z0 + z1) / 2
+        self.turned(CLIP, x + lx * c + lz * n, y + sy / 2, z - lx * n + lz * c, sx, sy, sz, yaw)
+
     def building(self, name: str, x: float, z: float, facing: float = 0.0, inset: float = 0.25) -> None:
         """A complete MegaKit building with a solid brush body of the same footprint behind it
         (the model itself has no collider). (x, z) is the building's origin: the middle of
@@ -363,13 +429,20 @@ class Level:
     # ---- cover -----------------------------------------------------------------------------
 
     def car(self, x: float, z: float, yaw: float = 0.0, body: str = "metal") -> None:
-        """A sedan blockout, 4.5 x 1.8 m, 1.5 m tall, long axis along x at yaw 0 (radians)."""
+        """A sedan, 4.5 x 1.8 m, 1.5 m tall, long axis along x at yaw 0 (radians). `body` is the
+        blockout's surface; "covered" is the tarp-covered car model (props/car_covered) over
+        a `clip` blockout of the same two blocks, so cover and sight lines are the same either
+        way."""
         c, n = math.cos(yaw), math.sin(yaw)
         place = lambda dx, dz: (x + dx * c + dz * n, z - dx * n + dz * c)
         px, pz = place(0.0, 0.0)
-        self.turned(body, px, 0.45, pz, 4.5, 0.9, 1.8, yaw)
         cx, cz = place(-0.2, 0.0)
-        self.turned(body, cx, 1.1, cz, 2.3, 0.45, 1.6, yaw)
+        covered = body == "covered"
+        surface = CLIP if covered else body
+        self.turned(surface, px, 0.45, pz, 4.5, 0.9, 1.8, yaw)
+        self.turned(surface, cx, 1.1, cz, 2.3, 0.45, 1.6, yaw)
+        if covered:  # the model's long axis is z
+            self._model_entity("props/car_covered", x, z, math.degrees(yaw) + 90.0, 0.0, self._folder_bounds("props/car_covered"), False)
 
     def van(self, x: float, z: float, yaw: float = 0.0, body: str = "corrugated") -> None:
         """A delivery van blockout, 5.4 x 2.1 m, 2.5 m tall."""
@@ -379,9 +452,17 @@ class Level:
         fx, fz = x + 2.5 * c, z - 2.5 * n
         self.turned(body, fx, 0.475, fz, 1.0, 0.95, 2.0, yaw)
 
-    def jersey(self, x: float, z: float, yaw: float = 0.0, length: float = 3.0, surface: str = "concrete") -> None:
-        """A concrete jersey barrier: knee-high cover you can crouch behind (0.9 m)."""
-        self.turned(surface, x, 0.45, z, length, 0.9, 0.5, yaw)
+    def jersey(self, x: float, z: float, yaw: float = 0.0, length: float = 3.0) -> None:
+        """A concrete jersey barrier `length` long: knee-high cover you can crouch behind (0.9 m).
+        Barrier models (props/barrier_long, 1.54 m each) lie end to end along it, over one `clip`
+        block of the full length."""
+        self.turned(CLIP, x, 0.45, z, length, 0.9, 0.5, yaw)
+        pieces = max(1, round(length / 1.54))
+        pitch = length / pieces
+        c, n = math.cos(yaw), math.sin(yaw)
+        for i in range(pieces):
+            along = (i - (pieces - 1) / 2) * pitch
+            self._model_entity("props/barrier_long", x + along * c, z - along * n, math.degrees(yaw), 0.0, self._folder_bounds("props/barrier_long"), False)
 
     def lamp(self, x: float, z: float, height: float = 5.5) -> None:
         """A street lamp: a thin pole (it blocks movement but hardly any view) and an arm."""
@@ -494,7 +575,10 @@ class Level:
         self.turned("corrugated", x, 1.3, z, 6.0, 2.6, 2.4, yaw)
 
     def dumpster(self, x: float, z: float, yaw: float = 0.0) -> None:
-        self.turned("metal", x, 0.65, z, 2.0, 1.3, 1.2, yaw)
+        """A dumpster, 2.0 x 1.2 m and 1.3 m tall, long axis along x at yaw 0 (radians): the
+        props/dumpster model over a `clip` block of exactly that size."""
+        self._model_entity("props/dumpster", x, z, math.degrees(yaw), 0.0, self._folder_bounds("props/dumpster"), False)
+        self.turned(CLIP, x, 0.65, z, 2.0, 1.3, 1.2, yaw)
 
     def crate(self, x: float, z: float, size: float = 1.0, y: float = 0.0, yaw: float = 0.0) -> None:
         self.turned("wood", x, y + size / 2, z, size, size, size, yaw)
@@ -529,6 +613,8 @@ MIN_SPACING = {"hq_site": 30.0, "dom_flag": 25.0, "bomb_site": 30.0, "ammo_crate
 # player isn't resupplied for free and nobody camps one.
 CRATE_SPAWN_CLEARANCE = 12.0
 WALK_SPEED = 5.5  # m/s, data/movement.ron
+# Solid props (`Level.model`'s clip blocks) stand at least this far (metres) from a spawn.
+SPAWN_CLEARANCE = 0.8
 
 
 def model_bounds(models: str) -> dict[str, tuple[Vec3, Vec3]]:
@@ -1077,11 +1163,32 @@ def climb_problems(level: Level, climbs: dict[str, list[tuple[float, ...]]]) -> 
     return problems
 
 
-def placement_problems(level: Level) -> list[str]:
-    """Spawns and objective sites inside a brush, and spawns of the two Teams that see each other
-    (standing or crouched; fences do not block sight). Team Deathmatch's team-less "any" spawns
-    are only counted."""
+def prop_problems(level: Level) -> list[str]:
+    """Solid props (the `clip` blocks of `Level.model`, `jersey`, `dumpster`, covered `car`s)
+    that overlap another brush (a prop pushed into a wall or onto other cover), and dressing
+    (`Level.model`'s own blocks, not the cover blockouts' stand-ins, which are the layout) within
+    `SPAWN_CLEARANCE` metres of a spawn. Turned blocks count by their bounding box, so a prop at
+    an angle may be reported a little early."""
     problems = []
+    fenced = set(level.fenced)
+    for i in level.clips:
+        lo, hi, _ = level.solids[i]
+        for j, (lo2, hi2, _) in enumerate(level.solids):
+            if j == i or j in fenced or (j in level.clips and j < i):
+                continue
+            if min(hi[0], hi2[0]) - max(lo[0], lo2[0]) > 0.05 and min(hi[2], hi2[2]) - max(lo[2], lo2[2]) > 0.05 and min(hi[1], hi2[1]) - max(lo[1], lo2[1]) > 0.05:
+                problems.append(f"solid prop x {lo[0]:.1f}..{hi[0]:.1f} z {lo[2]:.1f}..{hi[2]:.1f} overlaps a brush x {lo2[0]:.1f}..{hi2[0]:.1f} y {lo2[1]:.1f}..{hi2[1]:.1f} z {lo2[2]:.1f}..{hi2[2]:.1f}")
+        for team, _, x, z in (level.spawns if i in level.placed else ()):
+            if lo[0] - SPAWN_CLEARANCE < x < hi[0] + SPAWN_CLEARANCE and lo[2] - SPAWN_CLEARANCE < z < hi[2] + SPAWN_CLEARANCE:
+                problems.append(f"solid prop x {lo[0]:.1f}..{hi[0]:.1f} z {lo[2]:.1f}..{hi[2]:.1f} is within {SPAWN_CLEARANCE} m of the {team} spawn ({x}, {z})")
+    return problems
+
+
+def placement_problems(level: Level) -> list[str]:
+    """Spawns and objective sites inside a brush, solid props (`prop_problems`) in the way, and
+    spawns of the two Teams that see each other (standing or crouched; fences do not block sight).
+    Team Deathmatch's team-less "any" spawns are only counted."""
+    problems = prop_problems(level)
     for team, _, x, z in level.spawns:
         if inside_solid(level, x, z):
             problems.append(f"{team} spawn ({x}, {z}) is inside a brush")

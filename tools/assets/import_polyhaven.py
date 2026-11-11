@@ -63,8 +63,8 @@ PROPS: dict[str, tuple[str, int, int, list[str]]] = {
     "picnic_table": ("wooden_picnic_table", 1200, 512, []),
     "planter": ("planter_box_01", 1000, 512, []),
 }
-# prop name -> generator in blender_builds.py (made from the game's own surface textures).
-BUILT: dict[str, str] = {"dumpster": "dumpster", "pallet": "pallet", "sandbags": "sandbags"}
+# prop name -> (generator in blender_builds.py, triangle budget): made from the game's own surface textures.
+BUILT: dict[str, tuple[str, int]] = {"dumpster": ("dumpster", 1200), "pallet": ("pallet", 1200), "sandbags": ("sandbags", 3600)}
 
 
 def fetch(url: str, path: Path) -> None:
@@ -108,7 +108,7 @@ def main() -> None:
     if "--credits" in sys.argv:
         for name, (asset, *_rest) in PROPS.items():
             print(f"| `{name}.glb` | [{asset}](https://polyhaven.com/a/{asset}) | CC0 |")
-        for name, build in BUILT.items():
+        for name, (build, _tris) in BUILT.items():
             print(f"| `{name}.glb` | built by `tools/assets/blender_builds.py` (`{build}`) from the surface textures | CC0 |")
         return
     OUT.mkdir(parents=True, exist_ok=True)
@@ -127,9 +127,9 @@ def main() -> None:
         if wanted(name):
             source = download(asset)
             blender(["--source", str(source), "--out", str(OUT / f"{name}.glb"), "--tris", str(tris), "--texture", str(texture), *options, *extra(name)])
-    for name, build in BUILT.items():
+    for name, (build, tris) in BUILT.items():
         if wanted(name):
-            blender(["--build", build, "--out", str(OUT / f"{name}.glb"), "--textures", str(TEXTURES), *extra(name)])
+            blender(["--build", build, "--out", str(OUT / f"{name}.glb"), "--textures", str(TEXTURES), "--tris", str(tris), *extra(name)])
     write_bounds()
 
 

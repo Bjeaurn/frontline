@@ -130,32 +130,66 @@ def pallet(textures: str):
     return join(parts, tile=1.0)
 
 
+def pillow(size, location, turn: float, material, rng, radius: float = 0.42):
+    """A sandbag: a box of `size` (x length, y depth, z height) with rounded edges, a belly that
+    bulges out in the middle of its height and ends that taper in plan, a little lumpy."""
+    bpy.ops.mesh.primitive_cube_add(size=2.0)
+    bag = bpy.context.view_layer.objects.active
+    mesh = bmesh.new()
+    mesh.from_mesh(bag.data)
+    bmesh.ops.subdivide_edges(mesh, edges=mesh.edges[:], cuts=3, use_grid_fill=True)
+    for vertex in mesh.verts:
+        x, y, z = vertex.co
+        inner = [min(max(c, -(1.0 - radius)), 1.0 - radius) for c in (x, y, z)]
+        delta = [c - i for c, i in zip((x, y, z), inner)]
+        length = math.sqrt(sum(d * d for d in delta))
+        if length > 1e-9:
+            x, y, z = (i + d / length * radius for i, d in zip(inner, delta))
+        belly = 1.0 + 0.10 * (1.0 - z * z)  # fatter in the middle of the height
+        taper = 1.0 - 0.18 * x * x  # ends pinch in plan
+        dome = 1.0 + 0.05 * (1.0 - x * x) * (1.0 - y * y) * (1.0 if z > 0 else 0.0)  # the filled top
+        vertex.co = (
+            x * (1.0 + rng.uniform(-0.012, 0.012)),
+            y * belly * taper + rng.uniform(-0.015, 0.015),
+            z * dome + rng.uniform(-0.015, 0.015),
+        )
+    mesh.to_mesh(bag.data)
+    mesh.free()
+    bag.scale = (size[0] / 2, size[1] / 2, size[2] / 2)
+    bag.rotation_euler = (0.0, 0.0, turn)
+    bag.location = location
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    bag.data.materials.append(material)
+    return bag
+
+
 def sandbags(textures: str):
-    """A sandbag wall, about 2.0 m long, 0.5 m deep and 0.9 m tall: chest-high cover."""
-    sack = surface_material("sandbag", textures, "sand", tint=(0.62, 0.58, 0.46))
-    rng = random.Random(7)
+    """A sandbag wall: pillow bags (0.62 x 0.34 x 0.19 m, each turned a little) stacked in a
+    running bond five rows high, about 2.0 m long, 0.4 m deep and 0.95 m tall: chest-high cover.
+    Bags are darker burlap than the sand around, with gaps between them."""
+    tints = [(0.52, 0.45, 0.32), (0.46, 0.40, 0.29), (0.56, 0.49, 0.36)]
+    sacks = [surface_material(f"sandbag_{i}", textures, "sand", tint=tint) for i, tint in enumerate(tints)]
+    rng = random.Random(11)
+    length, depth, height = 0.62, 0.32, 0.18
+    pitch = length + 0.035  # a visible seam between neighbours
     parts = []
-    length, depth, height = 0.66, 0.36, 0.2
     for row in range(5):
-        count = 3 if row % 2 == 0 else 2
-        start = -(count - 1) * length / 2
-        for i in range(count):
-            bpy.ops.mesh.primitive_uv_sphere_add(segments=12, ring_count=6, radius=0.5)
-            bag = bpy.context.view_layer.objects.active
-            bag.scale = (length * 1.08, depth * (1.0 + rng.uniform(-0.06, 0.08)), height * 1.25)
-            bag.location = (start + i * length + rng.uniform(-0.02, 0.02), rng.uniform(-0.03, 0.03), height * (row + 0.5))
-            bag.rotation_euler = (0.0, 0.0, rng.uniform(-0.06, 0.06))
-            bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
-            # Flatten top and bottom so the bags sit on each other like filled sacks.
-            mesh = bmesh.new()
-            mesh.from_mesh(bag.data)
-            low, high = height * row + 0.01, height * (row + 1) + 0.02
-            for vertex in mesh.verts:
-                vertex.co.z = min(max(vertex.co.z, low), high)
-            mesh.to_mesh(bag.data)
-            mesh.free()
-            bag.data.materials.append(sack)
-            parts.append(bag)
+        z = height / 2 + row * (height + 0.012)
+        # Even rows: three bags. Odd rows: two bags offset by half a pitch, and a half bag at each end.
+        if row % 2 == 0:
+            cells = [(-pitch, length), (0.0, length), (pitch, length)]
+        else:
+            cells = [(-pitch / 2, length), (pitch / 2, length), (-0.835, length / 2), (0.835, length / 2)]
+        for x, bag_length in cells:
+            parts.append(
+                pillow(
+                    (bag_length, depth + rng.uniform(-0.02, 0.03), height),
+                    (x + rng.uniform(-0.012, 0.012), rng.uniform(-0.025, 0.025), z),
+                    rng.uniform(-0.07, 0.07),
+                    rng.choice(sacks),
+                    rng,
+                )
+            )
     return join(parts, tile=0.8)
 
 

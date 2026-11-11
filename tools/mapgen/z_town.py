@@ -30,6 +30,7 @@ import math
 import sys
 from pathlib import Path
 
+from dressing import aircon, barrels, bins, crates, pallet_stack, sandbags, shutter
 from kit import MAPS_DIR, Level, door, window
 
 OUT = MAPS_DIR / "z_town.map"
@@ -544,7 +545,7 @@ def cover(L: Level) -> None:
     L.jersey(-24.0, 44.0, math.pi / 2, 3.0)
     L.crate(-34.0, 48.0, 1.2)
     L.dumpster(-14.0, 48.5, 0.0)
-    L.car(-28.0, 41.5, 0.0)
+    L.car(-28.0, 41.5, 0.0, "covered")
     # Kerkstraat.
     L.car(-34.0, -26.0, math.pi / 2)
     L.van(-33.0, -14.0, math.pi / 2, "metal")
@@ -553,7 +554,7 @@ def cover(L: Level) -> None:
     L.crate(-31.8, 31.0, 1.2)
     L.crate(-34.0, 36.0, 1.2)
     # The lane in front of the church.
-    L.car(-13.0, 6.0, math.pi / 2)
+    L.car(-13.0, 6.0, math.pi / 2, "covered")
     L.jersey(-11.0, 18.0, 0.0, 3.0)
     L.crate(-14.0, 24.0, 1.2)
     L.dumpster(-14.5, 36.0, 0.0)
@@ -564,20 +565,20 @@ def cover(L: Level) -> None:
     L.crate(10.0, -6.0, 1.2)
     # Raadhuisstraat.
     L.van(8.0, -38.0, 0.0, "corrugated")
-    L.car(26.0, -37.5, 0.0)
+    L.car(26.0, -37.5, 0.0, "covered")
     L.jersey(40.0, -38.0, math.pi / 2, 3.0)
     # The east paths and the car park (Bravo's start).
     L.crate(26.0, 8.0, 1.2)
     L.crate(26.5, 26.0, 1.2)
     L.jersey(34.5, 10.0, 0.0, 3.0)
     L.jersey(34.5, 30.0, 0.0, 3.0)
-    for z in (13.0, 19.0, 25.0, 31.0, 36.0):
-        L.car(40.0, z, math.pi / 2, "metal" if z % 2 else "corrugated")
+    for z, body in ((13.0, "metal"), (19.0, "covered"), (25.0, "metal"), (31.0, "covered"), (36.0, "corrugated")):
+        L.car(40.0, z, math.pi / 2, body)
     L.van(44.0, 8.0, math.pi / 2, "metal")
     L.jersey(43.0, 22.0, 0.0, 3.0)
     L.dumpster(44.0, 34.0, 0.0)
     # Open Hof.
-    L.car(47.5, -22.0, math.pi / 2)
+    L.car(47.5, -22.0, math.pi / 2, "covered")
     L.jersey(47.5, -4.0, math.pi / 2, 3.0)
     L.car(47.5, 44.0, math.pi / 2, "corrugated")
     # The south lane.
@@ -587,6 +588,156 @@ def cover(L: Level) -> None:
     for x, z in ((-33.0, 0.0), (-33.0, 28.0), (-10.0, 20.0), (20.0, -8.0), (38.0, -1.0), (30.0, 36.0)):
         L.lamp(x, z)
         L.light(x, 5.2, z, intensity=160000.0, reach=12.0, practical=True)
+
+
+# ---- street life ---------------------------------------------------------------------------------------
+
+
+def street_life(L: Level) -> None:
+    """A Dutch town centre in use: crates, pallets and barrels by the market stalls, benches and bins
+    on the square, chairs at the cafe, and on the blank brick of the streets' walls shutters, utility
+    boxes, air-conditioning units and a few barrels, bins and a generator. Civil on purpose: no
+    sandbags at all, and nothing solid within 1.5 m of a door, a doorway, an alley mouth, a spawn or
+    an objective. Wall fittings are decoration (no collider)."""
+    market(L)
+    kerkstraat(L)
+    marktstraat(L)
+    north_streets(L)
+    east_and_south(L)
+
+
+def market(L: Level) -> None:
+    """Kerkplein: the stalls' stock and the square's furniture."""
+    # North row of stalls (x -26, -20, -14 at z -27, backs on z -28): stock beside and behind them.
+    crates(L, -23.0, -27.2, 0, stacked=2)
+    crates(L, -17.0, -27.4, 0, ("props/wooden_crate", "props/military_crate"), 2)
+    pallet_stack(L, -23.0, -29.8, 0, 2)
+    barrels(L, -11.4, -28.6, 2, 0)
+    # South row (x -26, -20 at z -9, facing north).
+    crates(L, -23.0, -8.6, 2, stacked=2)
+    pallet_stack(L, -23.0, -6.6, 0, 2)
+    barrels(L, -29.0, -7.8, 2, 1)
+    # Benches on the lawn strips, facing the square; bins by the light poles; planter boxes.
+    for z in (-15.0, -21.0):
+        L.model("props/bench", -29.7, z, 90.0)
+    for z in (-14.0, -24.0):
+        L.model("props/bench", -6.3, z, 270.0)
+    bins(L, -6.9, -4.6, 0, 1, 2)
+    bins(L, -29.9, -30.4, 0, 1, 2)
+    for x in (-27.0, -17.0):
+        L.model("props/planter", x, -4.5, 0.0)
+
+
+def kerkstraat(L: Level) -> None:
+    """The brick canyon of Kerkstraat (x -37..-31) and the church lane (x -16..-6) between the
+    blocks A (z 13..24) and B (z 27..40), and the alley that separates them."""
+    # Block A and B, west faces (Kerkstraat side).
+    shutter(L, "x", -31.0, 15.0, -1, "door", graffiti=True)
+    shutter(L, "x", -31.0, 19.0, -1, "window")
+    L.on_wall("props/utility_box", "x", -31.0, 22.4, -1, solid=True, mounted=False)
+    aircon(L, "x", -31.0, 22.4, -1)
+    shutter(L, "x", -31.0, 34.0, -1, "window", graffiti=True)
+    shutter(L, "x", -31.0, 37.8, -1, "door")
+    L.on_wall("props/power_box", "x", -31.0, 28.8, -1, solid=True, mounted=False)
+    aircon(L, "x", -31.0, 29.0, -1)
+    # The cafe's west wall: units above the door's head and a gas cylinder by the corner.
+    aircon(L, "x", -31.0, 3.4, -1)
+    aircon(L, "x", -31.0, 11.4, -1)
+    L.model("props/propane_tank", -31.4, 2.6)
+    L.model("props/propane_tank", -31.45, 3.15)
+    # Block A and B, east faces (church lane side).
+    shutter(L, "x", -16.0, 16.5, 1, "window")
+    shutter(L, "x", -16.0, 20.6, 1, "door", graffiti=True)
+    L.on_wall("props/generator", "x", -16.0, 22.8, 1, solid=True, mounted=False)
+    shutter(L, "x", -16.0, 36.0, 1, "window")
+    shutter(L, "x", -16.0, 38.6, 1, "door")
+    aircon(L, "x", -16.0, 15.0, 1)
+    aircon(L, "x", -16.0, 35.0, 1)
+    # The alley (z 24..27, 3 m wide): bins against block B's north face, barrels at the far end
+    # against block A's south face; each leaves 2.4 m clear.
+    bins(L, -28.5, 26.65, 0, 2, 2)
+    barrels(L, -19.5, 24.4, 2, 0)
+    # Kerkstraat's own clutter.
+    barrels(L, -31.5, 12.0, 2, 1)
+
+
+def marktstraat(L: Level) -> None:
+    """Marktstraat (z -3..2) and the street along the square's north side."""
+    # The library's north face (z 3, outward -1): clear of its door (x -50..-47.4).
+    shutter(L, "z", 3.0, -55.0, -1, "window", graffiti=True)
+    shutter(L, "z", 3.0, -44.0, -1, "door")
+    barrels(L, -64.0, 1.6, 3, 0)
+    bins(L, -57.0, 2.6, 0, 1, 1)
+    # The terrace across the street (z -5, outward +1).
+    shutter(L, "z", -5.0, -60.0, 1, "window")
+    shutter(L, "z", -5.0, -50.0, 1, "door", graffiti=True)
+    shutter(L, "z", -5.0, -44.0, 1, "door")
+    aircon(L, "z", -5.0, -56.0, 1)
+    L.on_wall("props/utility_box", "z", -5.0, -47.0, 1, solid=True, mounted=False)
+    # The cafe's north face (z 2, outward -1): chairs on its pavement.
+    L.model("props/plastic_chair", -19.0, 0.9, 190.0, solid=False)
+    L.model("props/plastic_chair", -18.1, 0.6, 170.0, solid=False)
+    L.model("props/plastic_chair", -28.0, 0.9, 200.0, solid=False)
+    shutter(L, "z", 2.0, -28.0, -1, "window")
+
+
+def north_streets(L: Level) -> None:
+    """Raadhuisstraat's north row (z -41, outward +1), the kiosk, and the shops' backs on the north
+    lane (z -11, outward +1)."""
+    shutter(L, "z", -41.0, 9.5, 1, "door", graffiti=True)
+    shutter(L, "z", -41.0, 26.0, 1, "window")
+    shutter(L, "z", -41.0, 44.0, 1, "window", graffiti=True)
+    aircon(L, "z", -41.0, 12.0, 1)
+    aircon(L, "z", -41.0, 30.0, 1)
+    aircon(L, "z", -41.0, 48.0, 1)
+    L.on_wall("props/utility_box_tall", "z", -41.0, 22.0, 1, solid=True, mounted=False)
+    L.on_wall("props/power_box", "z", -41.0, 55.0, 1, solid=True, mounted=False)
+    shutter(L, "z", -35.0, 35.2, 1, "window")  # on the newspaper kiosk's south face
+    bins(L, 7.0, -39.6, 0, 1, 1)
+    barrels(L, 26.5, -40.6, 2, 0)
+    for x in (23.0, 38.0):
+        L.model("props/plastic_chair", x, -31.4, 20.0, solid=False)
+    # The north lane's shop faces.
+    shutter(L, "z", -11.0, 7.0, 1, "window")
+    L.on_wall("props/utility_box", "z", -11.0, 10.5, 1, solid=True, mounted=False)
+    aircon(L, "z", -11.0, 10.5, 1)
+    shutter(L, "z", -11.0, 20.0, 1, "door", graffiti=True)
+    barrels(L, 21.8, -10.5, 2, 0)
+    shutter(L, "z", -11.0, 28.0, 1, "window")
+    L.on_wall("props/power_box", "z", -11.0, 37.5, 1, solid=True, mounted=False)
+    aircon(L, "z", -11.0, 40.0, 1)
+    shutter(L, "z", -11.0, 43.0, 1, "door")
+
+
+def east_and_south(L: Level) -> None:
+    """Open Hof's shop faces, the car park and the south lane."""
+    # East shops' blank terraces (x 49, outward -1).
+    shutter(L, "x", 49.0, -30.0, -1, "door")
+    shutter(L, "x", 49.0, -15.0, -1, "window", graffiti=True)
+    aircon(L, "x", 49.0, -25.0, -1)
+    aircon(L, "x", 49.0, -9.0, -1)
+    shutter(L, "x", 49.0, 14.0, -1, "door", graffiti=True)
+    shutter(L, "x", 49.0, 38.0, -1, "window")
+    aircon(L, "x", 49.0, 42.0, -1)
+    # The car park: a picnic table (a lunch spot beside the path), barrels and a bin.
+    L.model("props/picnic_table", 26.5, 20.0, 0.0)  # 2.2 m across, 3.0 m long (along z): 1.4 m clear each side of the 5 m path
+    barrels(L, 44.6, 38.4, 3, 0)
+    bins(L, 38.0, 38.6, 0, 1, 1)
+    # The south lane (z 32..38) and its north faces: the south block at z 38 (outward -1) and the
+    # block at z 40.
+    shutter(L, "z", 38.0, -1.0, -1, "window", graffiti=True)
+    shutter(L, "z", 38.0, 3.0, -1, "door")
+    L.on_wall("props/utility_box", "z", 38.0, 6.2, -1, solid=True, mounted=False)
+    aircon(L, "z", 38.0, 12.5, -1)
+    barrels(L, 16.4, 37.3, 2, 0)
+    shutter(L, "z", 40.0, 24.0, -1, "window")
+    L.on_wall("props/generator", "z", 40.0, 30.0, -1, solid=True, mounted=False)
+    aircon(L, "z", 40.0, 33.0, -1)
+    # The south street (Alpha's start): the terrace on its far side (z 50, outward -1).
+    shutter(L, "z", 50.0, -26.0, -1, "window")
+    shutter(L, "z", 50.0, -19.0, -1, "door", graffiti=True)
+    aircon(L, "z", 50.0, -14.0, -1)
+    pallet_stack(L, -29.5, 49.0, 0, 2)
 
 
 # ---- entities ------------------------------------------------------------------------------------------
@@ -636,6 +787,7 @@ def build() -> Level:
     south_block(L)
     east_side(L)
     cover(L)
+    street_life(L)
     entities(L)
     return L
 

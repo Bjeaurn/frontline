@@ -397,6 +397,23 @@ pub struct PropModel {
     pub bounds: Option<(DVec3, DVec3)>,
 }
 
+/// The pack folder a model path lives in: `models/props/barrel_red.glb` is in `props`.
+fn model_pack(model: &str) -> &str {
+    model
+        .strip_prefix("models/")
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("")
+}
+
+/// The heading of a pack's models in the Props tab.
+fn pack_title(pack: &str) -> &str {
+    match pack {
+        "downtown" => "downtown: Downtown City MegaKit (buildings, facades, street pieces)",
+        "props" => "props: street props (barrels, crates, barriers, shutters, units, furniture)",
+        other => other,
+    }
+}
+
 /// The `.glb` files of `assets/models/*/`, with their bounds from each folder's `bounds.json`.
 pub fn load_props(assets: &Path) -> Vec<PropModel> {
     let mut props = Vec::new();
@@ -933,7 +950,19 @@ fn rebuild(
                 14.0,
                 TEXT_DIM,
             );
+            let mut pack = "";
             for prop in &editor.props {
+                if model_pack(&prop.model) != pack {
+                    pack = model_pack(&prop.model);
+                    note(
+                        &mut commands,
+                        &fonts,
+                        root,
+                        pack_title(pack).into(),
+                        15.0,
+                        ACCENT,
+                    );
+                }
                 let name = prop
                     .model
                     .rsplit('/')
@@ -1115,6 +1144,14 @@ mod tests {
             .expect("the bollard");
         assert!(bollard.bounds.is_some());
         assert!(prop_bounds(&props).contains_key("Prop_Bollard"));
+        let barrel = props
+            .iter()
+            .find(|p| p.model == "models/props/barrel_red.glb")
+            .expect("the street props are listed");
+        assert!(barrel.bounds.is_some());
+        assert!(prop_bounds(&props).contains_key("barrel_red"));
+        assert_eq!(model_pack(&barrel.model), "props");
+        assert_eq!(model_pack("models/downtown/Prop_Bollard.glb"), "downtown");
     }
 
     #[test]

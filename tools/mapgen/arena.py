@@ -15,6 +15,7 @@ import math
 import sys
 from pathlib import Path
 
+from dressing import barrels, crates, pallet_stack, sandbags, shutter, tyres
 from kit import MAPS_DIR, Level
 
 HALF = 48.0  # the playfield is x, z in -HALF..HALF
@@ -192,7 +193,51 @@ def build() -> Level:
     ]
     for x, y, z, color, lumens, reach, shadows in lamps:
         L.light(x, y, z, color=color, intensity=float(lumens), reach=reach, practical=True, shadows=shadows)
+    dress(L)
     return L
+
+
+def dress(L: Level) -> None:
+    """Desert-yard dressing, everything point-symmetric so both Teams get the same: sandbag walls
+    in the two HQ lanes and behind the end Flags, barrels at the perimeter and the cover, loaded
+    pallets and crate stacks, tyres, jerrycans, and the central building's fittings (utility boxes and a
+    generator at its foot, shutters on its blank walls, air-conditioning units on its roof). Clear
+    of the doorways, the crawl gap, the ramp and every spawn."""
+    with L.mirrored():
+        # Defensive spots: two sandbag walls across each HQ lane, one behind each end Flag.
+        for z in (-5.0, 5.0):
+            sandbags(L, -31.5, z, 1)
+        sandbags(L, 4.0, -34.5, 0)
+        sandbags(L, -22.0, 24.0, 0)  # by bomb site A
+        # Barrels at the perimeter walls and beside the cover.
+        barrels(L, -47.0, -22.0, 3, 0)
+        barrels(L, -14.0, -46.8, 2, 1)
+        barrels(L, -47.0, 21.0, 3, 2)
+        barrels(L, 22.0, -46.8, 2, 3)
+        barrels(L, -27.0, -19.0, 2, 0)
+        barrels(L, 13.0, 18.0, 2, 1)
+        # Loaded pallets and crate stacks.
+        pallet_stack(L, -11.0, -11.0, 0, 2)
+        pallet_stack(L, -12.0, 26.0, 1, 2)
+        crates(L, -18.0, -22.0, 0, stacked=2)
+        crates(L, -44.0, 8.0, 1, stacked=3)
+        crates(L, 6.0, 25.0, 0, stacked=2)
+        # Tyres, jerrycans and propane tanks.
+        tyres(L, -20.0, -46.9, 0, 2)
+        tyres(L, -46.9, -4.0, 1, 2)
+        L.model("props/jerrycan", -9.5, 11.8, 20.0)
+        L.model("props/jerrycan", -9.1, 12.2, 70.0)
+        L.model("props/propane_tank", -13.0, 11.0, 0.0)
+        # The central building (faces at +-6): a generator and utility boxes at its foot, shutters
+        # and air-conditioning units on its walls and roof.
+        L.on_wall("props/generator", "z", -6.0, -4.0, -1, solid=True, mounted=False)
+        L.on_wall("props/utility_box", "z", -6.0, 4.6, -1, solid=True, mounted=False)
+        L.on_wall("props/power_box", "x", 6.0, -4.2, 1, solid=True, mounted=False)
+        shutter(L, "z", -6.0, -3.4, -1, "window")
+        shutter(L, "x", 6.0, 3.6, 1, "door", graffiti=True)
+        shutter(L, "x", -6.0, 3.6, -1, "door")
+        L.model("props/aircon", -2.0, 3.4, 0.0, 3.3, solid=True, mounted=True)
+        L.model("props/aircon", 3.0, -3.8, 180.0, 3.3, solid=True, mounted=True)
 
 
 # The trick-jump routes: the (x, z) of each ledge in climbing order (a third number picks the

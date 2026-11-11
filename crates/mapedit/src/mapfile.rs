@@ -1638,8 +1638,12 @@ mod tests {
             if brush.faces.len() != 6 || !axis_aligned {
                 continue;
             }
+            // A prop's invisible collider (`clip`) is no surface: nothing to rebuild it with.
+            let Some(surface) = brush.surface() else {
+                continue;
+            };
             let (min, max) = brush.aabb().unwrap();
-            let rebuilt = Brush::cuboid(min, max, brush.surface().unwrap());
+            let rebuilt = Brush::cuboid(min, max, surface);
             for a in &rebuilt.faces {
                 let (na, da) = a.plane().unwrap();
                 // The same plane may come in another order (a box turned a quarter circle).

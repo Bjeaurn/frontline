@@ -18,6 +18,7 @@ import math
 import sys
 from pathlib import Path
 
+from dressing import aircon, barrels, bins, crates, pallet_stack, sandbags, shutter, tyres
 from kit import BUILDINGS, MAPS_DIR, Level, door, window
 
 OUT = MAPS_DIR / "crossroads.map"
@@ -275,14 +276,14 @@ def cover(L: Level) -> None:
     with L.mirrored():
         # North street and Alpha's plaza, DZ further out than the lanes' ends.
         with L.shifted(0.0, -DZ):
-            L.car(-40.0, -40.5, 0.0)
+            L.car(-40.0, -40.5, 0.0, "covered")
             L.car(-35.0, -35.5, 0.25, "corrugated")
             L.van(-24.0, -38.0, 0.0)
             L.jersey(-30.0, -32.5, 0.0, 3.0)
             L.jersey(-27.0, -32.5, 0.0, 3.0)
             L.car(-10.0, -35.0, 0.0)
             L.van(14.0, -36.0, 0.0, "metal")
-            L.car(26.0, -41.0, math.pi / 2)
+            L.car(26.0, -41.0, math.pi / 2, "covered")
             L.car(34.0, -35.0, 0.0, "corrugated")
             L.jersey(40.0, -32.5, 0.0, 3.0)
             L.dumpster(43.0, -41.0, 0.0)
@@ -312,7 +313,7 @@ def cover(L: Level) -> None:
         L.crate(-14.8, -31.0, 1.2)  # against a container: crate, then container (a trick-jump route)
         L.crate(14.8, -21.0, 1.2)
         L.van(-5.0, -22.0, 0.0)
-        L.car(7.0, -22.0, 0.0)
+        L.car(7.0, -22.0, 0.0, "covered")
         L.crate(0.0, -32.0, 1.2)
         L.crate(0.0, -26.0, 1.2)
         L.crate(1.3, -26.2, 1.0)
@@ -324,7 +325,7 @@ def cover(L: Level) -> None:
         L.crate(-30.0, -34.0, 1.2)
         L.crate(-28.7, -34.2, 1.0)
         L.van(-18.0, -19.0, math.pi / 2)
-        L.car(-28.0, -14.0, 0.3)
+        L.car(-28.0, -14.0, 0.3, "covered")
         L.jersey(-24.0, -10.5, 0.0, 3.0)
         L.jersey(-27.0, -10.5, 0.0, 3.0)
         # West lane, middle: a van across its middle, barriers, crates.
@@ -398,6 +399,48 @@ def dress(L: Level) -> None:
         L.prop("Prop_ACUnit", -2.0, -6.8, 180.0, ROOF, "box")
 
 
+def street_life(L: Level) -> None:
+    """Lived-in streets: barrels, loaded pallets, bins and tyres at the walls and the cover, sandbag
+    nests at the hall's gates, shutters, fittings and air-conditioning on the blocks' blank
+    walls, a bench and chairs at the shop. Point-symmetric like the rest, the half written here is
+    the north-west one. Solid props keep clear of every door, gate and spawn."""
+    with L.mirrored():
+        # North street and Alpha's plaza.
+        barrels(L, -44.5, -52.0, 3, 0)
+        barrels(L, 31.0, -57.0, 2, 1)
+        barrels(L, -16.3, -61.0, 2, 0)
+        pallet_stack(L, -14.0, -49.5, 0, 2)
+        crates(L, 14.0, -52.5, 0)
+        tyres(L, -45.2, -36.0, 1, 2)
+        bins(L, -36.0, -61.0, 0, 2, 2)
+        # Sandbag nests at the hall yard's gates and by the plaza fence's centre gate.
+        sandbags(L, -8.0, -18.0, 0)
+        sandbags(L, 8.0, -18.0, 0)
+        sandbags(L, -8.5, -35.0, 0)
+        # The west shop (x -29..-19, z -29..-22): shutters on its blank walls, chairs by the door.
+        shutter(L, "z", -29.0, -24.95, -1, "window")
+        shutter(L, "z", -29.0, -28.3, -1, "door", graffiti=True)
+        shutter(L, "x", -29.0, -23.4, -1, "door")
+        shutter(L, "z", -22.0, -24.3, 1, "window", graffiti=True)
+        L.on_wall("props/bench", "x", 31.78, 4.5, -1, solid=True, mounted=False, gap=0.05)  # on the lane face's blank bay
+        L.model("props/plastic_chair", -21.5, -30.5, 200.0, solid=False)
+        L.model("props/plastic_chair", -20.6, -30.1, 160.0, solid=False)
+        # The east block (before the mirror, the west block's twin): the lane face (facade pieces
+        # stand 0.22 m outside the wall), the street faces and the lane's bins.
+        shutter(L, "x", 31.78, -0.15, -1, "door", graffiti=True)
+        bins(L, 31.1, -11.6, 1, 2, 2)
+        shutter(L, "z", -12.22, 37.9, -1, "window")
+        shutter(L, "z", -12.22, 44.75, -1, "door")
+        L.on_wall("props/generator", "z", 12.0, 37.2, 1, solid=True, mounted=False)
+        L.on_wall("props/utility_box", "z", 12.0, 39.4, 1, solid=True, mounted=False)
+        L.on_wall("props/power_box", "z", 12.0, 44.5, 1, solid=True, mounted=False)
+        aircon(L, "z", 12.0, 38.4, 1)
+        aircon(L, "z", 12.0, 44.0, 1)
+        # The hall's north face (facade pieces at z = -8.22).
+        shutter(L, "z", -8.22, -3.8, -1, "window")
+        shutter(L, "z", -8.22, 4.8, -1, "door", graffiti=True)
+
+
 def build() -> Level:
     L = Level("Crossroads", "overcast_urban")
     street(L)
@@ -409,6 +452,7 @@ def build() -> Level:
     shops(L)
     cover(L)
     dress(L)
+    street_life(L)
     entities(L)
     return L
 
