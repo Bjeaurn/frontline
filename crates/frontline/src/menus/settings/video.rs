@@ -30,11 +30,12 @@ enum VideoField {
     Ssao,
     Bloom,
     AntiAliasing,
+    ShowFps,
 }
 
 impl VideoField {
     /// In the order of the tab.
-    const ALL: [VideoField; 9] = [
+    const ALL: [VideoField; 10] = [
         VideoField::DisplayMode,
         VideoField::Resolution,
         VideoField::Vsync,
@@ -44,6 +45,7 @@ impl VideoField {
         VideoField::Ssao,
         VideoField::Bloom,
         VideoField::AntiAliasing,
+        VideoField::ShowFps,
     ];
 
     fn caption(self) -> &'static str {
@@ -57,6 +59,7 @@ impl VideoField {
             VideoField::Ssao => "Ambient occlusion",
             VideoField::Bloom => "Bloom",
             VideoField::AntiAliasing => "Anti-aliasing",
+            VideoField::ShowFps => "Show FPS",
         }
     }
 
@@ -81,6 +84,7 @@ impl VideoField {
             VideoField::Ssao => video.quality.ssao.label().to_owned(),
             VideoField::Bloom => on_off(video.quality.bloom).to_owned(),
             VideoField::AntiAliasing => video.quality.aa.label().to_owned(),
+            VideoField::ShowFps => on_off(video.show_fps).to_owned(),
         }
     }
 
@@ -109,6 +113,7 @@ impl VideoField {
             VideoField::AntiAliasing => video.edit_quality(|quality| {
                 quality.aa = step(&AntiAliasing::ALL, quality.aa, dir);
             }),
+            VideoField::ShowFps => video.show_fps = !video.show_fps,
         }
     }
 }
@@ -322,6 +327,7 @@ mod tests {
             VideoField::Ssao,
             VideoField::Bloom,
             VideoField::AntiAliasing,
+            VideoField::ShowFps,
         ] {
             let mut video = VideoSettings::default();
             let mut staged = windowed();

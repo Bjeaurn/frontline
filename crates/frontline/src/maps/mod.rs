@@ -27,6 +27,7 @@ use bevy::asset::AssetPath;
 use bevy::asset::io::file::FileAssetReader;
 use bevy::gltf::GltfPlugin;
 use bevy::image::{CompressedImageFormatSupport, CompressedImageFormats, ImageLoader};
+use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use bevy::world_serialization::{WorldInstanceReady, WorldSerializationPlugin};
 use bevy_trenchbroom::config::{
@@ -51,6 +52,7 @@ use crate::data::{GameData, GameModeId};
 use crate::flow::{AppState, ConnectionError, FlowCommand, MenuScreen};
 use crate::materials::{SurfaceKind, SurfaceLibrary, surface_image_settings};
 use crate::shared::{GameLayer, MatchState, Team};
+use crate::video::{ActiveVideo, ShadowQuality};
 
 /// TrenchBroom units per metre: 1 unit = 1 inch.
 pub const UNITS_PER_METRE: f32 = 39.37008;
@@ -117,8 +119,12 @@ impl Plugin for MapsPlugin {
         if windowed {
             app.add_systems(
                 Update,
-                leave_on_unknown_map.run_if(in_state(AppState::InGame)),
-            );
+                (
+                    leave_on_unknown_map.run_if(in_state(AppState::InGame)),
+                    apply_heavy_prop_shadows,
+                ),
+            )
+            .add_observer(classify_prop_shadows);
         }
     }
 }
@@ -561,35 +567,7 @@ fn build_prop_box(
     let Ok(prop) = props.get(ready.entity) else {
         return;
     };
-    let mut bounds: Option<(Vec3, Vec3)> = None;
-    for node in children.iter_descendants(ready.entity) {
-        let Ok((_, _, Some(mesh))) = nodes.get(node) else {
-            continue;
-        };
-        let Some(positions) = meshes
-            .get(&mesh.0)
-            .and_then(|mesh| mesh.attribute(Mesh::ATTRIBUTE_POSITION))
-            .and_then(|positions| positions.as_float3())
-        else {
-            continue;
-        };
-        // The mesh's transform relative to the prop.
-        let mut to_prop = Transform::IDENTITY;
-        let mut current = node;
-        while current != ready.entity {
-            let Ok((transform, parent, _)) = nodes.get(current) else {
-                break;
-            };
-            to_prop = *transform * to_prop;
-            current = parent.parent();
-        }
-        for &position in positions {
-            let point = to_prop.transform_point(Vec3::from(position));
-            bounds = Some(bounds.map_or((point, point), |(min, max)| {
-                (min.min(point), max.max(point))
-            }));
-        }
-    }
+    let bounds = prop_bounds(ready.entity, &children, &nodes, &meshes);
     let mut entity = commands.entity(ready.entity);
     entity.remove::<(PendingPropBox, PendingPropCollider)>();
     let Some((min, max)) = bounds else {
@@ -605,6 +583,158 @@ fn build_prop_box(
         )]),
         CollisionLayers::new(GameLayer::World, LayerMask::ALL),
     ));
+}
+
+/// The box around every mesh of the spawned model under `root`, in `root`'s space; `None`
+/// when it has no meshes (yet).
+fn prop_bounds(
+    root: Entity,
+    children: &Query<&Children>,
+    nodes: &Query<(&Transform, &ChildOf, Option<&Mesh3d>)>,
+    meshes: &Assets<Mesh>,
+) -> Option<(Vec3, Vec3)> {
+    let mut bounds: Option<(Vec3, Vec3)> = None;
+    for node in children.iter_descendants(root) {
+        let Ok((_, _, Some(mesh))) = nodes.get(node) else {
+            continue;
+        };
+        let Some(positions) = meshes
+            .get(&mesh.0)
+            .and_then(|mesh| mesh.attribute(Mesh::ATTRIBUTE_POSITION))
+            .and_then(|positions| positions.as_float3())
+        else {
+            continue;
+        };
+        // The mesh's transform relative to the prop.
+        let mut to_prop = Transform::IDENTITY;
+        let mut current = node;
+        while current != root {
+            let Ok((transform, parent, _)) = nodes.get(current) else {
+                break;
+            };
+            to_prop = *transform * to_prop;
+            current = parent.parent();
+        }
+        for &position in positions {
+            let point = to_prop.transform_point(Vec3::from(position));
+            bounds = Some(bounds.map_or((point, point), |(min, max)| {
+                (min.min(point), max.max(point))
+            }));
+        }
+    }
+    bounds
+}
+
+/// Props lower than this (m, the model's own up axis) cast no sun shadow: road tiles, road
+/// markings, manhole covers and drains lie flat on the ground, where a shadow can't show.
+const FLAT_PROP_HEIGHT: f32 = 0.15;
+
+/// Props whose longest side is shorter than this (m) cast no sun shadow either: trash bags,
+/// jerrycans and the like are clutter whose shadow nobody misses.
+const SMALL_PROP_SIZE: f32 = 0.6;
+
+/// Whether a prop with model bounds `min`..`max` casts a sun shadow. Each of the sun's
+/// cascades draws every caster again, so flat and small props are left out.
+fn prop_casts_shadow(min: Vec3, max: Vec3) -> bool {
+    let size = (max - min).abs();
+    size.y >= FLAT_PROP_HEIGHT && size.max_element() >= SMALL_PROP_SIZE
+}
+
+/// Props with more triangles than this (the skyline buildings, 18k to 45k each) cast a sun
+/// shadow only at High shadow quality. Every cascade draws a caster again, and on crossroads
+/// these few buildings were three quarters of the whole shadow pass.
+const HEAVY_PROP_TRIANGLES: usize = 10_000;
+
+/// A mesh of a prop over [`HEAVY_PROP_TRIANGLES`]; its sun shadow follows the shadow quality.
+#[derive(Component)]
+struct HeavyPropMesh;
+
+/// Triangles in all meshes of the spawned model under `root`.
+fn prop_triangles(
+    root: Entity,
+    children: &Query<&Children>,
+    nodes: &Query<(&Transform, &ChildOf, Option<&Mesh3d>)>,
+    meshes: &Assets<Mesh>,
+) -> usize {
+    children
+        .iter_descendants(root)
+        .filter_map(|node| nodes.get(node).ok()?.2)
+        .filter_map(|mesh| meshes.get(&mesh.0))
+        .map(|mesh| {
+            mesh.indices()
+                .map_or(mesh.count_vertices(), |indices| indices.len())
+                / 3
+        })
+        .sum()
+}
+
+/// Whether heavy props cast a sun shadow at these Video settings.
+fn heavy_props_cast_shadows(video: Option<&ActiveVideo>) -> bool {
+    video.is_none_or(|video| video.0.quality.shadows == ShadowQuality::High)
+}
+
+/// Sorts a prop's meshes out of the shadow passes once its model has spawned: flat and small
+/// props for good, heavy ones below High shadow quality. Client/Host only: a Dedicated Server
+/// renders nothing.
+fn classify_prop_shadows(
+    ready: On<WorldInstanceReady>,
+    props: Query<(), With<Prop>>,
+    children: Query<&Children>,
+    nodes: Query<(&Transform, &ChildOf, Option<&Mesh3d>)>,
+    meshes: Res<Assets<Mesh>>,
+    video: Option<Res<ActiveVideo>>,
+    mut commands: Commands,
+) {
+    if !props.contains(ready.entity) {
+        return;
+    }
+    let Some((min, max)) = prop_bounds(ready.entity, &children, &nodes, &meshes) else {
+        return;
+    };
+    let heavy = prop_triangles(ready.entity, &children, &nodes, &meshes) > HEAVY_PROP_TRIANGLES;
+    let casts = if !prop_casts_shadow(min, max) {
+        false
+    } else if heavy {
+        heavy_props_cast_shadows(video.as_deref())
+    } else {
+        return;
+    };
+    for node in children.iter_descendants(ready.entity) {
+        if let Ok((_, _, Some(_))) = nodes.get(node) {
+            let mut mesh = commands.entity(node);
+            if heavy {
+                mesh.insert(HeavyPropMesh);
+            }
+            if !casts {
+                mesh.insert(NotShadowCaster);
+            }
+        }
+    }
+}
+
+/// Gives the heavy props' sun shadows back, or takes them away, when the shadow quality
+/// changes.
+/// (MapEdit is windowed but has no Video settings.)
+fn apply_heavy_prop_shadows(
+    video: Option<Res<ActiveVideo>>,
+    meshes: Query<(Entity, Has<NotShadowCaster>), With<HeavyPropMesh>>,
+    mut commands: Commands,
+) {
+    let Some(video) = video.filter(|video| video.is_changed()) else {
+        return;
+    };
+    let casts = heavy_props_cast_shadows(Some(&video));
+    for (entity, not_caster) in &meshes {
+        match (casts, not_caster) {
+            (true, true) => {
+                commands.entity(entity).remove::<NotShadowCaster>();
+            }
+            (false, false) => {
+                commands.entity(entity).insert(NotShadowCaster);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// A server naming a Map this game doesn't have (e.g. a Homage Map without the private
@@ -632,6 +762,7 @@ fn leave_on_unknown_map(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::video::VideoSettings;
 
     fn spawn(team: SpawnTeam, modes: &[&str]) -> MapSpawn {
         MapSpawn {
@@ -667,5 +798,37 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn flat_and_small_props_cast_no_shadow() {
+        // A 6 x 6 m road tile, a few cm thick.
+        assert!(!prop_casts_shadow(
+            Vec3::new(-3.0, 0.0, -3.0),
+            Vec3::new(3.0, 0.02, 3.0)
+        ));
+        // A trash bag.
+        assert!(!prop_casts_shadow(Vec3::ZERO, Vec3::new(0.5, 0.45, 0.4)));
+        // A barrel and a long barrier.
+        assert!(prop_casts_shadow(Vec3::ZERO, Vec3::new(0.6, 0.9, 0.6)));
+        assert!(prop_casts_shadow(Vec3::ZERO, Vec3::new(3.0, 0.8, 0.3)));
+    }
+
+    #[test]
+    fn heavy_props_cast_shadows_only_at_high_shadow_quality() {
+        let mut video = VideoSettings::default();
+        for (shadows, casts) in [
+            (ShadowQuality::Off, false),
+            (ShadowQuality::Low, false),
+            (ShadowQuality::High, true),
+        ] {
+            video.quality.shadows = shadows;
+            assert_eq!(
+                heavy_props_cast_shadows(Some(&ActiveVideo(video.clone()))),
+                casts
+            );
+        }
+        // MapEdit has no Video settings and shows everything.
+        assert!(heavy_props_cast_shadows(None));
     }
 }

@@ -9,7 +9,12 @@
 //! Client/Host only.
 //!
 //! SSAO needs `Msaa::Off`, so world cameras anti-alias in post: FXAA (cheapest) or SMAA, where
-//! TAA would also need motion vectors and ghosts on fast flicks.
+//! TAA would also need motion vectors and ghosts on fast flicks. World cameras always draw a
+//! depth prepass (see `set_quality`).
+//!
+//! Map point lights cost on every pixel in their range and, with shadows, six shadow views a
+//! frame, whatever their intensity: practical lamps a look switches off are hidden, and map
+//! lights only cast the shadows the Map gave them at High shadow quality.
 
 pub(crate) mod sky;
 
@@ -20,7 +25,7 @@ use bevy::anti_alias::smaa::Smaa;
 use bevy::camera::Exposure;
 use bevy::core_pipeline::prepass::{DepthPrepass, NormalPrepass};
 use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::light::{DirectionalLightShadowMap, EnvironmentMapLight, Skybox};
+use bevy::light::{CascadeShadowConfig, DirectionalLightShadowMap, EnvironmentMapLight, Skybox};
 use bevy::pbr::{
     DistanceFog, FogFalloff, ScreenSpaceAmbientOcclusion, ScreenSpaceAmbientOcclusionQualityLevel,
 };
@@ -31,7 +36,7 @@ use bevy::render::view::{ColorGrading, ColorGradingGlobal, ColorGradingSection};
 use serde::Deserialize;
 
 use crate::maps::MapReady;
-use crate::video::{ActiveVideo, AntiAliasing, Quality, SsaoQuality};
+use crate::video::{ActiveVideo, AntiAliasing, Quality, ShadowQuality, SsaoQuality};
 use crate::weapon::ViewmodelCamera;
 
 const LOOKS_FILE: &str = "looks.ron";
@@ -259,6 +264,7 @@ impl Plugin for AtmospherePlugin {
                 Update,
                 (
                     scale_practical_lights,
+                    gate_point_light_shadows,
                     apply_video.run_if(resource_changed::<ActiveVideo>),
                 ),
             );
@@ -273,8 +279,13 @@ fn bloom() -> Bloom {
 }
 
 /// Puts the quality settings' camera effects on a world camera, and takes the off ones away.
-/// SSAO brings its depth and normal prepasses along, so they go with it.
+/// SSAO brings its normal prepass along, so that goes with it. The depth prepass stays at
+/// every setting: Bevy draws opaque meshes in no particular depth order, so without it a long
+/// view down a street shades the buildings behind the near ones too (up to twice per pixel),
+/// and how much varies with the draw order. With it every pixel is shaded once, which measured
+/// about a quarter more frames on the long views where the frame rate dipped.
 fn set_quality(camera: &mut EntityCommands, quality: &Quality) {
+    camera.insert(DepthPrepass);
     if quality.bloom {
         camera.insert(bloom());
     } else {
@@ -294,7 +305,7 @@ fn set_quality(camera: &mut EntityCommands, quality: &Quality) {
             });
         }
         None => {
-            camera.remove::<(ScreenSpaceAmbientOcclusion, DepthPrepass, NormalPrepass)>();
+            camera.remove::<(ScreenSpaceAmbientOcclusion, NormalPrepass)>();
         }
     }
     match quality.aa {
@@ -343,7 +354,7 @@ fn apply_video(
     look: Res<ActiveLook>,
     mut shadow_map: ResMut<DirectionalLightShadowMap>,
     mut cameras: Query<(Entity, &mut ColorGrading, Has<ViewmodelCamera>), With<Camera3d>>,
-    mut suns: Query<&mut DirectionalLight, With<Sun>>,
+    mut suns: Query<(&mut DirectionalLight, &mut CascadeShadowConfig), With<Sun>>,
     mut commands: Commands,
     mut applied: Local<Option<Quality>>,
 ) {
@@ -365,9 +376,12 @@ fn apply_video(
         shadow_map.size = size;
     }
     let shadows = video.quality.shadows.enabled();
-    for mut sun in &mut suns {
+    for (mut sun, mut cascades) in &mut suns {
         if sun.shadow_maps_enabled != shadows {
             sun.shadow_maps_enabled = shadows;
+        }
+        if quality_changed {
+            *cascades = video.quality.shadows.cascades();
         }
     }
 }
@@ -412,7 +426,14 @@ fn apply_map_look(
         ..default()
     });
     let (sun, transform) = look.sun(video.0.quality.shadows.enabled());
-    commands.spawn((Name::new("Sun"), Sun, sun, transform, ChildOf(add.entity)));
+    commands.spawn((
+        Name::new("Sun"),
+        Sun,
+        sun,
+        video.0.quality.shadows.cascades(),
+        transform,
+        ChildOf(add.entity),
+    ));
     let sky = look.environment(&mut images);
     let grading = look.color_grading(video.0.exposure_offset());
     for (entity, viewmodel) in &cameras {
@@ -436,12 +457,21 @@ struct PracticalLight {
 
 /// Scales the Map's practical point lights (`targetname` `practical`) by the look's
 /// `practical_lights`: they take it when they appear and again whenever the look changes.
+/// A lamp scaled to nothing is hidden: a light at zero intensity still costs as much as a lit
+/// one (clustering, every pixel in its range, its shadow maps), and daytime looks switch all
+/// of them off.
 fn scale_practical_lights(
     look: Res<ActiveLook>,
-    mut lights: Query<(Entity, &Name, &mut PointLight, Option<&PracticalLight>)>,
+    mut lights: Query<(
+        Entity,
+        &Name,
+        &mut PointLight,
+        &mut Visibility,
+        Option<&PracticalLight>,
+    )>,
     mut commands: Commands,
 ) {
-    for (entity, name, mut light, practical) in &mut lights {
+    for (entity, name, mut light, mut visibility, practical) in &mut lights {
         let lumens = match practical {
             Some(practical) if look.is_changed() => practical.lumens,
             Some(_) => continue,
@@ -453,6 +483,44 @@ fn scale_practical_lights(
             None => continue,
         };
         light.intensity = lumens * look.0.practical_lights;
+        visibility.set_if_neq(if light.intensity > 0.0 {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
+    }
+}
+
+/// Prefix of the names bevy_trenchbroom gives a Map's point lights.
+const MAP_LIGHT_NAME: &str = "light_point";
+
+/// Whether a Map's point light was authored to cast shadows.
+#[derive(Component)]
+struct AuthoredShadows(bool);
+
+/// Map point lights cast the shadows the Map gave them only at High shadow quality: each one
+/// draws the scene into six cube faces every frame, more than the sun's whole shadow on Low.
+fn gate_point_light_shadows(
+    video: Res<ActiveVideo>,
+    mut lights: Query<(Entity, &Name, &mut PointLight, Option<&AuthoredShadows>)>,
+    mut commands: Commands,
+) {
+    let allowed = video.0.quality.shadows == ShadowQuality::High;
+    for (entity, name, mut light, authored) in &mut lights {
+        let authored = match authored {
+            Some(authored) if video.is_changed() => authored.0,
+            Some(_) => continue,
+            None if name.as_str().starts_with(MAP_LIGHT_NAME) => {
+                let authored = light.shadow_maps_enabled;
+                commands.entity(entity).insert(AuthoredShadows(authored));
+                authored
+            }
+            None => continue,
+        };
+        let enabled = authored && allowed;
+        if light.shadow_maps_enabled != enabled {
+            light.shadow_maps_enabled = enabled;
+        }
     }
 }
 
