@@ -60,6 +60,7 @@ pub(super) fn choose_teams(
                 .insert(PendingRespawn::after_death(
                     time.elapsed(),
                     &state.rule_values,
+                    false,
                 ));
         }
     }

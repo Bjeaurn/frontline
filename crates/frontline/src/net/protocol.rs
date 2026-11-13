@@ -199,20 +199,38 @@ pub struct RequestRespawn;
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ForceRespawn;
 
-/// How a player died, as the kill feed tells it.
+/// How a player died, as the kill feed tells it. `killer_id` is the killer's peer, which the
+/// victim's Kill-cam follows (names need not be unique).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum DeathCause {
     Shot {
         killer: String,
+        killer_id: PeerId,
         weapon: WeaponId,
         headshot: bool,
     },
     /// Fell from too high.
     Fall,
     /// Killed by a Grenade (`GrenadeKind`): blast damage, whoever threw it.
-    Explosive { killer: String, kind: GrenadeKind },
+    Explosive {
+        killer: String,
+        killer_id: PeerId,
+        kind: GrenadeKind,
+    },
     /// Used the pause menu's RESPAWN.
     Respawn,
+}
+
+impl DeathCause {
+    /// The peer who made this kill, if someone did.
+    pub fn killer_id(&self) -> Option<PeerId> {
+        match self {
+            DeathCause::Shot { killer_id, .. } | DeathCause::Explosive { killer_id, .. } => {
+                Some(*killer_id)
+            }
+            DeathCause::Fall | DeathCause::Respawn => None,
+        }
+    }
 }
 
 /// Server -> all clients: a kill-feed line.
@@ -391,7 +409,7 @@ pub(super) fn register(app: &mut App) {
 /// Interpolates between two confirmed poses: linear position and pitch, shortest-arc yaw,
 /// and the stance switches halfway. A jump over `TELEPORT_DISTANCE` is a teleport and lands
 /// on the end pose at once.
-fn lerp_pose(start: PlayerPose, end: PlayerPose, t: f32) -> PlayerPose {
+pub(crate) fn lerp_pose(start: PlayerPose, end: PlayerPose, t: f32) -> PlayerPose {
     if start.position.distance(end.position) > TELEPORT_DISTANCE {
         return end;
     }

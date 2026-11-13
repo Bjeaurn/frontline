@@ -15,6 +15,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use lightyear::prelude::ConfirmedHistory;
 
 use super::controller::EyeCamera;
+use super::killcam::Killcam;
 use super::life::LocalLife;
 use super::soldier::{self, Dresser, Gait, SoldierBones, Soldiers};
 use crate::data::{GameData, STEADY_MAGNIFICATION};
@@ -25,11 +26,11 @@ use crate::shared::{
 };
 
 /// Exponential decay rate (1/s) of the transform toward the pose; higher follows tighter.
-const FOLLOW_RATE: f32 = 20.0;
+pub(super) const FOLLOW_RATE: f32 = 20.0;
 /// The same for the soldier's limbs toward the stance, walk cycle and aim.
-const LIMB_RATE: f32 = 24.0;
+pub(super) const LIMB_RATE: f32 = 24.0;
 /// The same for the speed that drives the walk cycle, so jitter in the pose doesn't flail legs.
-const SPEED_RATE: f32 = 10.0;
+pub(super) const SPEED_RATE: f32 = 10.0;
 /// A revived player shows once its pose is this close to where the server respawned it.
 const SPAWN_REACHED: f32 = 1.0;
 const FRIENDLY_BODY: Color = Color::srgb(0.2, 0.42, 0.85);
@@ -105,7 +106,15 @@ pub struct RemoteDeath {
     pub faction: usize,
 }
 
-fn pose_transform(pose: &PlayerPose) -> Transform {
+impl RemoteVisuals {
+    /// Whether the soldier is drawn: in play and at its spawn. The Kill-cam records this, so its
+    /// replay shows players exactly when they were seen.
+    pub(super) fn shown(&self) -> bool {
+        self.shown
+    }
+}
+
+pub(super) fn pose_transform(pose: &PlayerPose) -> Transform {
     Transform::from_translation(pose.position).with_rotation(Quat::from_rotation_y(pose.yaw))
 }
 
@@ -239,12 +248,15 @@ pub(super) fn attach_remote_visuals(
 /// arrival while the pose only shows once interpolation reaches it. On a Host there is no
 /// interpolation and the pose is already there. Dying sends a `RemoteDeath`. Also poses the
 /// soldier (stance, walk cycle, aim), re-dresses it when its Team's Faction changes and recolours
-/// its team marks when either side's Team changes.
+/// its team marks when either side's Team changes. While the Kill-cam replays, every live soldier
+/// is kept out of sight (its replayed stand-in is drawn instead) but otherwise followed as usual.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn follow_remote_poses(
     time: Res<Time>,
     data: Res<GameData>,
     maps: Res<MapRegistry>,
     life: Res<LocalLife>,
+    killcam: Option<Res<Killcam>>,
     state: Query<&MatchState>,
     mut players: Query<
         (
@@ -265,6 +277,7 @@ pub(super) fn follow_remote_poses(
 ) {
     let dt = time.delta_secs();
     let state = state.single().ok();
+    let replaying = killcam.is_some_and(|killcam| killcam.is_playing());
     for (pose, health, team, history, mut transform, mut visibility, mut visuals) in &mut players {
         let team = team.and_then(|team| team.0);
         let friendly = is_friendly(life.team(), team);
@@ -322,7 +335,7 @@ pub(super) fn follow_remote_poses(
             }
         }
         visuals.shown = shown;
-        visibility.set_if_neq(if shown {
+        visibility.set_if_neq(if shown && !replaying {
             Visibility::Inherited
         } else {
             Visibility::Hidden

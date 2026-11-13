@@ -26,7 +26,7 @@ use crate::particles::{
     Detail, Fade, ParticleAssets, PuffSpec, Shape, random_unit, spawn_puff, spawn_spark,
 };
 use crate::player::input::{Action, Binding, Bindings};
-use crate::player::{ControllerModifiers, EyeCamera, LocalLife, MouseCaptured};
+use crate::player::{ControllerModifiers, EyeCamera, Killcam, LocalLife, MouseCaptured};
 use crate::rear_cue::RearCue;
 use crate::shared::{FromServer, LocalPlayer, PlayerPose, ToServer};
 use crate::ui::{AMBER, TEXT, UiFonts, hud_text};
@@ -333,10 +333,12 @@ fn random_in_ball(rng: &mut WeaponRng) -> Vec3 {
     random_unit(rng) * rng.next().cbrt()
 }
 
-/// A detonation: fireball and bang, flash pop or smoke cloud, where it went off.
+/// A detonation: fireball and bang, flash pop or smoke cloud, where it went off. One the
+/// Kill-cam replays is only seen and heard: it doesn't rattle or daze the dead viewer.
 #[allow(clippy::too_many_arguments)]
 fn on_detonations(
     mut detonations: MessageReader<FromServer<GrenadeDetonated>>,
+    killcam: Res<Killcam>,
     assets: Res<GrenadeAssets>,
     particles: Res<ParticleAssets>,
     look: Res<ActiveLook>,
@@ -385,7 +387,9 @@ fn on_detonations(
                 cue.play(&mut commands, &assets.bang, 2.2, 0.42, at);
                 // The ground jolts under anyone near, and close by it rings in the ears and
                 // whites the view: the blast is felt, not only seen.
-                if let Ok(eye) = eye.single() {
+                if !killcam.is_playing()
+                    && let Ok(eye) = eye.single()
+                {
                     let felt = blast_felt(blast.radius, eye.translation().distance(at));
                     status.rattle(felt.shake);
                     if felt.daze > 0.0 {

@@ -71,6 +71,7 @@ mod tests {
             regen_per_sec: 20.0,
             respawn_delay_secs: 3.0,
             min_respawn_secs: 1.5,
+            killcam_secs: 5.0,
             damage_scale,
             friendly_fire: false,
             fall_damage: FallDamageRules {

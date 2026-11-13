@@ -545,6 +545,10 @@ pub struct MatchRules {
     /// How soon after dying a player may ask to respawn early (never later than
     /// `respawn_delay_secs`; see `early_respawn_secs`).
     pub min_respawn_secs: f32,
+    /// Seconds of the killer's view a player killed by someone else watches before the death
+    /// screen (CONTEXT.md: Kill-cam); 0 turns it off. Their own respawn waits for it.
+    #[serde(default = "default_killcam_secs")]
+    pub killcam_secs: f32,
     pub damage_scale: f32,
     /// Whether bullets hurt teammates (and Killstreaks follow the same rule).
     pub friendly_fire: bool,
@@ -552,10 +556,31 @@ pub struct MatchRules {
     pub hud: HudRules,
 }
 
+/// The Kill-cam length of rule sets saved before it existed.
+fn default_killcam_secs() -> f32 {
+    5.0
+}
+
+/// How long the death screen stays up after a Kill-cam before the player respawns on their
+/// own, so there is time to read who it was.
+pub const KILLCAM_DEATH_SCREEN_SECS: f32 = 1.5;
+
 impl MatchRules {
     /// Seconds after dying before an early respawn is honoured.
     pub fn early_respawn_secs(&self) -> f32 {
         self.min_respawn_secs.min(self.respawn_delay_secs)
+    }
+
+    /// Seconds after dying before a player respawns on their own: the respawn delay, stretched
+    /// when a Kill-cam (`killcam`: someone else killed them) plays first so it can finish with
+    /// the death screen after it.
+    pub fn respawn_wait_secs(&self, killcam: bool) -> f32 {
+        if killcam && self.killcam_secs > 0.0 {
+            self.respawn_delay_secs
+                .max(self.killcam_secs + KILLCAM_DEATH_SCREEN_SECS)
+        } else {
+            self.respawn_delay_secs
+        }
     }
 }
 
@@ -1281,6 +1306,42 @@ mod tests {
             ..rules
         };
         assert_eq!(slow.early_respawn_secs(), slow.respawn_delay_secs);
+    }
+
+    #[test]
+    fn a_kill_cam_stretches_the_respawn_wait_but_not_the_early_respawn() {
+        let rules = MatchRules {
+            respawn_delay_secs: 3.0,
+            min_respawn_secs: 1.5,
+            killcam_secs: 5.0,
+            ..GameData::load().rules("default").clone()
+        };
+        assert_eq!(rules.respawn_wait_secs(false), 3.0);
+        assert_eq!(
+            rules.respawn_wait_secs(true),
+            5.0 + KILLCAM_DEATH_SCREEN_SECS
+        );
+        assert_eq!(rules.early_respawn_secs(), 1.5, "skipping still works");
+        let slow = MatchRules {
+            respawn_delay_secs: 10.0,
+            ..rules.clone()
+        };
+        assert_eq!(slow.respawn_wait_secs(true), 10.0, "never shorter");
+        let off = MatchRules {
+            killcam_secs: 0.0,
+            ..rules
+        };
+        assert_eq!(off.respawn_wait_secs(true), 3.0);
+    }
+
+    #[test]
+    fn rule_sets_saved_before_the_kill_cam_get_the_default_length() {
+        let mut text = ron::ser::to_string(GameData::load().rules("default")).unwrap();
+        let field = text.find("killcam_secs:").expect("serialized");
+        let end = field + text[field..].find(',').unwrap() + 1;
+        text.replace_range(field..end, "");
+        let old: MatchRules = ron::from_str(&text).unwrap();
+        assert_eq!(old.killcam_secs, 5.0);
     }
 
     #[test]

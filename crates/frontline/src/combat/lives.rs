@@ -93,6 +93,7 @@ pub(super) fn apply_falls(
                 hitboxes,
                 &mut stats,
                 Some(pose.position),
+                false,
             );
             info!("\"{}\" fell to their death", name.0);
             announce(&mut feeds, name, DeathCause::Fall);
@@ -162,6 +163,7 @@ pub(super) fn force_respawns(
                 hitboxes,
                 &mut stats,
                 Some(pose.position),
+                false,
             );
             info!("\"{}\" respawned from the pause menu", name.0);
             announce(&mut feeds, name, DeathCause::Respawn);

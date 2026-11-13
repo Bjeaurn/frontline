@@ -22,7 +22,7 @@ use crate::equipment::{
 use crate::gear::EquippedPerks;
 use crate::net::LinkPlayer;
 use crate::net::protocol::{EventChannel, Flashed, GrenadeDetonated, Stunned, ThrowGrenade};
-use crate::shared::{GameLayer, Health, MatchState, PlayerPose, PlayerTeam};
+use crate::shared::{GameLayer, Health, MatchState, PlayerPose, PlayerTeam, ReplayGhost};
 
 /// A Grenade stuck to a player: it goes where they go, `offset` from their feet.
 #[derive(Clone, Copy, Debug)]
@@ -66,7 +66,7 @@ pub(super) fn receive_throws(
     players: Query<(&Health, &PlayerPose)>,
     state: Single<&MatchState>,
     data: Res<GameData>,
-    out: Query<&Grenade>,
+    out: Query<&Grenade, Without<ReplayGhost>>,
     clouds: Query<(), With<CloudTimer>>,
     mut commands: Commands,
 ) {

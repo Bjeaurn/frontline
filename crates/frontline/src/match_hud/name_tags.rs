@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use super::{FRIENDLY_COLOR, is_friendly};
 use crate::data::ActiveRules;
 use crate::flow::AppState;
-use crate::player::{EyeCamera, LocalLife};
+use crate::player::{EyeCamera, Killcam, LocalLife};
 use crate::shared::{PlayerName, PlayerPose, PlayerTeam, RemotePlayer};
 
 const FONT_SIZE: f32 = 14.0;
@@ -61,11 +61,12 @@ pub(super) fn attach_name_tags(
 }
 
 /// Shows each tag over its friendly, on-screen player while that player is drawn (so not while
-/// dead or not yet at its spawn), if the Match Rules show name tags; despawns tags whose
-/// player left.
+/// dead or not yet at its spawn, nor during a Kill-cam), if the Match Rules show name tags;
+/// despawns tags whose player left.
 pub(super) fn place_name_tags(
     rules: ActiveRules,
     life: Res<LocalLife>,
+    killcam: Res<Killcam>,
     camera: Query<(&Camera, &GlobalTransform), With<EyeCamera>>,
     players: Query<
         (&PlayerName, &PlayerPose, &PlayerTeam, Option<&Visibility>),
@@ -80,7 +81,7 @@ pub(super) fn place_name_tags(
     let Ok((camera, eye)) = camera.single() else {
         return;
     };
-    let enabled = rules.get().hud.name_tags;
+    let enabled = rules.get().hud.name_tags && !killcam.is_playing();
     for (tag, NameTag { target }, mut node, mut text, mut visibility) in &mut tags {
         let Ok((name, pose, team, drawn)) = players.get(*target) else {
             commands.entity(tag).despawn();

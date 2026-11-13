@@ -68,6 +68,11 @@ pub struct LocalPlayer;
 #[derive(Component, Debug, Default)]
 pub struct RemotePlayer;
 
+/// A client-side stand-in the Kill-cam replays (a soldier or Grenade from the recording), not
+/// a real player or object: server systems sharing a Host's world leave these alone.
+#[derive(Component, Debug, Default)]
+pub struct ReplayGhost;
+
 /// Current health of a player; the server is the only writer. Dead at `<= 0`.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Reflect)]
 pub struct Health(pub f32);

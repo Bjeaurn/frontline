@@ -16,7 +16,9 @@ use crate::flow::AppState;
 use crate::match_hud::{ENEMY_COLOR, FRIENDLY_COLOR};
 use crate::net::protocol::{BombExploded, ObjectiveHold, PlayerOwner};
 use crate::player::input::Bindings;
-use crate::player::{ControllerModifiers, ControllerSystems, EyeCamera, LocalLife, MouseCaptured};
+use crate::player::{
+    ControllerModifiers, ControllerSystems, EyeCamera, Killcam, LocalLife, MouseCaptured,
+};
 use crate::shared::{
     FromServer, Health, LocalPlayer, LocalPlayerReplica, PlayerName, PlayerPose, PlayerTeam,
     RemotePlayer, Team, ToServer,
@@ -565,11 +567,13 @@ fn animate_blasts(
     }
 }
 
-/// While dead in a live Search & Destroy round, the camera follows a living teammate; a click
-/// switches to the next one.
+/// While dead in a live Search & Destroy round, the camera follows a living teammate (once the
+/// Kill-cam is over); a click switches to the next one.
+#[allow(clippy::too_many_arguments)]
 fn spectate(
     modes: Query<&ModeView>,
     life: Res<LocalLife>,
+    killcam: Res<Killcam>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut spectating: ResMut<Spectating>,
     local: Query<&PlayerPose, With<LocalPlayer>>,
@@ -577,6 +581,7 @@ fn spectate(
     mut camera: Query<&mut Transform, With<EyeCamera>>,
 ) {
     let wanted = life.is_dead()
+        && !killcam.is_playing()
         && matches!(
             modes.single(),
             Ok(ModeView::SearchAndDestroy(sd))

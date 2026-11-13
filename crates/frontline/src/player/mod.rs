@@ -5,6 +5,7 @@ mod corpse;
 mod footsteps;
 mod hud;
 pub mod input;
+mod killcam;
 mod life;
 mod packs;
 mod remote;
@@ -14,8 +15,10 @@ use bevy::prelude::*;
 
 use crate::flow::AppState;
 use crate::maps::map_ready;
+use crate::net::FromServerSystems;
 
 pub use controller::{ControllerModifiers, EyeCamera, MenuOpen, Motor, MouseCaptured, PITCH_LIMIT};
+pub use killcam::Killcam;
 pub use life::LocalLife;
 pub use remote::RemoteDeath;
 
@@ -35,7 +38,8 @@ pub enum ControllerSystems {
 }
 
 /// Spawns the `LocalPlayer` with a first-person camera when a game starts and drives it from
-/// keyboard and mouse. Client and Host only. Movement tuning lives in `data/movement.ron`.
+/// keyboard and mouse, and plays the Kill-cam when someone else kills it. Client and Host only.
+/// Movement tuning lives in `data/movement.ron`.
 pub struct LocalControllerPlugin;
 
 impl Plugin for LocalControllerPlugin {
@@ -45,6 +49,9 @@ impl Plugin for LocalControllerPlugin {
             .init_resource::<controller::StanceShapes>()
             .init_resource::<LocalLife>()
             .init_resource::<hud::PendingKillFeed>()
+            .init_resource::<Killcam>()
+            .init_resource::<killcam::History>()
+            .init_resource::<killcam::Stage>()
             .configure_sets(
                 Update,
                 (
@@ -56,17 +63,27 @@ impl Plugin for LocalControllerPlugin {
             )
             .add_systems(
                 OnEnter(AppState::InGame),
-                (controller::spawn_local_player, hud::spawn_hud),
+                (
+                    controller::spawn_local_player,
+                    hud::spawn_hud,
+                    killcam::spawn_killcam_screen,
+                ),
             )
             .add_systems(
                 OnExit(AppState::InGame),
-                (life::reset_life, hud::reset_kill_feed),
+                (
+                    life::reset_life,
+                    hud::reset_kill_feed,
+                    killcam::reset_killcam,
+                ),
             )
+            .add_systems(PreUpdate, killcam::feed_events.after(FromServerSystems))
             .add_systems(
                 Update,
                 (
                     (
                         life::track_life,
+                        killcam::track_killcam,
                         life::request_respawn,
                         controller::apply_respawn,
                         controller::grab_cursor,
@@ -89,6 +106,9 @@ impl Plugin for LocalControllerPlugin {
                         hud::add_kill_feed_lines,
                         hud::fade_kill_feed,
                         hud::update_death_screen,
+                        killcam::record_poses.after(remote::follow_remote_poses),
+                        killcam::play_killcam.after(controller::apply_horizontal_fov),
+                        killcam::update_killcam_screen,
                     )
                         .after(ControllerSystems::View),
                 ),

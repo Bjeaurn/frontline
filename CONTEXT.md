@@ -51,8 +51,12 @@ The tunable survival and HUD settings of a **Match**, such as max health, health
 _Avoid_: Ruleset, game settings, mutators
 
 **Hardcore**:
-A named **Match Rules** preset with low health, no regen and a minimal HUD, applicable to any **Game Mode**.
+A named **Match Rules** preset with low health, no regen, no **Kill-cam** and a minimal HUD, applicable to any **Game Mode**.
 _Avoid_: Hardcore mode
+
+**Kill-cam**:
+What a player killed by another player watches before the death screen: the last few seconds before the death (the **Match Rules**' `killcam_secs`, 5 by default, none in **Hardcore**) replayed through the killer's eyes, ending on the kill. Each client records what it showed and replays that; the server keeps no history. It can be skipped, and the player's own respawn waits for it.
+_Avoid_: Death cam, replay, final killcam
 
 **Custom rule set**:
 A named **Match Rules** set a **Host** makes by copying a preset in the rules editor and changing its values. It is saved on the Host's machine, selectable per **Rotation entry**, and its values reach the clients with the Match, so they need no copy of it. The built-in presets stay read-only.
