@@ -15,7 +15,9 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::ecs::system::SystemParam;
+use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder};
 use bevy::prelude::*;
 use bevy::window::{
     Monitor, MonitorSelection, OnMonitor, PresentMode, PrimaryMonitor, PrimaryWindow,
@@ -61,9 +63,9 @@ impl DisplayMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ShadowQuality {
     Off,
-    /// 1024 px sun shadow map.
+    /// 1024 px sun shadow map, 2 cascades out to 60 m.
     Low,
-    /// 2048 px sun shadow map.
+    /// 2048 px sun shadow map, 3 cascades out to 120 m.
     High,
 }
 
@@ -89,6 +91,23 @@ impl ShadowQuality {
             ShadowQuality::Off | ShadowQuality::Low => 1024,
             ShadowQuality::High => 2048,
         }
+    }
+
+    /// How the sun splits its shadow over distance. Every cascade draws every shadow caster
+    /// again, so this is most of the shadow cost; Bevy's default (4 cascades to 150 m) is more
+    /// than the Maps' fog lets anyone see.
+    pub fn cascades(self) -> CascadeShadowConfig {
+        let (num_cascades, maximum_distance) = match self {
+            ShadowQuality::Off | ShadowQuality::Low => (2, 60.0),
+            ShadowQuality::High => (3, 120.0),
+        };
+        CascadeShadowConfigBuilder {
+            num_cascades,
+            maximum_distance,
+            first_cascade_far_bound: 12.0,
+            ..default()
+        }
+        .build()
     }
 }
 
@@ -156,10 +175,11 @@ impl Quality {
         bloom: false,
         aa: AntiAliasing::Off,
     };
-    /// What the game looked like before the video settings existed.
+    /// SSAO is the costliest effect here (it brings depth and normal prepasses along), so the
+    /// default keeps it at Low.
     const MEDIUM: Quality = Quality {
         shadows: ShadowQuality::High,
-        ssao: SsaoQuality::Medium,
+        ssao: SsaoQuality::Low,
         bloom: true,
         aa: AntiAliasing::Fxaa,
     };
@@ -265,6 +285,8 @@ pub struct VideoSettings {
     pub quality: Quality,
     /// 1.0 is the Map's own look; scales the exposure.
     pub brightness: f32,
+    /// Frame rate and frame time in the top-right corner.
+    pub show_fps: bool,
 }
 
 impl Default for VideoSettings {
@@ -277,6 +299,7 @@ impl Default for VideoSettings {
             preset: QualityPreset::Medium,
             quality: Quality::MEDIUM,
             brightness: 1.0,
+            show_fps: false,
         }
     }
 }
@@ -464,6 +487,77 @@ impl Plugin for VideoPlugin {
             ),
         );
         app.add_systems(Last, limit_frame_rate);
+        if !app.is_plugin_added::<FrameTimeDiagnosticsPlugin>() {
+            app.add_plugins(FrameTimeDiagnosticsPlugin::default());
+        }
+        // Profiling aid: `FRONTLINE_PERF_LOG=1` logs the frame time and every render pass's GPU
+        // time and pipeline statistics every few seconds.
+        if std::env::var_os("FRONTLINE_PERF_LOG").is_some() {
+            app.add_plugins((
+                bevy::render::diagnostic::RenderDiagnosticsPlugin,
+                bevy::diagnostic::LogDiagnosticsPlugin {
+                    wait_duration: Duration::from_secs(3),
+                    ..default()
+                },
+            ));
+        }
+        app.add_systems(Startup, spawn_fps_counter)
+            .add_systems(Update, show_fps_counter);
+    }
+}
+
+/// The Show FPS readout.
+#[derive(Component)]
+struct FpsCounter;
+
+fn spawn_fps_counter(fonts: Res<crate::ui::UiFonts>, mut commands: Commands) {
+    commands.spawn((
+        Name::new("FpsCounter"),
+        FpsCounter,
+        crate::ui::hud_text(&fonts.regular, "", 16.0, Color::srgb(0.6, 1.0, 0.6)),
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(4.0),
+            right: px(8.0),
+            ..default()
+        },
+        GlobalZIndex(100),
+        Visibility::Hidden,
+    ));
+}
+
+/// Shows the smoothed frame rate and frame time a few times a second while Show FPS is on.
+fn show_fps_counter(
+    video: Res<ActiveVideo>,
+    diagnostics: Res<DiagnosticsStore>,
+    time: Res<Time<Real>>,
+    mut since_update: Local<f32>,
+    mut counter: Query<(&mut Text, &mut Visibility), With<FpsCounter>>,
+) {
+    let Ok((mut text, mut visibility)) = counter.single_mut() else {
+        return;
+    };
+    let shown = if video.0.show_fps {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    visibility.set_if_neq(shown);
+    *since_update += time.delta_secs();
+    if !video.0.show_fps || *since_update < 0.25 {
+        return;
+    }
+    *since_update = 0.0;
+    let smoothed = |path| {
+        diagnostics
+            .get(path)
+            .and_then(|diagnostic| diagnostic.smoothed())
+    };
+    if let (Some(fps), Some(ms)) = (
+        smoothed(&FrameTimeDiagnosticsPlugin::FPS),
+        smoothed(&FrameTimeDiagnosticsPlugin::FRAME_TIME),
+    ) {
+        text.0 = format!("{fps:.0} FPS  {ms:.1} ms");
     }
 }
 
