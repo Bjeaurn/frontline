@@ -30,6 +30,11 @@ use crate::weapon::Kit;
 
 pub(super) struct ClientNetPlugin;
 
+/// The systems (in `PreUpdate`) that turn received server messages into `FromServer<M>`;
+/// whatever needs to see or change those messages before `Update` reads them runs after it.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FromServerSystems;
+
 impl Plugin for ClientNetPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<FromServer<HitConfirm>>()
@@ -75,6 +80,7 @@ impl Plugin for ClientNetPlugin {
                     forward_from_server::<Flashed>,
                     forward_from_server::<Stunned>,
                 )
+                    .in_set(FromServerSystems)
                     .after(MessageSystems::Receive),
             )
             .add_systems(

@@ -5,6 +5,9 @@
 // presets are the read-only starting points.
 // `respawn_delay_secs` is how long a dead player waits before respawning by themselves;
 // `min_respawn_secs` is how soon they may ask to respawn early (SPACE or click).
+// `killcam_secs` is how long the Kill-cam (the killer's view up to the kill) plays for a player
+// killed by someone else, 0 for none; their respawn waits for it (plus 1.5 s of death screen).
+// Hardcore has none; a custom set copied from it can switch it on in the rules editor.
 // `fall_damage`: no damage up to `min_height` metres of fall (from the peak), then linear up to
 // a lethal fall of `max_height`.
 {
@@ -14,6 +17,7 @@
         regen_per_sec: 40.0,
         respawn_delay_secs: 3.0,
         min_respawn_secs: 1.5,
+        killcam_secs: 5.0,
         damage_scale: 1.0,
         friendly_fire: false,
         fall_damage: (min_height: 4.5, max_height: 12.0),
@@ -33,6 +37,7 @@
         regen_per_sec: 0.0,
         respawn_delay_secs: 3.0,
         min_respawn_secs: 1.5,
+        killcam_secs: 0.0,
         damage_scale: 1.0,
         friendly_fire: true,
         fall_damage: (min_height: 3.5, max_height: 8.0),

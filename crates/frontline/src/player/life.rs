@@ -2,11 +2,13 @@
 //! died last, and the request to respawn early.
 
 use bevy::prelude::*;
+use lightyear::prelude::PeerId;
 
 use super::controller::MenuOpen;
+use super::killcam::Killcam;
 use crate::data::{ActiveRules, MatchRules};
 use crate::modes::{ModeView, SdPhaseView};
-use crate::net::protocol::{DeathCause, KillFeed, RequestRespawn};
+use crate::net::protocol::{DeathCause, KillFeed, PlayerOwner, RequestRespawn};
 use crate::shared::{
     FromServer, Health, LocalPlayer, LocalPlayerReplica, PlayerName, PlayerTeam, Team, ToServer,
 };
@@ -27,6 +29,8 @@ pub struct LocalLife {
     last_cause: Option<(DeathCause, f64)>,
     /// When we last switched from one Team to the other.
     switched_at: Option<f64>,
+    /// Our own peer, once our server Player has been replicated.
+    peer: Option<PeerId>,
 }
 
 impl LocalLife {
@@ -54,6 +58,24 @@ impl LocalLife {
         now - self.died_at
     }
 
+    /// `Time::elapsed_secs_f64` of the latest death.
+    pub fn died_at(&self) -> f64 {
+        self.died_at
+    }
+
+    /// Our own peer, once known.
+    pub fn peer(&self) -> Option<PeerId> {
+        self.peer
+    }
+
+    /// Who killed us this death, if it was someone else (not a fall, a suicide or a team
+    /// switch): the deaths that play a Kill-cam.
+    pub fn killer(&self) -> Option<PeerId> {
+        self.cause()
+            .and_then(DeathCause::killer_id)
+            .filter(|&killer| Some(killer) != self.peer)
+    }
+
     /// How we died this death, if the kill-feed line has arrived.
     pub fn cause(&self) -> Option<&DeathCause> {
         self.last_cause
@@ -79,9 +101,10 @@ pub(super) fn track_life(
     mut life: ResMut<LocalLife>,
     mut feed: MessageReader<FromServer<KillFeed>>,
     me: Query<&PlayerName, With<LocalPlayer>>,
-    replica: Query<(&Health, &PlayerTeam), With<LocalPlayerReplica>>,
+    replica: Query<(&Health, &PlayerTeam, &PlayerOwner), With<LocalPlayerReplica>>,
 ) {
     let now = time.elapsed_secs_f64();
+    life.peer = replica.single().ok().map(|(.., owner)| owner.0);
     if let Ok(me) = me.single() {
         for FromServer(line) in feed.read() {
             if line.victim == me.0 {
@@ -91,7 +114,7 @@ pub(super) fn track_life(
     }
     let (health_dead, team) = replica
         .single()
-        .map_or((true, None), |(health, team)| (health.is_dead(), team.0));
+        .map_or((true, None), |(health, team, _)| (health.is_dead(), team.0));
     if team != life.team {
         if life.team.is_some() && team.is_some() {
             life.switched_at = Some(now);
@@ -137,18 +160,24 @@ pub(super) fn can_request_respawn(
         && life.secs_dead(now) >= f64::from(rules.early_respawn_secs())
 }
 
-/// SPACE or a click asks the server to respawn once the death screen offers it.
+/// SPACE or a click asks the server to respawn once the death screen offers it. Not while a
+/// Kill-cam plays, nor with the press that skipped it.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn request_respawn(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     menu: Res<MenuOpen>,
+    killcam: Res<Killcam>,
     life: Res<LocalLife>,
     rules: ActiveRules,
     modes: Query<&ModeView>,
     mut requests: MessageWriter<ToServer<RequestRespawn>>,
 ) {
-    if menu.0 || !(keys.just_pressed(KeyCode::Space) || mouse.just_pressed(MouseButton::Left)) {
+    if menu.0
+        || killcam.holds_respawn_input()
+        || !(keys.just_pressed(KeyCode::Space) || mouse.just_pressed(MouseButton::Left))
+    {
         return;
     }
     if can_request_respawn(

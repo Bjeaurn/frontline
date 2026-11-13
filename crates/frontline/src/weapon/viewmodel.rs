@@ -5,7 +5,7 @@
 //! pulls the magazine and seats a new one, rolls while a bolt is worked, angles down and across
 //! while sprinting (raising back as the sprint-out ends), drops during a mantle, lowers for a
 //! Grenade throw (the right hand winds up with the Grenade) and hides while looking through a
-//! scope.
+//! scope. During a Kill-cam the killer's gun takes its place (`ReplayViewmodel`).
 
 use std::collections::HashMap;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
@@ -112,7 +112,8 @@ pub(super) struct ViewmodelPlugin;
 
 impl Plugin for ViewmodelPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(attach_viewmodel)
+        app.init_resource::<ReplayViewmodel>()
+            .add_observer(attach_viewmodel)
             .add_observer(scene_ready)
             .add_systems(Startup, create_gun_materials)
             .add_systems(OnEnter(AppState::InGame), spawn_viewmodel_light)
@@ -123,6 +124,7 @@ impl Plugin for ViewmodelPlugin {
                     build_gun,
                     // The gloves are made with the gun: the menu backdrop has neither.
                     animate_viewmodel.run_if(resource_exists::<GloveMeshes>),
+                    show_replay_gun,
                 )
                     .chain()
                     .after(WeaponSystems)
@@ -1148,6 +1150,125 @@ fn build_gun(
     anim.left_rest = Some(left_rest);
     for mut transform in &mut flash {
         transform.translation = muzzle;
+    }
+}
+
+/// What the Kill-cam wants drawn on the viewmodel layer while the local gun is down (the player
+/// is dead): the killer's Weapon, as issued (whose Attachments nobody else knows), whether they
+/// were looking through a scope (then nothing shows) and how many of their shots it has replayed
+/// so far (each one kicks the gun).
+#[derive(Resource, Default, Debug, Clone, PartialEq)]
+pub struct ReplayViewmodel {
+    pub weapon: Option<WeaponId>,
+    pub scoped: bool,
+    pub shots: u32,
+}
+
+/// The killer's gun under the viewmodel camera during a Kill-cam: the Weapon built, the shots
+/// it has kicked for and the kick left.
+#[derive(Component, Debug)]
+struct ReplayGun {
+    weapon: WeaponId,
+    shots: u32,
+    kick: f32,
+}
+
+/// Builds, kicks and removes the killer's gun (`ReplayGun`) as `ReplayViewmodel` says: held at
+/// the hip without arms, kicking back on every replayed shot.
+#[allow(clippy::too_many_arguments)]
+fn show_replay_gun(
+    time: Res<Time>,
+    replay: Res<ReplayViewmodel>,
+    data: Res<GameData>,
+    settings: Res<Settings>,
+    materials: Res<GunMaterials>,
+    assets: Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    camera: Query<Entity, With<ViewmodelCamera>>,
+    mut guns: Query<(Entity, &mut ReplayGun, &mut Transform, &mut Visibility)>,
+    mut commands: Commands,
+) {
+    let mirrored = settings.handedness == Handedness::Left;
+    let mut built = guns.single_mut().ok();
+    if let Some((entity, gun, ..)) = &built
+        && replay.weapon != Some(gun.weapon)
+    {
+        commands.entity(*entity).despawn();
+        built = None;
+    }
+    let Some(weapon) = replay.weapon else {
+        return;
+    };
+    let Some((_, mut gun, mut transform, mut visibility)) = built else {
+        let Ok(camera) = camera.single() else {
+            return;
+        };
+        let stats = data.weapon(weapon);
+        let rig = rig::gun_rig(stats.model);
+        let root = commands
+            .spawn((
+                Name::new("ReplayGun"),
+                ReplayGun {
+                    weapon,
+                    shots: replay.shots,
+                    kick: 0.0,
+                },
+                replay_gun_transform(0.0, mirrored),
+                Visibility::Hidden,
+                ChildOf(camera),
+            ))
+            .id();
+        for (mesh, furniture, transform) in sight_parts(&rig, stats) {
+            commands.spawn((
+                Mesh3d(meshes.add(mesh)),
+                MeshMaterial3d(materials.get(furniture, mirrored)),
+                transform,
+                viewmodel_layer(),
+                NotShadowCaster,
+                ChildOf(root),
+            ));
+        }
+        let scene = assets
+            .load(AssetPath::from(format!("{EMBEDDED_ROOT}{}", rig.file)).with_label("Scene0"));
+        commands.spawn((
+            ViewScene {
+                camo: NO_CAMO.to_owned(),
+                mirrored,
+                bare: rig.bare,
+                magazine: rig.magazine,
+                ads_hidden: rig.ads_hidden,
+                removed: if matches!(stats.sight, SightKind::Irons) {
+                    &[]
+                } else {
+                    rig.optic_hidden
+                },
+            },
+            WorldAssetRoot(scene),
+            rig.model_transform(),
+            Visibility::default(),
+            ChildOf(root),
+        ));
+        return;
+    };
+    let fresh = replay.shots.saturating_sub(gun.shots);
+    gun.shots = replay.shots;
+    gun.kick = (gun.kick + fresh as f32).min(KICK_MAX) * (-KICK_DECAY * time.delta_secs()).exp();
+    *transform = replay_gun_transform(gun.kick, mirrored);
+    visibility.set_if_neq(if replay.scoped {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    });
+}
+
+/// Where the replayed gun sits at the hip with `kick` of kick on it.
+fn replay_gun_transform(kick: f32, mirrored: bool) -> Transform {
+    let right_handed = Transform::from_translation(HIP_OFFSET + Vec3::Z * KICK_BACK * kick)
+        .with_rotation(Quat::from_rotation_x(KICK_PITCH * kick));
+    if mirrored {
+        rig::mirror_solid(right_handed)
+    } else {
+        right_handed
     }
 }
 

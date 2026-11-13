@@ -12,7 +12,7 @@ mod trigger;
 mod viewmodel;
 
 pub use hud::EquipmentRows;
-pub use viewmodel::ViewmodelCamera;
+pub use viewmodel::{ReplayViewmodel, ViewmodelCamera};
 
 use std::collections::HashMap;
 use std::f32::consts::TAU;

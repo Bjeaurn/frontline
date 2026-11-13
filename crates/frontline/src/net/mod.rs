@@ -19,6 +19,7 @@ use lightyear::prelude::Server;
 use lightyear::prelude::server::Started;
 
 pub use chat::{MAX_CHAT_CHARS, SystemChat};
+pub use client::FromServerSystems;
 pub use server::LinkPlayer;
 
 use crate::cli::Mode;

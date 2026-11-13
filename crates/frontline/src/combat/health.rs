@@ -50,11 +50,12 @@ impl PendingRespawn {
         Self { at, earliest: at }
     }
 
-    /// The wait after a death at `now`: the Match Rules' respawn delay, which the player can cut
-    /// short after `min_respawn_secs`.
-    pub(super) fn after_death(now: Duration, rules: &MatchRules) -> Self {
+    /// The wait after a death at `now`: the Match Rules' respawn delay (longer when `killcam`,
+    /// someone else's kill, plays a Kill-cam first), which the player can cut short after
+    /// `min_respawn_secs`.
+    pub(super) fn after_death(now: Duration, rules: &MatchRules, killcam: bool) -> Self {
         Self {
-            at: now + Duration::from_secs_f32(rules.respawn_delay_secs),
+            at: now + Duration::from_secs_f32(rules.respawn_wait_secs(killcam)),
             earliest: now + Duration::from_secs_f32(rules.early_respawn_secs()),
         }
     }
@@ -71,7 +72,8 @@ impl PendingRespawn {
 
 /// Ends the life of `entity`, whoever or whatever caused it: its ammo pack drops, the death is
 /// counted, its hitboxes go off and it waits to respawn (Search & Destroy has no respawns: the
-/// dead wait for the next round, which sends everyone back). The caller zeroes `Health` and
+/// dead wait for the next round, which sends everyone back). `killcam`: someone else made the
+/// kill, so the victim watches a Kill-cam before respawning. The caller zeroes `Health` and
 /// announces the death.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn end_life(
@@ -83,6 +85,7 @@ pub(super) fn end_life(
     hitboxes: &Hitboxes,
     stats: &mut PlayerStats,
     position: Option<Vec3>,
+    killcam: bool,
 ) {
     if let Some(position) = position {
         drop_ammo_pack(commands, data, time, position);
@@ -93,6 +96,7 @@ pub(super) fn end_life(
         commands.entity(entity).insert(PendingRespawn::after_death(
             time.elapsed(),
             &state.rule_values,
+            killcam,
         ));
     }
 }
@@ -151,6 +155,7 @@ pub(super) fn apply_hits(
     data: Res<GameData>,
     perks: Query<&EquippedPerks>,
     poses: Query<&PlayerPose>,
+    owners: Query<&PlayerOwner>,
     mut ledgers: Query<&mut DamageLedger>,
     mut chains: Query<&mut KillChain>,
     mut xp: XpOut,
@@ -184,6 +189,9 @@ pub(super) fn apply_hits(
         if health.is_dead() {
             continue;
         }
+        let Ok(&PlayerOwner(killer_id)) = owners.get(hit.shooter) else {
+            continue;
+        };
         let enemy = hit.shooter != hit.victim && shooter_team != victim_team.0;
         if !enemy && hit.shooter != hit.victim && !rules.friendly_fire {
             debug!(
@@ -219,6 +227,7 @@ pub(super) fn apply_hits(
                 ),
                 DeathCause::Shot {
                     killer: shooter_name.clone(),
+                    killer_id,
                     weapon,
                     headshot: zone == HitZone::Head,
                 },
@@ -236,6 +245,7 @@ pub(super) fn apply_hits(
                 format!("with a {kind:?} blast"),
                 DeathCause::Explosive {
                     killer: shooter_name.clone(),
+                    killer_id,
                     kind,
                 },
                 XpReason::Explosive,
@@ -274,6 +284,7 @@ pub(super) fn apply_hits(
             hitboxes,
             &mut stats,
             poses.get(hit.victim).ok().map(|pose| pose.position),
+            hit.shooter != hit.victim,
         );
         let feed = KillFeed {
             victim: victim_name.0.clone(),

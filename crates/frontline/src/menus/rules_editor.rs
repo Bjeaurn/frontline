@@ -25,6 +25,8 @@ const READOUT_WIDTH: f32 = 90.0;
 const LIST_WIDTH: f32 = 220.0;
 /// Rate a regen switched on starts at when the set had none.
 const DEFAULT_REGEN_RATE: f32 = 40.0;
+/// Length a Kill-cam switched on starts at when the set had none.
+const DEFAULT_KILLCAM_SECS: f32 = 5.0;
 
 /// Where the editor was opened from, and so where DONE and BACK return to.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -87,6 +89,8 @@ enum Field {
     RegenRate,
     RespawnDelay,
     MinRespawn,
+    Killcam,
+    KillcamLength,
     DamageScale,
     FriendlyFire,
     FallMin,
@@ -106,13 +110,15 @@ enum Control {
 }
 
 impl Field {
-    const SURVIVAL: [Field; 10] = [
+    const SURVIVAL: [Field; 12] = [
         Field::MaxHealth,
         Field::Regen,
         Field::RegenDelay,
         Field::RegenRate,
         Field::RespawnDelay,
         Field::MinRespawn,
+        Field::Killcam,
+        Field::KillcamLength,
         Field::DamageScale,
         Field::FriendlyFire,
         Field::FallMin,
@@ -136,6 +142,8 @@ impl Field {
             Field::RegenRate => "Regen rate",
             Field::RespawnDelay => "Respawn delay",
             Field::MinRespawn => "Min respawn",
+            Field::Killcam => "Kill-cam",
+            Field::KillcamLength => "Kill-cam length",
             Field::DamageScale => "Damage scale",
             Field::FriendlyFire => "Friendly fire",
             Field::FallMin => "Fall dmg from",
@@ -157,11 +165,13 @@ impl Field {
             Field::RegenDelay | Field::RespawnDelay | Field::MinRespawn | Field::KillFeedDelay => {
                 slider(0.0, 15.0, 0.5)
             }
+            Field::KillcamLength => slider(1.0, 10.0, 0.5),
             Field::RegenRate => slider(5.0, 200.0, 5.0),
             Field::DamageScale => slider(0.25, 3.0, 0.05),
             Field::FallMin => slider(1.0, 20.0, 0.5),
             Field::FallMax => slider(2.0, 40.0, 0.5),
             Field::Regen
+            | Field::Killcam
             | Field::FriendlyFire
             | Field::Crosshair
             | Field::Hitmarkers
@@ -182,6 +192,8 @@ impl Field {
             Field::RegenRate => rules.regen_per_sec,
             Field::RespawnDelay => rules.respawn_delay_secs,
             Field::MinRespawn => rules.min_respawn_secs,
+            Field::Killcam => flag(rules.killcam_secs > 0.0),
+            Field::KillcamLength => rules.killcam_secs,
             Field::DamageScale => rules.damage_scale,
             Field::FriendlyFire => flag(rules.friendly_fire),
             Field::FallMin => rules.fall_damage.min_height,
@@ -216,6 +228,14 @@ impl Field {
                 rules.min_respawn_secs = rules.min_respawn_secs.min(value);
             }
             Field::MinRespawn => rules.min_respawn_secs = value.min(rules.respawn_delay_secs),
+            Field::Killcam => {
+                if !on {
+                    rules.killcam_secs = 0.0;
+                } else if rules.killcam_secs <= 0.0 {
+                    rules.killcam_secs = DEFAULT_KILLCAM_SECS;
+                }
+            }
+            Field::KillcamLength => rules.killcam_secs = value,
             Field::DamageScale => rules.damage_scale = value,
             Field::FriendlyFire => rules.friendly_fire = on,
             Field::FallMin => {
@@ -241,12 +261,18 @@ impl Field {
             Field::MaxHealth => format!("{value:.0} HP"),
             Field::RegenRate if value <= 0.0 => "off".to_owned(),
             Field::RegenRate => format!("{value:.0} HP/s"),
-            Field::RegenDelay | Field::RespawnDelay | Field::MinRespawn | Field::KillFeedDelay => {
+            Field::KillcamLength if value <= 0.0 => "off".to_owned(),
+            Field::RegenDelay
+            | Field::RespawnDelay
+            | Field::MinRespawn
+            | Field::KillcamLength
+            | Field::KillFeedDelay => {
                 format!("{value:.1} s")
             }
             Field::DamageScale => format!("x{value:.2}"),
             Field::FallMin | Field::FallMax => format!("{value:.1} m"),
             Field::Regen
+            | Field::Killcam
             | Field::FriendlyFire
             | Field::Crosshair
             | Field::Hitmarkers
@@ -778,6 +804,17 @@ mod tests {
         assert_eq!(Field::Regen.get(&rules), 0.0);
         Field::Regen.set(&mut rules, 1.0);
         assert_eq!(rules.regen_per_sec, DEFAULT_REGEN_RATE);
+        Field::Killcam.set(&mut rules, 0.0);
+        assert_eq!(rules.killcam_secs, 0.0);
+        assert_eq!(Field::Killcam.get(&rules), 0.0);
+        Field::Killcam.set(&mut rules, 1.0);
+        assert_eq!(rules.killcam_secs, DEFAULT_KILLCAM_SECS);
+        Field::KillcamLength.set(&mut rules, 8.0);
+        Field::Killcam.set(&mut rules, 1.0);
+        assert_eq!(
+            rules.killcam_secs, 8.0,
+            "switching on again keeps the length"
+        );
         assert_eq!(rules.validate(), Ok(()));
     }
 

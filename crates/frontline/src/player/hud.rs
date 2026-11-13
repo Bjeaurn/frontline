@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::text::LetterSpacing;
 
+use super::killcam::Killcam;
 use super::life::{LocalLife, can_request_respawn, respawn_hold};
 use crate::data::{ActiveRules, GameData};
 use crate::flow::AppState;
@@ -327,10 +328,12 @@ pub(super) fn spawn_hud(
 }
 
 /// Dark-red screen edges and blood splatter that deepen with missing health, flash on every
-/// hit and throb at low health; none while still choosing a Team.
+/// hit and throb at low health; none while still choosing a Team or watching the Kill-cam.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn update_damage_vignette(
     time: Res<Time>,
     rules: ActiveRules,
+    killcam: Res<Killcam>,
     replica: Query<(&Health, &PlayerTeam, Option<&EquippedPerks>), With<LocalPlayerReplica>>,
     data: Res<GameData>,
     mut damaged: MessageReader<FromServer<Damaged>>,
@@ -346,6 +349,11 @@ pub(super) fn update_damage_vignette(
     *flash = (*flash + hit_flash / FLASH_DAMAGE).min(1.0);
     *flash = (*flash - FLASH_DECAY_PER_SEC * time.delta_secs()).max(0.0);
     let missing = match replica.single() {
+        // The Kill-cam shows the killer's view: none of our own wounds on it.
+        _ if killcam.is_playing() => {
+            *flash = 0.0;
+            0.0
+        }
         Ok((health, team, perks)) if team.0.is_some() => {
             // Juggernaut raises the maximum; the server replicates the Perks.
             let max_health = perks
@@ -565,12 +573,13 @@ pub(super) fn add_kill_feed_lines(
                         killer,
                         weapon,
                         headshot,
+                        ..
                     } => (
                         killer,
                         data.weapon(*weapon).name.clone(),
                         if *headshot { "   HEADSHOT" } else { "" },
                     ),
-                    DeathCause::Explosive { killer, kind } => {
+                    DeathCause::Explosive { killer, kind, .. } => {
                         (killer, data.grenade(*kind).name.clone(), "")
                     }
                     _ => unreachable!("matched above"),
@@ -646,17 +655,20 @@ pub(super) fn fade_kill_feed(
     }
 }
 
-/// Shown while dead; not while still choosing a Team.
+/// Shown while dead; not while still choosing a Team, nor while the Kill-cam plays (it has a
+/// screen of its own).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn update_death_screen(
     time: Res<Time>,
     rules: ActiveRules,
     data: Res<GameData>,
     life: Res<LocalLife>,
+    killcam: Res<Killcam>,
     modes: Query<&ModeView>,
     mut screen: Single<&mut Visibility, With<DeathScreen>>,
     mut lines: Query<(&DeathLine, &mut Text)>,
 ) {
-    let shown = life.is_dead() && life.team().is_some();
+    let shown = life.is_dead() && life.team().is_some() && !killcam.is_playing();
     screen.set_if_neq(if shown {
         Visibility::Inherited
     } else {
@@ -671,6 +683,7 @@ pub(super) fn update_death_screen(
             killer,
             weapon,
             headshot,
+            ..
         }) => (
             "KILLED BY",
             killer.clone(),
@@ -680,7 +693,7 @@ pub(super) fn update_death_screen(
                 if *headshot { "   HEADSHOT" } else { "" }
             ),
         ),
-        Some(DeathCause::Explosive { killer, kind }) => (
+        Some(DeathCause::Explosive { killer, kind, .. }) => (
             "KILLED BY",
             killer.clone(),
             data.grenade(*kind).name.to_uppercase(),
@@ -696,7 +709,7 @@ pub(super) fn update_death_screen(
     };
     let now = time.elapsed_secs_f64();
     let rules = rules.get();
-    let left = f64::from(rules.respawn_delay_secs) - life.secs_dead(now);
+    let left = f64::from(rules.respawn_wait_secs(life.killer().is_some())) - life.secs_dead(now);
     let status = if let Some(hold) = respawn_hold(modes.single().ok(), life.team()) {
         hold.to_uppercase()
     } else if left <= 0.0 {

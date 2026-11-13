@@ -35,6 +35,7 @@ impl MatchRules {
         check("regen_per_sec", self.regen_per_sec, 0.0, 1000.0)?;
         check("respawn_delay_secs", self.respawn_delay_secs, 0.0, 60.0)?;
         check("min_respawn_secs", self.min_respawn_secs, 0.0, 60.0)?;
+        check("killcam_secs", self.killcam_secs, 0.0, 10.0)?;
         check("damage_scale", self.damage_scale, 0.01, 10.0)?;
         check(
             "fall_damage.min_height",
