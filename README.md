@@ -10,6 +10,14 @@ A CoD4/MW2-inspired multiplayer FPS made for LAN parties. It's written in Rust o
 
 One binary does everything. Launched without flags it opens the main menu: HOST GAME opens the Host setup screen (below) and then drops you in, JOIN GAME opens the Server Browser, which lists the servers on your LAN (click one) and also joins by IP (`192.168.1.20` or `192.168.1.20:5000`). If a Join fails you land back in the browser with the reason. CREATE A CLASS edits your custom classes without joining a game (see Create a Class below).
 
+**Building from source on Linux** needs a few system development packages (Wayland, xkbcommon, ALSA and udev, found through `pkg-config`); without them the build stops in a `-sys` crate's build script, e.g. `Package wayland-client was not found`. On Debian or Ubuntu:
+
+```sh
+sudo apt install pkg-config libwayland-dev libxkbcommon-dev libasound2-dev libudev-dev
+```
+
+Only building needs them: a release archive runs on the runtime libraries a Linux desktop already has.
+
 ```sh
 cargo run                                                # main menu
 cargo run -- --host --name Alice                         # skip the menu and Host: server + play in this window
