@@ -128,7 +128,15 @@ fn main() -> AppExit {
         app.add_plugins(equipment::client::EquipmentClientPlugin);
         app.add_plugins(modes::AmmoCrateVisualsPlugin);
         app.add_plugins(particles::ParticlesPlugin);
+        app.add_systems(Startup, cluster_lights_on_cpu);
     }
     app.add_plugins((combat::CombatServerPlugin, net::NetPlugin));
     app.run()
+}
+
+/// Bevy's GPU light clustering can grow its Z slice list to a size no buffer can hold and quit
+/// the renderer mid-Match (issue #2). A Map has a few dozen lights at most, so they are
+/// clustered on the CPU. `PbrPlugin` inserts the settings when it finishes, hence at Startup.
+fn cluster_lights_on_cpu(mut settings: ResMut<bevy::light::cluster::GlobalClusterSettings>) {
+    settings.gpu_clustering = None;
 }
