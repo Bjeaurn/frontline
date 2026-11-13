@@ -36,4 +36,11 @@
         modes: ["tdm", "dom", "hq", "sd"],
         factions: ("baekho", "volkov"),
     ),
+    "winkelweg": (
+        name: "Winkelweg 21",
+        file: "maps/winkelweg.map",
+        look: Some("overcast_urban"),
+        modes: ["tdm", "dom", "hq", "sd"],
+        factions: ("baekho", "volkov"),
+    ),
 }
