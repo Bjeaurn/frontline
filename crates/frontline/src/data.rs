@@ -893,7 +893,36 @@ pub struct Faction {
 struct LoadoutsFile {
     swap_window_secs: f32,
     weapon_switch_secs: f32,
+    #[serde(default)]
+    knife: KnifeTuning,
     defaults: Vec<Loadout>,
+}
+
+/// The knife every soldier carries (`knife` in `loadouts.ron`): a melee strike on its own key,
+/// whatever Weapon is in hand, as in CoD4.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct KnifeTuning {
+    /// Damage of one strike, before the Match Rules' `damage_scale`; above the default maximum
+    /// health, so it kills in one (Perks don't change it).
+    pub damage: f32,
+    /// How far ahead of the eye a strike reaches, in metres.
+    pub range: f32,
+    /// Radius of the swept sphere that finds the victim: a strike needs no exact aim.
+    pub radius: f32,
+    /// Length of the swing; no firing, aiming, throwing or second strike meanwhile.
+    pub swing_secs: f32,
+}
+
+impl Default for KnifeTuning {
+    fn default() -> Self {
+        Self {
+            damage: 135.0,
+            range: 1.6,
+            radius: 0.3,
+            swing_secs: 0.6,
+        }
+    }
 }
 
 /// Layout of `perks.ron`.
@@ -924,6 +953,8 @@ pub struct GameData {
     pub loadout_swap_secs: f32,
     /// Seconds to lower one Weapon and raise the other.
     pub weapon_switch_secs: f32,
+    /// The knife's strike.
+    pub knife: KnifeTuning,
     /// XP awards, the Level curve, unlocks and camos.
     pub progression: Progression,
     /// The Pick 10 budget, costs and Wildcards.
@@ -1041,6 +1072,7 @@ impl GameData {
             default_loadouts: loadouts.defaults,
             loadout_swap_secs: loadouts.swap_window_secs,
             weapon_switch_secs: loadouts.weapon_switch_secs,
+            knife: loadouts.knife,
             progression: load(PROGRESSION_FILE, BUILTIN_PROGRESSION),
             class_points: load(CLASS_POINTS_FILE, BUILTIN_CLASS_POINTS),
             equipment: load(EQUIPMENT_FILE, BUILTIN_EQUIPMENT),

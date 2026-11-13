@@ -300,6 +300,7 @@ fn describe(data: &GameData, cause: &DeathCause) -> Option<(String, String, Opti
             data.grenade(*kind).name.to_uppercase(),
             None,
         )),
+        DeathCause::Melee { killer, .. } => Some((killer.clone(), "KNIFE".to_owned(), None)),
         DeathCause::Fall | DeathCause::Respawn => None,
     }
 }

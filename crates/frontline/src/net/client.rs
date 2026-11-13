@@ -1,6 +1,7 @@
 //! Client side (Client and the Host's local client): connects, reports the local pose every
 //! fixed tick, marks replicated players as `RemotePlayer` or `LocalPlayerReplica`, and bridges
-//! gameplay messages: server messages become `FromServer<M>`; `ToServer<FireShot>` and
+//! gameplay messages: server messages become `FromServer<M>`; `ToServer<FireShot>`,
+//! `ToServer<Melee>` and
 //! `ToServer<ChooseTeam>`, `ToServer<FallDamage>`, `ToServer<RequestRespawn>` and
 //! `ToServer<ForceRespawn>` and `ToServer<SendChat>` are sent; the local Level is reported on
 //! joining and on every level-up.
@@ -16,7 +17,7 @@ use lightyear::prelude::*;
 use super::protocol::{
     AmmoRefill, BombExploded, CONNECTION_TIMEOUT_SECS, ChatLine, ChooseTeam, ControlChannel,
     Damaged, EquipPerks, FallDamage, FireShot, Flashed, ForceRespawn, GrenadeDetonated, Hello,
-    HitConfirm, KillFeed, ObjectiveHold, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseChannel,
+    HitConfirm, KillFeed, Melee, ObjectiveHold, PRIVATE_KEY, PROTOCOL_ID, PlayerOwner, PoseChannel,
     PoseUpdate, ProjectileFired, ProjectileLanded, ReportLevel, RequestRespawn, Respawn, SendChat,
     ShotChannel, ShotTracer, Stunned, ThrowGrenade, XpAward,
 };
@@ -53,6 +54,7 @@ impl Plugin for ClientNetPlugin {
             .add_message::<FromServer<Stunned>>()
             .add_message::<ToServer<ThrowGrenade>>()
             .add_message::<ToServer<FireShot>>()
+            .add_message::<ToServer<Melee>>()
             .add_message::<ToServer<ChooseTeam>>()
             .add_message::<ToServer<ObjectiveHold>>()
             .add_message::<ToServer<FallDamage>>()
@@ -86,7 +88,8 @@ impl Plugin for ClientNetPlugin {
             .add_systems(
                 PostUpdate,
                 (
-                    send_shots,
+                    send_shots::<FireShot>,
+                    send_shots::<Melee>,
                     send_perks,
                     send_level,
                     send_team_choices,
@@ -244,13 +247,14 @@ fn forward_from_server<M: lightyear::prelude::Message>(
     }
 }
 
-fn send_shots(
-    mut shots: MessageReader<ToServer<FireShot>>,
-    mut senders: Query<&mut MessageSender<FireShot>, (With<Client>, With<Connected>)>,
+/// Sends each `ToServer<M>` (a shot or a knife strike) on the `ShotChannel`.
+fn send_shots<M: lightyear::prelude::Message + Clone>(
+    mut shots: MessageReader<ToServer<M>>,
+    mut senders: Query<&mut MessageSender<M>, (With<Client>, With<Connected>)>,
 ) {
     for mut sender in &mut senders {
         for ToServer(shot) in shots.read() {
-            sender.send::<ShotChannel>(*shot);
+            sender.send::<ShotChannel>(shot.clone());
         }
     }
 }

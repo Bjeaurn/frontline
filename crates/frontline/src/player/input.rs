@@ -242,8 +242,10 @@ pub struct Bindings {
     /// Hold to ready the lethal / the tactical equipment, let go to throw it.
     pub lethal: Binding,
     pub tactical: Binding,
+    /// Knife whoever is in front of you (melee), as V does in CoD4.
+    pub melee: Binding,
     /// Switch the Primary into and out of the underslung grenade launcher (fire it with the
-    /// fire button).
+    /// fire button). 3, CoD4's attachment slot.
     pub launcher: Binding,
     /// Take the Primary / the Secondary (the mouse wheel switches to the other Weapon).
     pub primary_weapon: Binding,
@@ -278,7 +280,8 @@ impl Default for Bindings {
             fire_mode: Binding::keys(&[KeyCode::KeyX]),
             lethal: Binding::keys(&[KeyCode::KeyG]),
             tactical: Binding::keys(&[KeyCode::KeyQ]),
-            launcher: Binding::keys(&[KeyCode::KeyV]),
+            melee: Binding::keys(&[KeyCode::KeyV]),
+            launcher: Binding::keys(&[KeyCode::Digit3]),
             primary_weapon: Binding::keys(&[KeyCode::Digit1]),
             secondary_weapon: Binding::keys(&[KeyCode::Digit2]),
             team_menu: Binding::keys(&[KeyCode::KeyT]),
@@ -307,6 +310,7 @@ pub enum Action {
     FireMode,
     Lethal,
     Tactical,
+    Melee,
     Launcher,
     PrimaryWeapon,
     SecondaryWeapon,
@@ -325,7 +329,7 @@ pub enum Device {
 }
 
 impl Action {
-    pub const ALL: [Action; 22] = [
+    pub const ALL: [Action; 23] = [
         Action::Forward,
         Action::Back,
         Action::Left,
@@ -340,6 +344,7 @@ impl Action {
         Action::FireMode,
         Action::Lethal,
         Action::Tactical,
+        Action::Melee,
         Action::Launcher,
         Action::PrimaryWeapon,
         Action::SecondaryWeapon,
@@ -366,6 +371,7 @@ impl Action {
             Action::FireMode => "Fire mode",
             Action::Lethal => "Lethal",
             Action::Tactical => "Tactical",
+            Action::Melee => "Knife",
             Action::Launcher => "Launcher",
             Action::PrimaryWeapon => "Primary",
             Action::SecondaryWeapon => "Secondary",
@@ -400,6 +406,7 @@ impl Bindings {
             Action::FireMode => &mut self.fire_mode,
             Action::Lethal => &mut self.lethal,
             Action::Tactical => &mut self.tactical,
+            Action::Melee => &mut self.melee,
             Action::Launcher => &mut self.launcher,
             Action::PrimaryWeapon => &mut self.primary_weapon,
             Action::SecondaryWeapon => &mut self.secondary_weapon,
@@ -413,7 +420,7 @@ impl Bindings {
     }
 
     /// Every keyboard binding, for removing a key from all but one.
-    fn all_keys_mut(&mut self) -> [&mut Binding; 21] {
+    fn all_keys_mut(&mut self) -> [&mut Binding; 22] {
         [
             &mut self.forward,
             &mut self.back,
@@ -428,6 +435,7 @@ impl Bindings {
             &mut self.fire_mode,
             &mut self.lethal,
             &mut self.tactical,
+            &mut self.melee,
             &mut self.launcher,
             &mut self.primary_weapon,
             &mut self.secondary_weapon,
@@ -437,6 +445,21 @@ impl Bindings {
             &mut self.chat_team,
             &mut self.use_objective,
         ]
+    }
+
+    /// Settings saved before the knife existed have the launcher on V and no knife entry, so
+    /// the knife's default V lands on the launcher's key: the launcher moves to its new default
+    /// (3, when nothing else has it; else it is left unbound). Run once on load.
+    pub fn migrate(&mut self) {
+        let (knife, launcher) = (KeyCode::KeyV, KeyCode::Digit3);
+        if self.melee.0 != [knife] || !self.launcher.0.contains(&knife) {
+            return;
+        }
+        self.launcher.0.retain(|key| *key != knife);
+        let taken = self.all_keys_mut().iter().any(|b| b.0.contains(&launcher));
+        if self.launcher.0.is_empty() && !taken {
+            self.launcher = Binding(vec![launcher]);
+        }
     }
 
     /// Binds the keyboard action to `key` alone. Any other action that had the key loses it
@@ -485,6 +508,7 @@ impl Bindings {
                     Action::FireMode => &self.fire_mode,
                     Action::Lethal => &self.lethal,
                     Action::Tactical => &self.tactical,
+                    Action::Melee => &self.melee,
                     Action::Launcher => &self.launcher,
                     Action::PrimaryWeapon => &self.primary_weapon,
                     Action::SecondaryWeapon => &self.secondary_weapon,
@@ -693,6 +717,35 @@ mod tests {
         assert_eq!(binding, Binding(vec![KeyCode::KeyQ]));
         assert!(!is_bindable(KeyCode::Escape));
         assert!(is_bindable(KeyCode::ShiftLeft));
+    }
+
+    #[test]
+    fn the_knife_is_on_v_and_the_launcher_on_3_by_default() {
+        let bindings = Bindings::default();
+        assert_eq!(bindings.describe(Action::Melee), "V");
+        assert_eq!(bindings.describe(Action::Launcher), "3");
+    }
+
+    #[test]
+    fn old_settings_with_the_launcher_on_v_hand_v_to_the_knife() {
+        // Saved before the knife: the launcher on V, no `melee` entry.
+        let mut old: Bindings = ron::from_str(r#"(launcher: ["KeyV"])"#).unwrap();
+        old.migrate();
+        assert_eq!(old.melee, Binding(vec![KeyCode::KeyV]));
+        assert_eq!(old.launcher, Binding(vec![KeyCode::Digit3]));
+
+        // With 3 taken by something else the launcher is left unbound, not doubled up.
+        let mut taken: Bindings =
+            ron::from_str(r#"(launcher: ["KeyV"], reload: ["Digit3"])"#).unwrap();
+        taken.migrate();
+        assert_eq!(taken.launcher, Binding(vec![]));
+        assert_eq!(taken.reload, Binding(vec![KeyCode::Digit3]));
+
+        // A knife the player moved elsewhere leaves their launcher alone.
+        let mut moved: Bindings =
+            ron::from_str(r#"(launcher: ["KeyV"], melee: ["KeyE"])"#).unwrap();
+        moved.migrate();
+        assert_eq!(moved.launcher, Binding(vec![KeyCode::KeyV]));
     }
 
     #[test]

@@ -164,6 +164,10 @@ _Avoid_: Main weapon
 The backup **Weapon** in a **Loadout**, a pistol, or a **Primary** with the Overkill **Wildcard**.
 _Avoid_: Sidearm
 
+**Knife**:
+The melee strike every player has on its own key (V), whatever **Weapon** is in hand: one swing kills whoever is in reach ahead. Not a **Weapon** and not part of a **Loadout**; a kill with it is a Knife Kill, counting for no Weapon.
+_Avoid_: Melee weapon, bash
+
 **Attachment**:
 A modification fitted to one **Attachment Slot** on a **Weapon**.
 _Avoid_: Mod, upgrade
@@ -225,7 +229,7 @@ A physical projectile the server flies with gravity, bounces or sticking, and a 
 _Avoid_: Nade, bomb (a **Bomb** is the Search & Destroy objective)
 
 **Grenade Launcher**:
-The underslung "noob tube" Attachment (Underbarrel slot, 2 **Class Points**) only the M16A4 offers. It is a mode of the M16A4 (V switches it in and out, the HUD shows `40MM` where the **Fire Mode** goes, and the rifle cannot fire meanwhile); a click fires its 40mm round, which arcs and bursts on impact, 3 rounds per life. Dying, switching **Weapon** or opening a menu returns to the rifle.
+The underslung "noob tube" Attachment (Underbarrel slot, 2 **Class Points**) only the M16A4 offers. It is a mode of the M16A4 (3 switches it in and out, the HUD shows `40MM` where the **Fire Mode** goes, and the rifle cannot fire meanwhile); a click fires its 40mm round, which arcs and bursts on impact, 3 rounds per life. Dying, switching **Weapon** or opening a menu returns to the rifle.
 _Avoid_: Noob tube (in docs), GL
 
 ### Loadouts & progression

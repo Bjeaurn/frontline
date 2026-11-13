@@ -103,7 +103,8 @@ fn load_assets(
 }
 
 /// G / Q: pressing readies the lethal / tactical Grenade, letting go throws it along the aim
-/// (`ReadiedThrow`). Dying, opening a menu, switching Weapon or running out cancels it.
+/// (`ReadiedThrow`). Dying, opening a menu, switching Weapon, a knife swing or running out
+/// cancels it.
 #[allow(clippy::too_many_arguments)]
 fn throw(
     time: Res<Time>,
@@ -131,7 +132,10 @@ fn throw(
         tactical: key(&bindings.tactical),
         lethal_ready: carried.lethal.is_some_and(|pouch| pouch.can_take()),
         tactical_ready: carried.tactical.is_some_and(|pouch| pouch.can_take()),
-        allowed: !life.is_dead() && captured.active() && weapon.can_throw(),
+        allowed: !life.is_dead()
+            && captured.active()
+            && weapon.can_throw()
+            && !weapon.swinging_knife(),
     };
     let Some(slot) = readied.step(&feed) else {
         return;

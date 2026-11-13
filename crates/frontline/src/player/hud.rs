@@ -54,6 +54,8 @@ const FEED_FONT_SIZE: f32 = 18.0;
 /// Weapon and unknown names in the kill feed.
 const FEED_COLOR: Color = Color::srgb(0.80, 0.78, 0.70);
 const FEED_PLATE: Color = Color::srgba(0.0, 0.0, 0.0, 0.45);
+/// What a knife kill shows where the Weapon goes, in the kill feed and on the death screen.
+const KNIFE_NAME: &str = "Knife";
 
 const DEATH_KICKER_SIZE: f32 = 22.0;
 const DEATH_TITLE_SIZE: f32 = 64.0;
@@ -567,7 +569,7 @@ pub(super) fn add_kill_feed_lines(
             )
         };
         let entity = match &line.cause {
-            DeathCause::Shot { .. } | DeathCause::Explosive { .. } => {
+            DeathCause::Shot { .. } | DeathCause::Explosive { .. } | DeathCause::Melee { .. } => {
                 let (killer, weapon, headshot) = match &line.cause {
                     DeathCause::Shot {
                         killer,
@@ -582,6 +584,7 @@ pub(super) fn add_kill_feed_lines(
                     DeathCause::Explosive { killer, kind, .. } => {
                         (killer, data.grenade(*kind).name.clone(), "")
                     }
+                    DeathCause::Melee { killer, .. } => (killer, KNIFE_NAME.to_owned(), ""),
                     _ => unreachable!("matched above"),
                 };
                 let killer_color = name_color(killer);
@@ -698,6 +701,9 @@ pub(super) fn update_death_screen(
             killer.clone(),
             data.grenade(*kind).name.to_uppercase(),
         ),
+        Some(DeathCause::Melee { killer, .. }) => {
+            ("KILLED BY", killer.clone(), KNIFE_NAME.to_uppercase())
+        }
         Some(DeathCause::Fall) => ("", "YOU FELL TO YOUR DEATH".to_owned(), String::new()),
         Some(DeathCause::Respawn) => ("", "YOU RESPAWNED".to_owned(), String::new()),
         None if life.switched_team() => (

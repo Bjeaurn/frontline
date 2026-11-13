@@ -132,6 +132,15 @@ pub struct FireShot {
     pub pellet: u8,
 }
 
+/// Client -> server (`ShotChannel`): the local player struck with the knife from `origin` (their
+/// eye) along `direction` (unit). The server sweeps the knife's reach for a Hitbox
+/// (`KnifeTuning`) and holds the strikes of one player to one per swing.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Melee {
+    pub origin: Vec3,
+    pub direction: Vec3,
+}
+
 /// Server -> all clients except the shooter: draw a tracer for someone else's shot. `pellet` is
 /// the `FireShot`'s: only pellet 0 comes with the gunshot and the muzzle flash.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -217,6 +226,8 @@ pub enum DeathCause {
         killer_id: PeerId,
         kind: GrenadeKind,
     },
+    /// Knifed.
+    Melee { killer: String, killer_id: PeerId },
     /// Used the pause menu's RESPAWN.
     Respawn,
 }
@@ -225,9 +236,9 @@ impl DeathCause {
     /// The peer who made this kill, if someone did.
     pub fn killer_id(&self) -> Option<PeerId> {
         match self {
-            DeathCause::Shot { killer_id, .. } | DeathCause::Explosive { killer_id, .. } => {
-                Some(*killer_id)
-            }
+            DeathCause::Shot { killer_id, .. }
+            | DeathCause::Explosive { killer_id, .. }
+            | DeathCause::Melee { killer_id, .. } => Some(*killer_id),
             DeathCause::Fall | DeathCause::Respawn => None,
         }
     }
@@ -375,6 +386,8 @@ pub(super) fn register(app: &mut App) {
     .add_direction(NetworkDirection::ServerToClient);
 
     app.register_message::<FireShot>()
+        .add_direction(NetworkDirection::ClientToServer);
+    app.register_message::<Melee>()
         .add_direction(NetworkDirection::ClientToServer);
     app.register_message::<ShotTracer>()
         .add_direction(NetworkDirection::ServerToClient);

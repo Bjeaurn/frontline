@@ -4,8 +4,9 @@
 //! walking, sways with the mouse, kicks on each shot, dips during a reload while the left hand
 //! pulls the magazine and seats a new one, rolls while a bolt is worked, angles down and across
 //! while sprinting (raising back as the sprint-out ends), drops during a mantle, lowers for a
-//! Grenade throw (the right hand winds up with the Grenade) and hides while looking through a
-//! scope. During a Kill-cam the killer's gun takes its place (`ReplayViewmodel`).
+//! Grenade throw (the right hand winds up with the Grenade) or a knife swing (the right hand
+//! leaves it with the knife and slashes across) and hides while looking through a scope.
+//! During a Kill-cam the killer's gun takes its place (`ReplayViewmodel`).
 
 use std::collections::HashMap;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
@@ -99,6 +100,30 @@ const THROW_READY: (Vec3, f32) = (Vec3::new(0.09, -0.11, -0.34), 0.15);
 const THROW_BACK: (Vec3, f32) = (Vec3::new(0.15, -0.09, -0.23), -0.5);
 const THROW_FORWARD: (Vec3, f32) = (Vec3::new(0.06, -0.07, -0.56), 0.6);
 
+/// A knife swing as the viewmodel plays it, as shares of the swing (`KnifeTuning::swing_secs`):
+/// the strong hand leaves the gun with the knife up by the right of the screen, slashes down
+/// and across to the left, holds and goes back to the grip while the gun, lowered meanwhile,
+/// comes back up.
+const KNIFE_DRAWN: f32 = 0.15;
+const KNIFE_STRUCK: f32 = 0.35;
+const KNIFE_RETURN: f32 = 0.55;
+/// The strong hand holding the knife at its three poses in camera space: drawn, wound up on
+/// the right and struck through to the left, as (position, yaw, tilt, roll). The fist stands
+/// palm in, thumb up, the blade out of the thumb side; yaw turns the blade across (+ to the
+/// left), tilt tips it forward from upright (-) and roll leans it.
+const KNIFE_READY: (Vec3, f32, f32, f32) = (Vec3::new(0.13, -0.13, -0.30), -0.3, -0.9, 0.0);
+const KNIFE_WOUND: (Vec3, f32, f32, f32) = (Vec3::new(0.21, -0.03, -0.31), -0.25, -1.0, -0.25);
+const KNIFE_THROUGH: (Vec3, f32, f32, f32) = (Vec3::new(-0.12, -0.17, -0.46), 0.4, -1.25, 0.3);
+/// How far the fingers close round the knife's handle.
+const KNIFE_CURL: f32 = 0.95;
+/// The knife in the fist, in the hand's frame: the handle across the palm, the blade out of
+/// the thumb side.
+const KNIFE_IN_HAND: Vec3 = Vec3::new(0.0, -0.03, -0.05);
+/// Knife parts along its own -Z (the blade): handle, guard and blade sizes (x, y, z).
+const KNIFE_HANDLE: Vec3 = Vec3::new(0.024, 0.03, 0.11);
+const KNIFE_GUARD: Vec3 = Vec3::new(0.012, 0.055, 0.01);
+const KNIFE_BLADE: Vec3 = Vec3::new(0.004, 0.03, 0.17);
+
 /// How much gun one tile of a camo texture covers, in metres.
 const CAMO_TILE_METRES: f32 = 0.12;
 
@@ -160,6 +185,8 @@ struct ArmEntities {
     /// The Grenade in the strong hand, and one scene per kind under it.
     holder: Entity,
     grenades: [(GrenadeKind, Entity); GrenadeKind::THROWN.len()],
+    /// The knife in the strong hand during a swing.
+    knife: Entity,
 }
 
 /// The gloves, one mesh per `rig::glove_index`.
@@ -828,13 +855,56 @@ fn spawn_arms(
             .id();
         (kind, entity)
     });
+    let knife = spawn_knife(commands, root, materials, meshes);
     ArmEntities {
         root,
         strong,
         support,
         holder,
         grenades,
+        knife,
     }
+}
+
+/// The knife: a dark handle, a guard and a steel blade along its -Z, hidden until a swing.
+fn spawn_knife(
+    commands: &mut Commands,
+    root: Entity,
+    materials: &mut Assets<StandardMaterial>,
+    meshes: &mut Assets<Mesh>,
+) -> Entity {
+    let knife = commands
+        .spawn((
+            Name::new("HeldKnife"),
+            Transform::default(),
+            Visibility::Hidden,
+            ChildOf(root),
+        ))
+        .id();
+    let grip = materials.add(Furniture::Sight.material(false));
+    let steel = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.58, 0.59, 0.61),
+        metallic: 0.9,
+        perceptual_roughness: 0.3,
+        ..default()
+    });
+    let guard_z = -KNIFE_HANDLE.z / 2.0 - KNIFE_GUARD.z / 2.0;
+    let blade_z = guard_z - KNIFE_GUARD.z / 2.0 - KNIFE_BLADE.z / 2.0;
+    for (size, z, material) in [
+        (KNIFE_HANDLE, 0.0, &grip),
+        (KNIFE_GUARD, guard_z, &grip),
+        (KNIFE_BLADE, blade_z, &steel),
+    ] {
+        commands.spawn((
+            Mesh3d(meshes.add(Cuboid::from_size(size))),
+            MeshMaterial3d(material.clone()),
+            Transform::from_xyz(0.0, 0.0, z),
+            viewmodel_layer(),
+            NotShadowCaster,
+            ChildOf(knife),
+        ));
+    }
+    knife
 }
 
 /// The face to cull under a mirrored root: its triangles run the other way round on screen.
@@ -1332,6 +1402,24 @@ fn throw_pose(t: f32) -> (f32, Transform, bool, f32) {
     (weight, transform, t < THROW_RELEASE, lowered)
 }
 
+/// The strong hand's pose in camera space a share `p` (0 to 1) into a knife swing: how far it
+/// has left the gun (0 to 1), the pose, whether the knife shows and how far the gun is lowered.
+fn knife_pose(p: f32) -> (f32, Transform, bool, f32) {
+    let pose = |(position, yaw, tilt, roll): (Vec3, f32, f32, f32)| Transform {
+        translation: position,
+        // Palm in and thumb up (the back of the hand to the right), then turned.
+        rotation: Quat::from_euler(EulerRot::YXZ, yaw, tilt, roll)
+            * Quat::from_rotation_z(-FRAC_PI_2),
+        scale: Vec3::ONE,
+    };
+    let (ready, wound, through) = (pose(KNIFE_READY), pose(KNIFE_WOUND), pose(KNIFE_THROUGH));
+    let drawn = blend(ready, wound, smooth(0.0, KNIFE_DRAWN, p));
+    let transform = blend(drawn, through, smooth(KNIFE_DRAWN, KNIFE_STRUCK, p));
+    let weight = smooth(0.0, KNIFE_DRAWN * 0.6, p) * (1.0 - smooth(KNIFE_RETURN, 1.0, p));
+    let lowered = smooth(0.0, KNIFE_DRAWN, p) * (1.0 - smooth(KNIFE_RETURN + 0.1, 1.0, p));
+    (weight, transform, weight > 0.5, lowered)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn animate_viewmodel(
     time: Res<Time>,
@@ -1348,8 +1436,10 @@ fn animate_viewmodel(
     mut transforms: Query<&mut Transform>,
     mut visibilities: Query<&mut Visibility, Without<ViewmodelGun>>,
     settings: Res<Settings>,
+    data: Res<GameData>,
     (gloves, mut glove_meshes): (Res<GloveMeshes>, Query<&mut Mesh3d>),
 ) {
+    let knife_secs = data.knife.swing_secs;
     let shots = fired.read().filter(|shot| shot.pellet == 0).count();
     let thrown = throws
         .read()
@@ -1470,7 +1560,20 @@ fn animate_viewmodel(
         None => (0.0, Transform::IDENTITY, false, 0.0),
     };
 
-    let switching = weapon.switch_lowering().max(throw_lowered);
+    // A knife swing takes the strong hand over from a throw.
+    let (knife_weight, knife_transform, knife_shown, knife_lowered) = match weapon.swing_secs() {
+        Some(t) => knife_pose(t / knife_secs.max(f32::EPSILON)),
+        None => (0.0, Transform::IDENTITY, false, 0.0),
+    };
+    let (throw_weight, throw_transform, throw_holding) = if knife_weight > 0.0 {
+        (knife_weight, knife_transform, false)
+    } else {
+        (throw_weight, throw_transform, throw_holding)
+    };
+    let switching = weapon
+        .switch_lowering()
+        .max(throw_lowered)
+        .max(knife_lowered);
     let ads_offset = ads_offset(stats);
     let wobble = (bob + anim.sway) * motion_scale;
     let gun_right_handed = Transform {
@@ -1529,7 +1632,12 @@ fn animate_viewmodel(
     // Camera space, as a right-handed player has it.
     let strong_on_gun = gun_right_handed.mul_transform(strong_pose.transform());
     let strong = blend(strong_on_gun, throw_transform, throw_weight);
-    let strong_curl = strong_pose.curl.lerp(THROW_CURL, throw_weight);
+    let grip_curl = if knife_weight > 0.0 {
+        KNIFE_CURL
+    } else {
+        THROW_CURL
+    };
+    let strong_curl = strong_pose.curl.lerp(grip_curl, throw_weight);
     let support = gun_right_handed.mul_transform(support_pose.transform());
     let mirror_point = |point: Vec3| {
         if mirrored {
@@ -1617,6 +1725,25 @@ fn animate_viewmodel(
             });
         }
     }
+    // The knife sits in the fist, its blade out of the thumb side.
+    if let Ok(mut transform) = transforms.get_mut(arms.knife) {
+        let held = strong.mul_transform(
+            Transform::from_translation(KNIFE_IN_HAND)
+                .with_rotation(Quat::from_rotation_y(FRAC_PI_2)),
+        );
+        *transform = if mirrored {
+            rig::mirror_placement(held)
+        } else {
+            held
+        };
+    }
+    if let Ok(mut knife_visibility) = visibilities.get_mut(arms.knife) {
+        knife_visibility.set_if_neq(if knife_shown {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
+    }
 }
 
 #[cfg(test)]
@@ -1637,6 +1764,28 @@ mod tests {
         assert!(throw_pose(0.1).2);
         assert!(!throw_pose(THROW_RELEASE + 0.01).2);
         assert_eq!(throw_pose(THROW_RELEASE + 0.01).0, 1.0);
+    }
+
+    #[test]
+    fn a_knife_swing_starts_and_ends_with_the_hand_on_the_gun_and_no_knife() {
+        for p in [0.0, 1.0] {
+            let (weight, _, shown, lowered) = knife_pose(p);
+            assert_eq!((weight, shown, lowered), (0.0, false, 0.0), "at {p}");
+        }
+    }
+
+    #[test]
+    fn the_knife_slashes_from_the_right_across_to_the_left() {
+        let (weight, wound, shown, lowered) = knife_pose(KNIFE_DRAWN);
+        assert_eq!((weight, shown, lowered), (1.0, true, 1.0));
+        let (_, through, shown, _) = knife_pose(KNIFE_STRUCK);
+        assert!(shown);
+        assert!(wound.translation.x > 0.1 && through.translation.x < -0.05);
+        // The blade (out of the thumb, the hand's -X) points ahead of the view through the cut.
+        for pose in [wound, through] {
+            let blade = pose.rotation * Vec3::NEG_X;
+            assert!(blade.z < -0.5, "blade {blade}");
+        }
     }
 
     #[test]
