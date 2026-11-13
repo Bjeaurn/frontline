@@ -107,7 +107,7 @@ The identity a **Team** plays as on a **Map**, set by the Map's theater: name, e
 _Avoid_: Team (for the identity), army, clan
 
 **Scoreboard**:
-The view, held open with Tab and forced open at **Match** end, listing every player by **Team** with their **Rank insignia**, **Level**, name, kills and deaths.
+The view, held open with Tab and forced open at **Match** end, listing every player by **Team** with their **Rank insignia**, **Level**, name, score, kills and deaths, best score first. A player's score is the XP they earned by playing this **Match** (kills, assists, objectives...), without the Match Won and Match Played bonuses.
 _Avoid_: Leaderboard, stats screen
 
 **Chat**:

@@ -1,7 +1,7 @@
 //! The Scoreboard: held open with the scoreboard key, forced open at Match end (under the result
 //! banner) with the next Rotation entry, the countdown to the next Match and the local player's
 //! XP summary (XP gained, Level and progress bar). Our Team's section comes first; players are
-//! sorted by kills and the local player is highlighted.
+//! sorted by score (all match points, as in CoD4) and the local player is highlighted.
 
 use std::cmp::Reverse;
 
@@ -139,9 +139,20 @@ struct Section {
 struct Row {
     name: String,
     level: u32,
+    score: u32,
     kills: u32,
     deaths: u32,
     me: bool,
+}
+
+/// Best player first: most points, then most kills, then by name so the order is stable.
+fn sort_rows(rows: &mut [Row]) {
+    rows.sort_by(|a, b| {
+        Reverse(a.score)
+            .cmp(&Reverse(b.score))
+            .then(Reverse(a.kills).cmp(&Reverse(b.kills)))
+            .then_with(|| a.name.cmp(&b.name))
+    });
 }
 
 pub(super) fn spawn_scoreboard(mut commands: Commands) {
@@ -181,7 +192,7 @@ pub(super) fn spawn_scoreboard(mut commands: Commands) {
     ));
 }
 
-/// A row of a name column that takes the remaining width and two right-aligned stat columns. A
+/// A row of a name column that takes the remaining width and three right-aligned stat columns. A
 /// player's row (`level`) puts their rank insignia and Level before the name; the header row
 /// leaves that space empty.
 fn columns(
@@ -189,12 +200,12 @@ fn columns(
     fonts: &UiFonts,
     assets: &AssetServer,
     level: Option<u32>,
-    cells: [String; 3],
+    cells: [String; 4],
     color: Color,
     background: Color,
     edge: Color,
 ) {
-    let [name, kills, deaths] = cells;
+    let [name, score, kills, deaths] = cells;
     let size = if level.is_some() {
         ROW_SIZE
     } else {
@@ -248,7 +259,7 @@ fn columns(
                 ui::label(fonts, &name, size, color),
                 LetterSpacing::Px(if level.is_some() { 0.0 } else { 2.0 }),
             ));
-            for stat in [kills, deaths] {
+            for stat in [score, kills, deaths] {
                 row.spawn((
                     Node {
                         width: px(STAT_WIDTH),
@@ -354,7 +365,12 @@ fn build(panel: &mut ChildSpawnerCommands, fonts: &UiFonts, assets: &AssetServer
             fonts,
             assets,
             None,
-            ["PLAYER".into(), "KILLS".into(), "DEATHS".into()],
+            [
+                "PLAYER".into(),
+                "SCORE".into(),
+                "KILLS".into(),
+                "DEATHS".into(),
+            ],
             ui::TEXT_DIM,
             Color::NONE,
             Color::NONE,
@@ -374,6 +390,7 @@ fn build(panel: &mut ChildSpawnerCommands, fonts: &UiFonts, assets: &AssetServer
                 Some(row.level),
                 [
                     row.name.clone(),
+                    row.score.to_string(),
                     row.kills.to_string(),
                     row.deaths.to_string(),
                 ],
@@ -576,17 +593,13 @@ pub(super) fn update_scoreboard(
                 .map(|(name, _, stats, level, me)| Row {
                     name: display_name(name),
                     level: level.map_or(1, |level| level.0.max(1)),
+                    score: stats.score,
                     kills: stats.kills,
                     deaths: stats.deaths,
                     me,
                 })
                 .collect();
-            rows.sort_by(|a, b| {
-                Reverse(a.kills)
-                    .cmp(&Reverse(b.kills))
-                    .then(a.deaths.cmp(&b.deaths))
-                    .then_with(|| a.name.cmp(&b.name))
-            });
+            sort_rows(&mut rows);
             let faction = data.faction(&maps, &state.map, team);
             Section {
                 faction: faction.name.clone(),
@@ -619,4 +632,34 @@ pub(super) fn update_scoreboard(
         .despawn_related::<Children>()
         .with_children(|panel| build(panel, &fonts, &assets, &board));
     *shown = board;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(name: &str, score: u32, kills: u32) -> Row {
+        Row {
+            name: name.into(),
+            level: 1,
+            score,
+            kills,
+            deaths: 0,
+            me: false,
+        }
+    }
+
+    #[test]
+    fn rows_sort_by_score_then_kills_then_name() {
+        let mut rows = vec![
+            row("delta", 100, 1),
+            row("bravo", 300, 2),
+            row("alpha", 300, 2),
+            row("charlie", 300, 5),
+            row("echo", 0, 0),
+        ];
+        sort_rows(&mut rows);
+        let names: Vec<_> = rows.iter().map(|row| row.name.as_str()).collect();
+        assert_eq!(names, ["charlie", "alpha", "bravo", "delta", "echo"]);
+    }
 }

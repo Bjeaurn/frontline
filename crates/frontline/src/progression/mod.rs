@@ -65,6 +65,12 @@ impl XpReason {
             XpReason::MatchPlayed => "Match Played".into(),
         }
     }
+
+    /// Whether this award adds to the player's Match score on the Scoreboard. The bonuses paid
+    /// when the Match ends are not play.
+    pub fn counts_for_score(self) -> bool {
+        !matches!(self, XpReason::MatchWin | XpReason::MatchPlayed)
+    }
 }
 
 /// What each kind of event is worth, in XP.
@@ -589,6 +595,16 @@ mod tests {
 
     fn data() -> GameData {
         GameData::load()
+    }
+
+    #[test]
+    fn only_play_counts_for_score_not_the_match_end_bonuses() {
+        assert!(XpReason::Assist.counts_for_score());
+        assert!(XpReason::FlagCapture.counts_for_score());
+        assert!(XpReason::BombDefuse.counts_for_score());
+        assert!(XpReason::Multikill(3).counts_for_score());
+        assert!(!XpReason::MatchWin.counts_for_score());
+        assert!(!XpReason::MatchPlayed.counts_for_score());
     }
 
     #[test]

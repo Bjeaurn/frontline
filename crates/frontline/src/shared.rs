@@ -83,11 +83,14 @@ impl Health {
     }
 }
 
-/// Kills and deaths in the current Match; the server is the only writer.
+/// Kills, deaths and points in the current Match; the server is the only writer.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, Reflect)]
 pub struct PlayerStats {
     pub kills: u32,
     pub deaths: u32,
+    /// Every XP award earned by playing (kills, assists, captures, plants, defuses...), summed.
+    /// The Match Won and Match Played bonuses are paid at the end and do not count.
+    pub score: u32,
 }
 
 /// The account Level a player reported (docs/adr/0002: trusted). The server stores it, replicated

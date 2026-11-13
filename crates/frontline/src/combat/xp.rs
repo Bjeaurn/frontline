@@ -10,7 +10,7 @@ use lightyear::prelude::*;
 
 use crate::net::protocol::{EventChannel, XpAward};
 use crate::progression::XpReason;
-use crate::shared::PlayerName;
+use crate::shared::{PlayerName, PlayerStats};
 
 /// Damage each enemy dealt to this player during its current life, so the Assists can be paid
 /// when someone kills it. Server-only.
@@ -63,18 +63,30 @@ impl KillChain {
     }
 }
 
-/// Sends XP awards to the players who earned them.
+/// Sends XP awards to the players who earned them and adds them to their Match score.
 #[derive(SystemParam)]
 pub(super) struct XpOut<'w, 's> {
     links: Query<'w, 's, &'static ControlledBy>,
     senders: Query<'w, 's, &'static mut MessageSender<XpAward>>,
     names: Query<'w, 's, &'static PlayerName>,
+    // Score goes through Commands: the callers already hold `&mut PlayerStats` queries, and a
+    // second mutable query here would make Bevy panic on a system param conflict.
+    commands: Commands<'w, 's>,
 }
 
 impl XpOut<'_, '_> {
     /// Awards `amount` XP for `reason` to the client controlling `player`. The award is always
     /// sent, even at 0, because the client counts per-Weapon kills from it.
     pub(super) fn give(&mut self, player: Entity, amount: u32, reason: XpReason) {
+        if reason.counts_for_score()
+            && let Ok(mut entity) = self.commands.get_entity(player)
+        {
+            entity.queue_silenced(move |mut entity: EntityWorldMut| {
+                if let Some(mut stats) = entity.get_mut::<PlayerStats>() {
+                    stats.score += amount;
+                }
+            });
+        }
         let Ok(link) = self.links.get(player) else {
             return;
         };
