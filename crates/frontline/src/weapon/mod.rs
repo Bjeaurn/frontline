@@ -32,7 +32,7 @@ use crate::equipment::{Carried, GrenadeKind, throw_request};
 use crate::flow::Settings;
 use crate::gear::{Attachments, Loadout, PerkEffects, Perks};
 use crate::loadout::SpawnClock;
-use crate::net::protocol::{AmmoRefill, Damaged, FireShot, Respawn, ThrowGrenade};
+use crate::net::protocol::{AmmoRefill, Damaged, FireShot, Melee, Respawn, ThrowGrenade};
 use crate::player::input::Bindings;
 use crate::player::{
     ControllerModifiers, ControllerSystems, EyeCamera, LocalLife, Motor, MouseCaptured, PITCH_LIMIT,
@@ -71,6 +71,7 @@ impl Plugin for WeaponClientPlugin {
                     refill_ammo,
                     switch_weapon,
                     track_body,
+                    melee,
                     aim,
                     sway,
                     flinch,
@@ -148,8 +149,10 @@ pub struct HeldWeapon {
     /// Which of the class's two Weapon slots this Weapon came from: a Primary-class Weapon in
     /// the Secondary slot (Overkill) switches like the pistol does.
     slot: Slot,
-    /// The underslung launcher is selected in place of the rifle's fire mode (V).
+    /// The underslung launcher is selected in place of the rifle's fire mode.
     launcher: LauncherMode,
+    /// Seconds into a knife swing under way.
+    swing: Option<f32>,
 }
 
 /// One of a class's two Weapon slots.
@@ -254,6 +257,7 @@ impl HeldWeapon {
             switch: None,
             slot: Slot::Primary,
             launcher: LauncherMode::default(),
+            swing: None,
         }
     }
 
@@ -316,9 +320,43 @@ impl HeldWeapon {
         self.launcher.on
     }
 
-    /// Whether the weapon is up: not lowered for a sprint, mantle or dive, nor still raising.
+    /// A knife swing is under way: nothing fires, aims, reloads, throws or switches.
+    pub fn swinging_knife(&self) -> bool {
+        self.swing.is_some()
+    }
+
+    /// Seconds into the knife swing under way, for the viewmodel.
+    fn swing_secs(&self) -> Option<f32> {
+        self.swing
+    }
+
+    /// Whether the weapon is up: not lowered for a sprint, mantle or dive, nor still raising,
+    /// and the hand not off it with the knife.
     fn ready(&self) -> bool {
-        !self.sprinting && !self.mantling && self.sprint_out <= 0.0 && self.switch.is_none()
+        !self.sprinting
+            && !self.mantling
+            && self.sprint_out <= 0.0
+            && self.switch.is_none()
+            && self.swing.is_none()
+    }
+
+    /// Starts a knife swing if one may start now: not during another, a Weapon switch or a
+    /// mantle. It cancels a reload; a burst under way ends and the held pull counts as spent,
+    /// so the gun doesn't fire on its own when it comes back up.
+    fn start_swing(&mut self) -> bool {
+        if self.swing.is_some() || self.switch.is_some() || self.mantling {
+            return false;
+        }
+        self.swing = Some(0.0);
+        self.reload_left = None;
+        self.firing.burst_left = 0;
+        self.firing.pull_spent = self.trigger;
+        true
+    }
+
+    /// Runs a swing under way for `dt` seconds; it ends after `swing_secs`.
+    fn tick_swing(&mut self, dt: f32, swing_secs: f32) {
+        self.swing = self.swing.map(|t| t + dt).filter(|t| *t < swing_secs);
     }
 
     /// How far the Weapon is lowered by a switch in progress: 0 up, 1 fully down.
@@ -738,7 +776,7 @@ fn switch_weapon(
         weapon.switch = (switch.left > 0.0).then_some(switch);
         return;
     }
-    if !captured.active() || weapon.mantling {
+    if !captured.active() || weapon.mantling || weapon.swing.is_some() {
         return;
     }
     let holding_primary = weapon.slot == Slot::Primary;
@@ -831,7 +869,44 @@ fn aim(
     modifiers.fov_scale = 1.0_f32.lerp(stats.ads_fov_scale(), t);
     modifiers.move_scale = stats.move_scale * 1.0_f32.lerp(stats.ads_move_scale, t);
     modifiers.stamina_scale = kit.effects.sprint_stamina_mul;
-    modifiers.sprint_blocked = wants || (in_control && bindings.fire.pressed(&mouse));
+    modifiers.sprint_blocked =
+        wants || (in_control && bindings.fire.pressed(&mouse)) || weapon.swing.is_some();
+}
+
+/// V: a knife strike at whoever is in reach ahead (`KnifeTuning`), whatever Weapon is in hand,
+/// as in CoD4 (`HeldWeapon::start_swing`). The strike goes to the server at once, from the eye
+/// along the view; the server decides what it hit (`combat::melee`). Sprinting is no bar: the
+/// swing stops the sprint.
+#[allow(clippy::too_many_arguments)]
+fn melee(
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<Bindings>,
+    captured: Res<MouseCaptured>,
+    life: Res<LocalLife>,
+    data: Res<GameData>,
+    mut player: Query<(&PlayerPose, &mut HeldWeapon), With<LocalPlayer>>,
+    eye: Query<&EyeCamera>,
+    mut strikes: MessageWriter<ToServer<Melee>>,
+) {
+    let Ok((pose, mut weapon)) = player.single_mut() else {
+        return;
+    };
+    if life.is_dead() {
+        weapon.swing = None;
+        return;
+    }
+    weapon.tick_swing(time.delta_secs(), data.knife.swing_secs);
+    if !captured.active() || !bindings.melee.just_pressed(&keys) || !weapon.start_swing() {
+        return;
+    }
+    let eye_height = eye
+        .single()
+        .map_or(pose.stance.eye_height(), EyeCamera::height);
+    let origin = pose.position + Vec3::Y * eye_height;
+    let direction = aim_rotation(pose.yaw, pose.pitch) * Vec3::NEG_Z;
+    info!("Knife strike");
+    strikes.write(ToServer(Melee { origin, direction }));
 }
 
 /// R reloads; sprinting cancels a reload in progress.
@@ -850,14 +925,18 @@ fn reload(
         return;
     }
     let stats = Arc::clone(&weapon.stats);
-    if captured.active() && bindings.reload.just_pressed(&keys) && weapon.switch.is_none() {
+    if captured.active()
+        && bindings.reload.just_pressed(&keys)
+        && weapon.switch.is_none()
+        && weapon.swing.is_none()
+    {
         weapon.start_reload(&stats);
     }
     weapon.tick_reload(&stats, time.delta_secs(), motor.sprinting());
 }
 
 /// X switches to the Weapon's next fire mode (a click, remembered per Weapon in the Profile).
-/// Not while a Weapon switch is under way, the body mantles or the launcher is selected (V
+/// Not while a Weapon switch is under way, the body mantles or the launcher is selected (3
 /// switches that back first).
 fn cycle_fire_mode(
     keys: Res<ButtonInput<KeyCode>>,
@@ -889,9 +968,9 @@ fn cycle_fire_mode(
     switched.write(ModeSwitched);
 }
 
-/// V switches the Primary between the rifle's fire mode and the underslung launcher (a click);
+/// 3 switches the Primary between the rifle's fire mode and the underslung launcher (a click);
 /// in launcher mode a click fires one 40mm round (`trigger::launcher_step`): the same wait
-/// between rounds and rounds per life as ever. With no rounds left the click is dry, and V
+/// between rounds and rounds per life as ever. With no rounds left the click is dry, and 3
 /// still switches back. Dying, switching Weapon or opening a menu returns to the rifle.
 #[allow(clippy::too_many_arguments)]
 fn launcher(

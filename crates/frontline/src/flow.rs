@@ -354,7 +354,9 @@ pub fn remove_config(file: &str) -> bool {
 }
 
 fn load_settings() -> Settings {
-    load_config(SETTINGS_FILE).unwrap_or_default()
+    let mut settings: Settings = load_config(SETTINGS_FILE).unwrap_or_default();
+    settings.bindings.migrate();
+    settings
 }
 
 fn save_settings(settings: Res<Settings>) {

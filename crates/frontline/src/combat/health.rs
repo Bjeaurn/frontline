@@ -10,6 +10,7 @@ use lightyear::prelude::*;
 use super::damage::{HitZone, shot_damage};
 use super::hitbox::{Hitboxes, set_hitboxes_enabled, spawn_hitboxes};
 use super::match_flow::is_live;
+use super::melee::LastStrike;
 use super::mode_systems::{ModeRuntime, UseHeld};
 use super::packs::drop_ammo_pack;
 use super::shots::{HitSource, PlayerHit};
@@ -129,6 +130,7 @@ pub(super) fn init_player(
     commands.entity(add.entity).insert((
         LastDamaged(Duration::ZERO),
         UseHeld::default(),
+        LastStrike::default(),
         DamageLedger::default(),
         KillChain::default(),
     ));
@@ -249,6 +251,17 @@ pub(super) fn apply_hits(
                     kind,
                 },
                 XpReason::Explosive,
+            ),
+            // Stopping Power is for bullets: the knife's strike is the same for everyone.
+            HitSource::Melee { damage } => (
+                damage * rules.damage_scale,
+                false,
+                "with the knife".to_owned(),
+                DeathCause::Melee {
+                    killer: shooter_name.clone(),
+                    killer_id,
+                },
+                XpReason::Melee,
             ),
         };
         let applied = amount.min(health.0);

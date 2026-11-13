@@ -20,7 +20,7 @@ use crate::net::protocol::{
 };
 use crate::shared::{GameLayer, Health, MatchState};
 
-/// What struck a player: a bullet, or a Grenade's blast.
+/// What struck a player: a bullet, a Grenade's blast or a knife.
 #[derive(Clone, Copy, Debug)]
 pub enum HitSource {
     Bullet {
@@ -34,6 +34,8 @@ pub enum HitSource {
     /// A Grenade of `kind` went off in reach: `damage` is already the blast's falloff at the
     /// victim's distance.
     Blast { kind: GrenadeKind, damage: f32 },
+    /// A knife strike (`melee`) of `damage`, before the Match Rules' scale.
+    Melee { damage: f32 },
 }
 
 /// Something struck a player: a shot hit their hitbox, or a blast reached them.

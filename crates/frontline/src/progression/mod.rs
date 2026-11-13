@@ -27,6 +27,8 @@ pub enum XpReason {
     Headshot(WeaponId),
     /// An enemy killed by a Grenade's blast (counts for no Weapon).
     Explosive,
+    /// An enemy knifed (counts for no Weapon).
+    Melee,
     Assist,
     /// The `n`th kill in a row within the Multikill window.
     Multikill(u32),
@@ -47,6 +49,7 @@ impl XpReason {
             XpReason::Kill(_) => "Kill".into(),
             XpReason::Headshot(_) => "Headshot".into(),
             XpReason::Explosive => "Explosive Kill".into(),
+            XpReason::Melee => "Knife Kill".into(),
             XpReason::Assist => "Assist".into(),
             XpReason::Multikill(2) => "Double Kill".into(),
             XpReason::Multikill(3) => "Triple Kill".into(),
