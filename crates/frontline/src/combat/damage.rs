@@ -86,6 +86,7 @@ mod tests {
                 kill_feed_delay_secs: 0.0,
                 damage_direction: true,
                 name_tags: true,
+                name_tag_range_m: 45.0,
             },
         }
     }

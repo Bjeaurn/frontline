@@ -102,6 +102,7 @@ enum Field {
     KillFeedDelay,
     DamageDirection,
     NameTags,
+    NameTagRange,
 }
 
 enum Control {
@@ -124,7 +125,7 @@ impl Field {
         Field::FallMin,
         Field::FallMax,
     ];
-    const HUD: [Field; 7] = [
+    const HUD: [Field; 8] = [
         Field::Crosshair,
         Field::Hitmarkers,
         Field::KillHitmarker,
@@ -132,6 +133,7 @@ impl Field {
         Field::KillFeedDelay,
         Field::DamageDirection,
         Field::NameTags,
+        Field::NameTagRange,
     ];
 
     fn caption(self) -> &'static str {
@@ -155,6 +157,7 @@ impl Field {
             Field::KillFeedDelay => "Kill feed delay",
             Field::DamageDirection => "Damage direction",
             Field::NameTags => "Name tags",
+            Field::NameTagRange => "Name tag range",
         }
     }
 
@@ -170,6 +173,7 @@ impl Field {
             Field::DamageScale => slider(0.25, 3.0, 0.05),
             Field::FallMin => slider(1.0, 20.0, 0.5),
             Field::FallMax => slider(2.0, 40.0, 0.5),
+            Field::NameTagRange => slider(10.0, 100.0, 5.0),
             Field::Regen
             | Field::Killcam
             | Field::FriendlyFire
@@ -205,6 +209,7 @@ impl Field {
             Field::KillFeedDelay => rules.hud.kill_feed_delay_secs,
             Field::DamageDirection => flag(rules.hud.damage_direction),
             Field::NameTags => flag(rules.hud.name_tags),
+            Field::NameTagRange => rules.hud.name_tag_range_m,
         }
     }
 
@@ -252,6 +257,7 @@ impl Field {
             Field::KillFeedDelay => rules.hud.kill_feed_delay_secs = value,
             Field::DamageDirection => rules.hud.damage_direction = on,
             Field::NameTags => rules.hud.name_tags = on,
+            Field::NameTagRange => rules.hud.name_tag_range_m = value,
         }
     }
 
@@ -271,6 +277,7 @@ impl Field {
             }
             Field::DamageScale => format!("x{value:.2}"),
             Field::FallMin | Field::FallMax => format!("{value:.1} m"),
+            Field::NameTagRange => format!("{value:.0} m"),
             Field::Regen
             | Field::Killcam
             | Field::FriendlyFire

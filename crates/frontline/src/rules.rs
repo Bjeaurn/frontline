@@ -57,6 +57,12 @@ impl MatchRules {
             self.hud.kill_feed_delay_secs,
             0.0,
             60.0,
+        )?;
+        check(
+            "hud.name_tag_range_m",
+            self.hud.name_tag_range_m,
+            1.0,
+            500.0,
         )
     }
 }

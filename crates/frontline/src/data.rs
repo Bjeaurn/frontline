@@ -620,6 +620,14 @@ pub struct HudRules {
     pub damage_direction: bool,
     /// Names over friendly players' heads.
     pub name_tags: bool,
+    /// Name tags fade out between 70% of this distance and the distance itself, in metres.
+    #[serde(default = "default_name_tag_range_m")]
+    pub name_tag_range_m: f32,
+}
+
+/// The name tag range of rule sets saved before it was a Match Rule.
+fn default_name_tag_range_m() -> f32 {
+    45.0
 }
 
 /// Client-only presentation tuning (seconds).
@@ -1374,6 +1382,17 @@ mod tests {
         text.replace_range(field..end, "");
         let old: MatchRules = ron::from_str(&text).unwrap();
         assert_eq!(old.killcam_secs, 5.0);
+    }
+
+    #[test]
+    fn rule_sets_saved_before_the_name_tag_range_get_the_default_range() {
+        let mut text = ron::ser::to_string(GameData::load().rules("default")).unwrap();
+        let field = text.find("name_tag_range_m:").expect("serialized");
+        // The last field of `hud`, so no comma follows it.
+        let end = field + text[field..].find(')').unwrap();
+        text.replace_range(field..end, "");
+        let old: MatchRules = ron::from_str(&text).unwrap();
+        assert_eq!(old.hud.name_tag_range_m, 45.0);
     }
 
     #[test]
